@@ -1,0 +1,69 @@
+//! Google sign-in window (WebView2). Runs as `ytm-player --login` in its own
+//! process, writes the YouTube cookie header to `cookie.txt` and exits.
+
+use std::time::{Duration, Instant};
+
+use tao::event::{Event, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoop};
+use tao::window::WindowBuilder;
+use wry::{WebContext, WebViewBuilder};
+
+const START: &str = "https://accounts.google.com/ServiceLogin?service=youtube&passive=true\
+&continue=https%3A%2F%2Fmusic.youtube.com%2F";
+
+/// Cookies YouTube Music needs to treat a request as signed in.
+fn signed_in(names: &[&str]) -> bool {
+    names.contains(&"SAPISID") && names.contains(&"LOGIN_INFO")
+}
+
+pub fn run() -> ! {
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("Sign in to YouTube Music")
+        .with_inner_size(tao::dpi::LogicalSize::new(520.0, 720.0))
+        .build(&event_loop)
+        .expect("login window");
+    let mut ctx = WebContext::new(Some(crate::data_dir().join("webview")));
+    let webview = WebViewBuilder::new_with_web_context(&mut ctx)
+        .with_url(START)
+        .build(&window)
+        .expect("webview");
+
+    event_loop.run(move |event, _, flow| {
+        *flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(800));
+        match event {
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => std::process::exit(1),
+            Event::NewEvents(_) => {
+                let on_ytm = webview.url().is_ok_and(|u| u.starts_with("https://music.youtube.com"));
+                if !on_ytm {
+                    return;
+                }
+                let Ok(cookies) = webview.cookies_for_url("https://music.youtube.com") else { return };
+                let names: Vec<&str> = cookies.iter().map(|c| c.name()).collect();
+                if !signed_in(&names) {
+                    return;
+                }
+                let header = cookies
+                    .iter()
+                    .map(|c| format!("{}={}", c.name(), c.value()))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let _ = std::fs::create_dir_all(crate::data_dir());
+                let ok = std::fs::write(crate::cookie_path(), &header).is_ok()
+                    && crate::stream::write_cookie_file(&header, &crate::ytdlp_cookie_path()).is_ok();
+                std::process::exit(if ok { 0 } else { 1 });
+            }
+            _ => {}
+        }
+    })
+}
+
+/// Opens the sign-in window and waits; returns the cookie header on success.
+pub async fn sign_in() -> anyhow::Result<String> {
+    let exe = std::env::current_exe()?;
+    let status = tokio::process::Command::new(exe).arg("--login").status().await?;
+    if !status.success() {
+        anyhow::bail!("sign-in window was closed");
+    }
+    Ok(tokio::fs::read_to_string(crate::cookie_path()).await?)
+}

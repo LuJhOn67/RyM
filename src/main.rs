@@ -2,6 +2,7 @@
 
 mod api;
 mod audio;
+mod login;
 mod lyrics;
 mod stream;
 
@@ -38,6 +39,9 @@ const DIM: Color = Color::from_rgb(0.62, 0.62, 0.62);
 const BOLD: Font = Font { weight: font::Weight::Bold, ..Font::DEFAULT };
 
 fn main() -> iced::Result {
+    if std::env::args().any(|a| a == "--login") {
+        login::run();
+    }
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -91,6 +95,7 @@ enum Message {
     CookieChanged(String),
     Login,
     Guest,
+    GoogleLogin,
     LoggedIn(Result<Api, String>),
     Logout,
 
@@ -238,6 +243,17 @@ impl App {
                 let _ = std::fs::write(cookie_path(), &cookie);
                 let _ = stream::write_cookie_file(&cookie, &ytdlp_cookie_path());
                 return Task::perform(Api::with_cookie(cookie), |r| Message::LoggedIn(s(r)));
+            }
+            Message::GoogleLogin => {
+                self.busy = true;
+                self.status = "Waiting for Google sign-in...".into();
+                return Task::perform(
+                    async {
+                        let cookie = login::sign_in().await?;
+                        Api::with_cookie(cookie).await
+                    },
+                    |r| Message::LoggedIn(s(r)),
+                );
             }
             Message::Guest => {
                 self.busy = true;
@@ -524,31 +540,31 @@ impl App {
     }
 
     fn view_login(&self) -> Element<'_, Message> {
-        let steps = column![
-            text("1. Open music.youtube.com in your browser and sign in."),
-            text("2. Press F12, open the Network tab and refresh the page."),
-            text("3. Click any request to music.youtube.com (for example \"browse\")."),
-            text("4. Under Request Headers, copy the whole value of \"cookie\" and paste it below."),
-        ]
-        .spacing(6);
-        let mut login = button(text("Sign in").font(BOLD)).padding([10, 24]);
-        let mut guest = button("Continue without account").style(button::secondary).padding([10, 24]);
+        let mut google = button(text("Sign in with Google").font(BOLD).size(18)).padding([12, 28]);
+        let mut guest = button("Continue without account").style(button::secondary).padding([12, 28]);
+        let mut paste = button(text("Use cookie").size(13)).style(button::secondary).padding([8, 14]);
         if !self.busy {
-            login = login.on_press(Message::Login);
+            google = google.on_press(Message::GoogleLogin);
             guest = guest.on_press(Message::Guest);
+            paste = paste.on_press(Message::Login);
         }
         let card = column![
             text("YTM Player").size(36).font(BOLD).color(ACCENT),
             text("Sign in with your YouTube Music account").size(18),
-            steps,
-            text_input("Paste cookie here", &self.cookie_input)
-                .on_input(Message::CookieChanged)
-                .on_submit(Message::Login)
-                .secure(true)
-                .padding(10),
-            row![login, guest].spacing(12),
+            row![google, guest].spacing(12),
             text(&self.status).color(DIM),
-            text("Your cookie is stored only on this computer.").size(12).color(DIM),
+            space().height(12),
+            text("Advanced: paste a cookie header from your browser").size(12).color(DIM),
+            row![
+                text_input("Cookie", &self.cookie_input)
+                    .on_input(Message::CookieChanged)
+                    .on_submit(Message::Login)
+                    .secure(true)
+                    .padding(8),
+                paste,
+            ]
+            .spacing(8),
+            text("Your sign-in is stored only on this computer.").size(12).color(DIM),
         ]
         .spacing(16)
         .max_width(640);
