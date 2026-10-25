@@ -7,7 +7,7 @@ mod ui;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
@@ -45,8 +45,10 @@ fn fmt_time(secs: f32) -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    if std::env::args().any(|a| a == "--login") {
-        login::run();
+    match std::env::args().nth(1).as_deref() {
+        Some("--login") => login::run(false),
+        Some("--refresh") => login::run(true),
+        _ => {}
     }
     let rt = tokio::runtime::Runtime::new()?;
     let _guard = rt.enter();
@@ -96,6 +98,8 @@ enum NavItem {
 /// Results of background work, sent back to the UI loop.
 enum Event {
     LoggedIn(Result<Api, String>),
+    /// Background session refresh finished (the UI keeps its state).
+    Refreshed(Result<Api, String>),
     Playlists(Result<Vec<Playlist>, String>),
     Tracks(Page, Result<Vec<Track>, String>),
     Fetched(String, Result<PathBuf, String>),
@@ -134,7 +138,12 @@ struct App {
     lyrics: Option<Lyrics>,
     lyrics_status: String,
     liked: HashSet<String>,
+    last_refresh: Instant,
+    refreshing: bool,
 }
+
+/// Google expires copied sessions that the browser side does not keep refreshing.
+const REFRESH_EVERY: Duration = Duration::from_secs(10 * 60);
 
 impl App {
     fn new(tx: UnboundedSender<Event>) -> Self {
@@ -162,6 +171,8 @@ impl App {
             lyrics: None,
             lyrics_status: String::new(),
             liked: HashSet::new(),
+            last_refresh: Instant::now(),
+            refreshing: false,
         }
     }
 
@@ -174,10 +185,22 @@ impl App {
             }
             Err(e) => self.status = format!("No audio device: {e}"),
         }
-        if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+        if let Some(saved) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
             self.busy = true;
-            self.status = "Signing in...".into();
-            self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(cookie).await)) });
+            self.status = "Refreshing your session...".into();
+            self.spawn(async move {
+                let r = async {
+                    let cookie = match login::refresh().await {
+                        Ok(fresh) => fresh,
+                        // Expired for good: the user has to sign in again.
+                        Err(e) if e.to_string().contains("expired") => return Err(e),
+                        // Refresh failed for another reason (offline, slow): try the saved one.
+                        Err(_) => saved,
+                    };
+                    Api::with_cookie(cookie).await
+                };
+                Event::LoggedIn(s(r.await))
+            });
         }
     }
 
@@ -247,6 +270,14 @@ impl App {
                     self.input = Some(Input::Search);
                 }
                 self.rebuild_nav(Vec::new());
+            }
+            Event::Refreshed(result) => {
+                self.refreshing = false;
+                self.last_refresh = Instant::now();
+                match result {
+                    Ok(api) => self.api = Some(api),
+                    Err(e) => self.status = format!("Session refresh: {e}"),
+                }
             }
             Event::LoggedIn(Err(e)) => {
                 self.busy = false;
@@ -595,6 +626,13 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if self.logged_in() && !self.refreshing && self.last_refresh.elapsed() > REFRESH_EVERY {
+            self.refreshing = true;
+            self.spawn(async {
+                let r = async { Api::with_cookie(login::refresh().await?).await };
+                Event::Refreshed(s(r.await))
+            });
+        }
         let Some(a) = &mut self.audio else { return };
         self.pos = a.position();
         if self.loading || !a.finished() {

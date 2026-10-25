@@ -84,7 +84,13 @@ impl Api {
         let items = json
             .pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0/gridRenderer/items")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("unexpected library response"))?;
+            .ok_or_else(|| {
+                if raw.contains("Sign in to") {
+                    anyhow!("YouTube says you're signed out, press Shift+O and sign in again")
+                } else {
+                    anyhow!("unexpected library response")
+                }
+            })?;
         Ok(items
             .iter()
             .filter_map(|item| {
@@ -145,3 +151,4 @@ impl Api {
         Ok(())
     }
 }
+
