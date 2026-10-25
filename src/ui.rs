@@ -6,7 +6,18 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, HighlightSpacing, LineGauge, List, ListItem, Paragraph, Row, Table};
 
-use crate::{App, Focus, Input, Mode, NavItem, fmt_time, lyrics};
+use crate::api::Link;
+use crate::{App, Focus, Input, Mode, NavItem, Page, fmt_time, lyrics};
+
+/// Screen areas the mouse handler needs, filled in while drawing.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Areas {
+    pub nav: Rect,
+    pub tracks: Rect,
+    pub gauge: Rect,
+    /// Width of the time label at the start of the gauge.
+    pub gauge_label: u16,
+}
 
 const ACCENT: Color = Color::Rgb(255, 0, 51);
 const DIM: Color = Color::Rgb(140, 140, 140);
@@ -39,7 +50,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn draw_login(f: &mut Frame, app: &App) {
     let area = centered(f.area(), 64, 13);
     let mut lines = vec![
-        Line::from("YTM Player".fg(ACCENT).bold()),
+        Line::from("RymPlayer".fg(ACCENT).bold()),
         Line::from("YouTube Music in your terminal".fg(DIM)),
         Line::from(""),
         Line::from(vec!["  g ".fg(ACCENT).bold(), "Sign in with Google (opens a sign-in window)".into()]),
@@ -64,6 +75,8 @@ fn draw_main(f: &mut Frame, app: &mut App) {
     let [body, bar] = Layout::vertical([Constraint::Min(8), Constraint::Length(5)]).areas(f.area());
     let [nav, tracks, lyr] =
         Layout::horizontal([Constraint::Length(28), Constraint::Min(40), Constraint::Percentage(30)]).areas(body);
+    app.areas.nav = nav;
+    app.areas.tracks = tracks;
     draw_nav(f, app, nav);
     draw_tracks(f, app, tracks);
     draw_lyrics(f, app, lyr);
@@ -81,6 +94,7 @@ fn draw_nav(f: &mut Frame, app: &mut App, area: Rect) {
         .nav
         .iter()
         .map(|item| match item {
+            NavItem::ForYou => ListItem::new(Line::from(vec!["★ ".fg(ACCENT), "For you".into()])),
             NavItem::Search => ListItem::new("Search"),
             NavItem::Playlist(p) if p.id == crate::api::LIKED_ID => ListItem::new(Line::from(vec!["♥ ".fg(ACCENT), p.title.clone().into()])),
             NavItem::Playlist(p) => ListItem::new(p.title.clone()),
@@ -104,13 +118,20 @@ fn draw_tracks(f: &mut Frame, app: &mut App, area: Rect) {
             let is_current = playing.as_deref() == Some(t.video_id.as_str());
             let title_style = if is_current { Style::new().fg(ACCENT).bold() } else { Style::new() };
             let mark = if app.liked.contains(&t.video_id) { "♥" } else { "" };
+            // Home feed rows that open something show what they are instead of a length.
+            let time = match &t.link {
+                Some(Link::Playlist(_)) => "list".to_string(),
+                Some(Link::Album(_)) => "album".to_string(),
+                Some(Link::Mix(_)) => "mix".to_string(),
+                None => t.duration.clone(),
+            };
             Row::new(vec![
                 if is_current { Cell::from("♪").fg(ACCENT).bold() } else { Cell::from(format!("{}", i + 1)).fg(DIM) },
                 Cell::from(t.title.clone()).style(title_style),
                 Cell::from(t.artist.clone()).fg(DIM),
                 Cell::from(t.album.clone()).fg(DIM),
                 Cell::from(mark).fg(ACCENT),
-                Cell::from(t.duration.clone()).fg(DIM),
+                Cell::from(time).fg(DIM),
             ])
         })
         .collect();
@@ -130,7 +151,8 @@ fn draw_tracks(f: &mut Frame, app: &mut App, area: Rect) {
     } else if app.tracks.is_empty() {
         block = block.title_bottom(Line::from(" Press / to search ".fg(DIM)));
     }
-    let header = Row::new(["#", "Title", "Artist", "Album", "", "Time"]).style(Style::new().fg(DIM).add_modifier(Modifier::BOLD));
+    let third = if app.page == Page::ForYou { "Section" } else { "Album" };
+    let header = Row::new(["#", "Title", "Artist", third, "", "Time"]).style(Style::new().fg(DIM).add_modifier(Modifier::BOLD));
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
@@ -174,7 +196,7 @@ fn draw_lyrics(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(block).alignment(Alignment::Center).scroll((scroll, 0)), area);
 }
 
-fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
+fn draw_bar(f: &mut Frame, app: &mut App, area: Rect) {
     let block = pane("Now playing", false);
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -209,6 +231,8 @@ fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let dur = app.duration();
     let ratio = if dur > 0.0 { (app.pos / dur).clamp(0.0, 1.0) as f64 } else { 0.0 };
     let label = format!("{} / {}", fmt_time(app.pos.min(dur)), fmt_time(dur));
+    app.areas.gauge = gauge;
+    app.areas.gauge_label = label.chars().count() as u16 + 1;
     f.render_widget(
         LineGauge::default()
             .ratio(ratio)
@@ -222,12 +246,13 @@ fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let keys = [
         ("space", "pause"),
         ("n/p", "next/prev"),
-        ("←→", "seek"),
+        ("←→ 0-9", "seek"),
         ("+/-", vol.as_str()),
         ("l", "like"),
+        ("r", "radio"),
         ("/", "search"),
         ("tab", "switch"),
-        ("g", "google sign-in"),
+        ("g", "sign in"),
         ("O", "sign out"),
         ("q", "quit"),
     ];
@@ -289,6 +314,7 @@ mod tests {
                 artist: "Some Artist".into(),
                 album: "Album".into(),
                 duration: "3:3{i}".replace("{i}", &i.to_string()),
+                link: None,
             })
             .collect();
         a.track_state.select(Some(1));

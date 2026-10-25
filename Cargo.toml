@@ -1,6 +1,6 @@
 [package]
-name = "ytm-player"
-version = "0.1.0"
+name = "rymplayer"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -23,3 +23,7 @@ ytmapi-rs = "0.3.3"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[[bin]]
+name = "RymPlayer"
+path = "src/main.rs"

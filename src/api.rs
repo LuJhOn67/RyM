@@ -7,9 +7,11 @@ use anyhow::{Result, anyhow};
 use ytmapi_rs::YtMusic;
 use ytmapi_rs::auth::BrowserToken;
 use ytmapi_rs::auth::noauth::NoAuthToken;
-use ytmapi_rs::common::{LikeStatus, PlaylistID, VideoID, YoutubeID};
-use ytmapi_rs::parse::PlaylistItem;
-use ytmapi_rs::query::GetLibraryPlaylistsQuery;
+use serde_json::Value;
+use ytmapi_rs::auth::AuthToken;
+use ytmapi_rs::common::{AlbumID, LikeStatus, PlaylistID, VideoID, YoutubeID};
+use ytmapi_rs::parse::{ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
+use ytmapi_rs::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMethod, PostQuery, Query};
 
 /// Liked Music is a regular playlist with a fixed id.
 pub const LIKED_ID: &str = "LM";
@@ -21,6 +23,16 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration: String,
+    /// Set for rows that open something instead of playing (home feed playlists, albums, mixes).
+    pub link: Option<Link>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Link {
+    Playlist(String),
+    Album(String),
+    /// Radio-style mix, played through the watch queue.
+    Mix(String),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +84,7 @@ impl Api {
                 artist: s.artist,
                 album: s.album.map(|a| a.name).unwrap_or_default(),
                 duration: s.duration,
+                link: None,
             })
             .collect())
     }
@@ -124,6 +137,7 @@ impl Api {
                     artist: s.artists.into_iter().map(|a| a.name).collect::<Vec<_>>().join(", "),
                     album: s.album.name,
                     duration: s.duration,
+                    link: None,
                 }),
                 PlaylistItem::Video(v) if v.is_available => Some(Track {
                     video_id: v.video_id.get_raw().to_string(),
@@ -131,10 +145,107 @@ impl Api {
                     artist: v.channel_name,
                     album: String::new(),
                     duration: v.duration,
+                    link: None,
                 }),
                 _ => None,
             })
             .collect())
+    }
+
+    /// The home feed ("For you"): songs play, playlists/albums/mixes open. Reads up to three pages.
+    pub async fn home(self) -> Result<Vec<Track>> {
+        let mut out = Vec::new();
+        let mut continuation = None;
+        for _ in 0..3 {
+            let query = HomeQuery { continuation: continuation.take() };
+            let raw = match &self {
+                Api::Guest(y) => y.raw_json_query(query).await,
+                Api::User(y) => y.raw_json_query(query).await,
+            }
+            .map_err(err)?;
+            let json: Value = serde_json::from_str(&raw)?;
+            let list = json
+                .pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer")
+                .or_else(|| json.pointer("/continuationContents/sectionListContinuation"));
+            let Some(list) = list else { break };
+            for shelf in list.get("contents").and_then(Value::as_array).into_iter().flatten() {
+                let Some(shelf) = shelf.get("musicCarouselShelfRenderer") else { continue };
+                let section = text(shelf.pointer("/header/musicCarouselShelfBasicHeaderRenderer/title"));
+                for item in shelf.get("contents").and_then(Value::as_array).into_iter().flatten() {
+                    if let Some(t) = home_item(item, &section) {
+                        out.push(t);
+                    }
+                }
+            }
+            continuation = list
+                .pointer("/continuations/0/nextContinuationData/continuation")
+                .and_then(Value::as_str)
+                .map(String::from);
+            if continuation.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn album_tracks(self, id: String) -> Result<Vec<Track>> {
+        let aid = AlbumID::from_raw(id);
+        let album = match &self {
+            Api::Guest(y) => y.get_album(aid).await,
+            Api::User(y) => y.get_album(aid).await,
+        }
+        .map_err(err)?;
+        let artist = album.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+        Ok(album
+            .tracks
+            .into_iter()
+            .map(|t| Track {
+                video_id: t.video_id.get_raw().to_string(),
+                title: t.title,
+                artist: artist.clone(),
+                album: album.title.clone(),
+                duration: t.duration,
+                link: None,
+            })
+            .collect())
+    }
+
+    /// YouTube Music's "up next" radio for a song (the song itself comes first).
+    pub async fn radio(self, video_id: String) -> Result<Vec<Track>> {
+        let vid = VideoID::from_raw(video_id);
+        let tracks = match &self {
+            Api::Guest(y) => y.get_watch_playlist_from_video_id(vid).await,
+            Api::User(y) => y.get_watch_playlist_from_video_id(vid).await,
+        }
+        .map_err(err)?;
+        Ok(tracks.into_iter().map(watch_track).collect())
+    }
+
+    /// Tracks of a mix ("RD..." playlist), which only exists as a watch queue.
+    pub async fn mix_tracks(self, id: String) -> Result<Vec<Track>> {
+        let query = GetWatchPlaylistQuery::new_from_playlist_id(PlaylistID::from_raw(id));
+        let tracks = match &self {
+            Api::Guest(y) => y.query(query).await,
+            Api::User(y) => y.query(query).await,
+        }
+        .map_err(err)?;
+        Ok(tracks.into_iter().map(watch_track).collect())
+    }
+
+    /// YouTube Music's own lyrics for a song; `None` when it has none.
+    pub async fn lyrics(self, video_id: String) -> Result<Option<crate::lyrics::Lyrics>> {
+        let vid = VideoID::from_raw(video_id);
+        let id = match &self {
+            Api::Guest(y) => y.get_lyrics_id(vid).await,
+            Api::User(y) => y.get_lyrics_id(vid).await,
+        };
+        // No lyrics tab for this song.
+        let Ok(id) = id else { return Ok(None) };
+        let l = match &self {
+            Api::Guest(y) => y.get_lyrics(id).await,
+            Api::User(y) => y.get_lyrics(id).await,
+        };
+        Ok(l.ok().and_then(|l| crate::lyrics::from_ytm(&l.lyrics, &l.source)))
     }
 
     pub async fn rate(self, video_id: String, liked: bool) -> Result<()> {
@@ -152,3 +263,127 @@ impl Api {
     }
 }
 
+
+fn watch_track(t: WatchPlaylistTrack) -> Track {
+    Track {
+        video_id: t.video_id.get_raw().to_string(),
+        title: t.title,
+        artist: t.author,
+        album: String::new(),
+        duration: t.duration,
+        link: None,
+    }
+}
+
+/// Joins a `{runs: [{text}]}` node into plain text.
+fn text(node: Option<&Value>) -> String {
+    node.and_then(|n| n.get("runs"))
+        .and_then(Value::as_array)
+        .map(|runs| runs.iter().filter_map(|r| r.get("text")?.as_str()).collect())
+        .unwrap_or_default()
+}
+
+/// One card of a home shelf. Artists and anything unknown are skipped.
+fn home_item(item: &Value, section: &str) -> Option<Track> {
+    if let Some(r) = item.get("musicTwoRowItemRenderer") {
+        let title = text(r.get("title"));
+        let subtitle = text(r.get("subtitle"));
+        let nav = r.get("navigationEndpoint")?;
+        let (video_id, link) = if let Some(v) = nav.pointer("/watchEndpoint/videoId").and_then(Value::as_str) {
+            (v.to_string(), None)
+        } else if let Some(p) = nav.pointer("/watchPlaylistEndpoint/playlistId").and_then(Value::as_str) {
+            (String::new(), Some(Link::Mix(p.to_string())))
+        } else {
+            let id = nav.pointer("/browseEndpoint/browseId").and_then(Value::as_str)?;
+            let link = if id.starts_with("VL") {
+                Link::Playlist(id.to_string())
+            } else if id.starts_with("MPRE") {
+                Link::Album(id.to_string())
+            } else {
+                return None;
+            };
+            (String::new(), Some(link))
+        };
+        return Some(Track { video_id, title, artist: subtitle, album: section.to_string(), duration: String::new(), link });
+    }
+    // "Quick picks" style song rows.
+    let r = item.get("musicResponsiveListItemRenderer")?;
+    let video_id = r.pointer("/playlistItemData/videoId").and_then(Value::as_str)?.to_string();
+    let col = |i: usize| text(r.pointer(&format!("/flexColumns/{i}/musicResponsiveListItemFlexColumnRenderer/text")));
+    let artist = col(1).split(" • ").next().unwrap_or_default().to_string();
+    Some(Track { video_id, title: col(0), artist, album: section.to_string(), duration: String::new(), link: None })
+}
+
+/// The YouTube Music home feed ("Quick picks", mixes...). Not in ytmapi-rs, so it's a custom
+/// query read with `raw_json_query`; the parsed output is unused.
+#[derive(Debug)]
+struct HomeQuery {
+    continuation: Option<String>,
+}
+
+#[derive(Debug)]
+struct Unparsed;
+
+impl ParseFrom<HomeQuery> for Unparsed {
+    fn parse_from(_: ProcessedResult<HomeQuery>) -> ytmapi_rs::Result<Self> {
+        Ok(Unparsed)
+    }
+}
+
+impl<A: AuthToken> Query<A> for HomeQuery {
+    type Output = Unparsed;
+    type Method = PostMethod;
+}
+
+impl PostQuery for HomeQuery {
+    fn header(&self) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::from_iter([("browseId".to_string(), serde_json::json!("FEmusic_home"))])
+    }
+    fn params(&self) -> Vec<(&str, std::borrow::Cow<'_, str>)> {
+        match &self.continuation {
+            Some(c) => vec![("ctoken", c.into()), ("continuation", c.into()), ("type", "next".into())],
+            None => vec![],
+        }
+    }
+    fn path(&self) -> &str {
+        "browse"
+    }
+}
+
+#[cfg(test)]
+mod home_probe {
+    use super::*;
+
+    /// Prints section names and counts only.
+    #[tokio::test]
+    #[ignore]
+    async fn home_feed() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let api = Api::with_cookie(cookie).await.unwrap();
+        let items = api.clone().home().await.unwrap();
+        let mut sections: Vec<(String, usize, usize)> = Vec::new();
+        for t in &items {
+            let link = t.link.is_some() as usize;
+            match sections.iter_mut().find(|s| s.0 == t.album) {
+                Some(s) => {
+                    s.1 += 1 - link;
+                    s.2 += link;
+                }
+                None => sections.push((t.album.clone(), 1 - link, link)),
+            }
+        }
+        for (name, songs, links) in &sections {
+            println!("{name}: {songs} songs, {links} playlists/albums/mixes");
+        }
+        if let Some(t) = items.iter().find(|t| t.link.is_none()) {
+            println!("radio from a home song: {} tracks", api.clone().radio(t.video_id.clone()).await.unwrap().len());
+        }
+        for t in &items {
+            match &t.link {
+                Some(Link::Mix(id)) => println!("mix: {} tracks", api.clone().mix_tracks(id.clone()).await.unwrap().len()),
+                Some(Link::Album(id)) => println!("album: {} tracks", api.clone().album_tracks(id.clone()).await.unwrap().len()),
+                _ => continue,
+            }
+        }
+    }
+}

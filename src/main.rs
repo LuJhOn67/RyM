@@ -7,18 +7,20 @@ mod ui;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use api::{Api, Playlist, Track};
+use api::{Api, Link, Playlist, Track};
 use audio::Audio;
 use lyrics::Lyrics;
 
 pub fn data_dir() -> PathBuf {
-    directories::ProjectDirs::from("", "", "ytm-player")
+    directories::ProjectDirs::from("", "", "RymPlayer")
         .map(|d| d.data_local_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -45,10 +47,8 @@ fn fmt_time(secs: f32) -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    match std::env::args().nth(1).as_deref() {
-        Some("--login") => login::run(false),
-        Some("--refresh") => login::run(true),
-        _ => {}
+    if std::env::args().any(|a| a == "--login") {
+        login::run();
     }
     let rt = tokio::runtime::Runtime::new()?;
     let _guard = rt.enter();
@@ -59,7 +59,9 @@ fn main() -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
     // Optional: legacy Windows consoles reject it, and pasted text then arrives as key presses.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     let result = app.run(&mut terminal, rx);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     ratatui::restore();
     result
@@ -85,12 +87,18 @@ enum Input {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Page {
+    ForYou,
     Search,
     Playlist(String),
+    Album(String),
+    Mix(String),
+    /// YouTube Music radio started from a song.
+    Radio(String),
 }
 
 #[derive(Debug, Clone)]
 enum NavItem {
+    ForYou,
     Search,
     Playlist(Playlist),
 }
@@ -98,8 +106,8 @@ enum NavItem {
 /// Results of background work, sent back to the UI loop.
 enum Event {
     LoggedIn(Result<Api, String>),
-    /// Background session refresh finished (the UI keeps its state).
-    Refreshed(Result<Api, String>),
+    /// Radio tracks to continue with after the queue ran out.
+    Radio(Result<Vec<Track>, String>),
     Playlists(Result<Vec<Playlist>, String>),
     Tracks(Page, Result<Vec<Track>, String>),
     Fetched(String, Result<PathBuf, String>),
@@ -138,12 +146,12 @@ struct App {
     lyrics: Option<Lyrics>,
     lyrics_status: String,
     liked: HashSet<String>,
-    last_refresh: Instant,
-    refreshing: bool,
+    /// Start playing this page as soon as it loads (radio started with `r`).
+    play_when_loaded: Option<Page>,
+    radio_pending: bool,
+    /// Where things were drawn, for mouse clicks.
+    areas: ui::Areas,
 }
-
-/// Google expires copied sessions that the browser side does not keep refreshing.
-const REFRESH_EVERY: Duration = Duration::from_secs(10 * 60);
 
 impl App {
     fn new(tx: UnboundedSender<Event>) -> Self {
@@ -171,8 +179,9 @@ impl App {
             lyrics: None,
             lyrics_status: String::new(),
             liked: HashSet::new(),
-            last_refresh: Instant::now(),
-            refreshing: false,
+            play_when_loaded: None,
+            radio_pending: false,
+            areas: ui::Areas::default(),
         }
     }
 
@@ -185,22 +194,10 @@ impl App {
             }
             Err(e) => self.status = format!("No audio device: {e}"),
         }
-        if let Some(saved) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+        if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
             self.busy = true;
-            self.status = "Refreshing your session...".into();
-            self.spawn(async move {
-                let r = async {
-                    let cookie = match login::refresh().await {
-                        Ok(fresh) => fresh,
-                        // Expired for good: the user has to sign in again.
-                        Err(e) if e.to_string().contains("expired") => return Err(e),
-                        // Refresh failed for another reason (offline, slow): try the saved one.
-                        Err(_) => saved,
-                    };
-                    Api::with_cookie(cookie).await
-                };
-                Event::LoggedIn(s(r.await))
-            });
+            self.status = "Signing in...".into();
+            self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(cookie).await)) });
         }
     }
 
@@ -230,6 +227,7 @@ impl App {
                     TermEvent::Paste(text) if self.input.is_some() => {
                         self.buffer.push_str(text.trim_end_matches(['\r', '\n']));
                     }
+                    TermEvent::Mouse(m) if self.mode == Mode::Main && self.input.is_none() => self.mouse(m),
                     _ => {}
                 }
             }
@@ -265,18 +263,26 @@ impl App {
                         let _ = stream::write_cookie_file(&c, &ytdlp_cookie_path());
                     }
                     self.spawn(async move { Event::Playlists(s(api.library_playlists().await)) });
-                    self.open_playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into() });
-                } else {
-                    self.input = Some(Input::Search);
                 }
                 self.rebuild_nav(Vec::new());
+                self.open(Page::ForYou, "For you".into());
             }
-            Event::Refreshed(result) => {
-                self.refreshing = false;
-                self.last_refresh = Instant::now();
+            Event::Radio(result) => {
+                self.radio_pending = false;
                 match result {
-                    Ok(api) => self.api = Some(api),
-                    Err(e) => self.status = format!("Session refresh: {e}"),
+                    Ok(tracks) => {
+                        let fresh: Vec<Track> = tracks
+                            .into_iter()
+                            .filter(|t| !self.queue.iter().any(|q| q.video_id == t.video_id))
+                            .collect();
+                        if fresh.is_empty() {
+                            self.status = "Radio has nothing new to play".into();
+                            return;
+                        }
+                        self.queue.extend(fresh);
+                        self.next();
+                    }
+                    Err(e) => self.status = format!("Radio: {e}"),
                 }
             }
             Event::LoggedIn(Err(e)) => {
@@ -305,6 +311,9 @@ impl App {
                         self.status.clear();
                         self.track_state.select((!t.is_empty()).then_some(0));
                         self.tracks = t;
+                        if self.play_when_loaded.take() == Some(page) {
+                            self.play_from_list(0);
+                        }
                     }
                     Err(e) => self.status = e,
                 }
@@ -316,8 +325,10 @@ impl App {
                 self.loading = false;
                 match result {
                     Ok(path) => {
+                        let known = parse_duration(&self.now_playing().map(|t| t.duration.clone()).unwrap_or_default())
+                            .or_else(|| stream::cached_duration(&vid));
                         if let Some(a) = &mut self.audio {
-                            match a.play_file(&path) {
+                            match a.play_file(&path, known) {
                                 Ok(()) => self.status.clear(),
                                 Err(e) => self.status = format!("Can't play: {e}"),
                             }
@@ -357,7 +368,7 @@ impl App {
     }
 
     fn rebuild_nav(&mut self, playlists: Vec<Playlist>) {
-        let mut nav = vec![NavItem::Search];
+        let mut nav = vec![NavItem::ForYou, NavItem::Search];
         if self.logged_in() {
             nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into() }));
         }
@@ -427,6 +438,12 @@ impl App {
             KeyCode::Char('l') => self.toggle_like(),
             KeyCode::Char('O') => self.sign_out(),
             KeyCode::Char('g') if !self.busy => self.google_login(),
+            KeyCode::Char('r') => self.start_radio(),
+            // Like YouTube: 0-9 jump to 0%..90% of the song.
+            KeyCode::Char(c @ '0'..='9') => {
+                let tenth = c.to_digit(10).unwrap_or(0) as f32 / 10.0;
+                self.seek_to(self.duration() * tenth);
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
             KeyCode::PageUp => self.move_sel(-10),
@@ -489,7 +506,7 @@ impl App {
         self.current = None;
         self.lyrics = None;
         self.liked.clear();
-        self.nav = vec![NavItem::Search];
+        self.nav = vec![NavItem::ForYou, NavItem::Search];
         self.mode = Mode::Login;
         self.status.clear();
     }
@@ -514,34 +531,136 @@ impl App {
             Focus::Nav => {
                 let Some(item) = self.nav_state.selected().and_then(|i| self.nav.get(i)).cloned() else { return };
                 match item {
+                    NavItem::ForYou => self.open(Page::ForYou, "For you".into()),
                     NavItem::Search => {
                         self.page = Page::Search;
                         self.page_title = "Search".into();
                         self.tracks.clear();
                         self.input = Some(Input::Search);
                     }
-                    NavItem::Playlist(p) => self.open_playlist(p),
+                    NavItem::Playlist(p) => self.open(Page::Playlist(p.id), p.title),
                 }
                 self.focus = Focus::Tracks;
             }
             Focus::Tracks => {
-                if let Some(i) = self.track_state.selected().filter(|&i| i < self.tracks.len()) {
-                    self.queue = self.tracks.clone();
-                    self.play(i);
+                let Some(i) = self.track_state.selected() else { return };
+                let Some(t) = self.tracks.get(i).cloned() else { return };
+                match t.link {
+                    Some(Link::Playlist(id)) => self.open(Page::Playlist(id), t.title),
+                    Some(Link::Album(id)) => self.open(Page::Album(id), t.title),
+                    Some(Link::Mix(id)) => self.open(Page::Mix(id), t.title),
+                    None => self.play_from_list(i),
                 }
             }
         }
     }
 
-    fn open_playlist(&mut self, p: Playlist) {
+    /// Plays row `i` of the visible list; the queue is the list's songs (links skipped).
+    fn play_from_list(&mut self, i: usize) {
+        let Some(vid) = self.tracks.get(i).map(|t| t.video_id.clone()) else { return };
+        self.queue = self.tracks.iter().filter(|t| t.link.is_none()).cloned().collect();
+        if let Some(q) = self.queue.iter().position(|t| t.video_id == vid) {
+            self.play(q);
+        }
+    }
+
+    fn open(&mut self, page: Page, title: String) {
         let Some(api) = self.api.clone() else { return };
-        let page = Page::Playlist(p.id.clone());
         self.page = page.clone();
-        self.page_title = p.title;
+        self.page_title = title;
         self.busy = true;
         self.tracks.clear();
         self.track_state.select(None);
-        self.spawn(async move { Event::Tracks(page, s(api.playlist_tracks(p.id).await)) });
+        self.spawn(async move {
+            let r = match page.clone() {
+                Page::ForYou => api.home().await,
+                Page::Playlist(id) => api.playlist_tracks(id).await,
+                Page::Album(id) => api.album_tracks(id).await,
+                Page::Mix(id) => api.mix_tracks(id).await,
+                Page::Radio(vid) => api.radio(vid).await,
+                Page::Search => Ok(Vec::new()),
+            };
+            Event::Tracks(page, s(r))
+        });
+    }
+
+    /// `r`: radio from the selected song, or the playing one.
+    fn start_radio(&mut self) {
+        let selected = (self.focus == Focus::Tracks)
+            .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))
+            .flatten()
+            .filter(|t| t.link.is_none());
+        let Some(seed) = selected.or(self.now_playing()).cloned() else { return };
+        let page = Page::Radio(seed.video_id);
+        self.play_when_loaded = Some(page.clone());
+        self.open(page, format!("Radio: {}", seed.title));
+    }
+
+    /// Queue ran out: keep going with YouTube Music's radio for the last song.
+    fn continue_with_radio(&mut self) {
+        let (Some(api), Some(vid)) = (self.api.clone(), self.now_playing().map(|t| t.video_id.clone())) else { return };
+        if self.radio_pending {
+            return;
+        }
+        self.radio_pending = true;
+        self.status = "Queue finished, continuing with radio...".into();
+        self.spawn(async move { Event::Radio(s(api.radio(vid).await)) });
+    }
+
+    fn mouse(&mut self, m: MouseEvent) {
+        let a = self.areas;
+        let inside = |r: ratatui::layout::Rect| {
+            m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
+        };
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let delta = if m.kind == MouseEventKind::ScrollUp { -3 } else { 3 };
+                if inside(a.nav) {
+                    self.focus = Focus::Nav;
+                } else if inside(a.tracks) {
+                    self.focus = Focus::Tracks;
+                } else {
+                    return;
+                }
+                self.move_sel(delta);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if inside(a.gauge) && m.column >= a.gauge.x + a.gauge_label {
+                    let width = a.gauge.width.saturating_sub(a.gauge_label).max(1) as f32;
+                    let frac = (m.column - a.gauge.x - a.gauge_label) as f32 / width;
+                    self.seek_to(self.duration() * frac);
+                } else if inside(a.tracks) && m.row >= a.tracks.y + 2 {
+                    // Border and header rows come first.
+                    let i = self.track_state.offset() + (m.row - a.tracks.y - 2) as usize;
+                    if i < self.tracks.len() {
+                        self.click(Focus::Tracks, i);
+                    }
+                } else if inside(a.nav) && m.row > a.nav.y {
+                    let i = self.nav_state.offset() + (m.row - a.nav.y - 1) as usize;
+                    if i < self.nav.len() {
+                        self.click(Focus::Nav, i);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// First click selects, clicking the selected row again opens/plays it.
+    fn click(&mut self, pane: Focus, i: usize) {
+        let state_sel = match pane {
+            Focus::Nav => self.nav_state.selected(),
+            Focus::Tracks => self.track_state.selected(),
+        };
+        let again = self.focus == pane && state_sel == Some(i);
+        self.focus = pane;
+        match pane {
+            Focus::Nav => self.nav_state.select(Some(i)),
+            Focus::Tracks => self.track_state.select(Some(i)),
+        }
+        if again {
+            self.activate();
+        }
     }
 
     // ------------------------------------------------------------ playback
@@ -564,8 +683,16 @@ impl App {
 
         let v = vid.clone();
         let dur = parse_duration(&track.duration);
+        let api = self.api.clone();
         self.spawn(async move {
-            Event::Lyrics(v, s(lyrics::lrclib(track.title, track.artist, track.album, dur).await))
+            let synced = lyrics::lrclib(track.title, track.artist, track.album, dur).await;
+            let found = match (synced, api) {
+                (Ok(Some(l)), _) => Some(l),
+                // LRCLIB has nothing (or is down): YouTube Music's own, unsynced lyrics.
+                (_, Some(api)) => api.lyrics(v.clone()).await.ok().flatten(),
+                (_, None) => None,
+            };
+            Event::Lyrics(v, Ok(found))
         });
 
         if let Some(api) = self.api.clone() {
@@ -584,10 +711,11 @@ impl App {
     }
 
     fn next(&mut self) {
-        if let Some(i) = self.current
-            && i + 1 < self.queue.len()
-        {
+        let Some(i) = self.current else { return };
+        if i + 1 < self.queue.len() {
             self.play(i + 1);
+        } else {
+            self.continue_with_radio();
         }
     }
 
@@ -604,10 +732,16 @@ impl App {
     }
 
     fn seek_by(&mut self, delta: f32) {
+        self.seek_to(self.pos + delta);
+    }
+
+    fn seek_to(&mut self, secs: f32) {
+        let dur = self.duration();
         if let Some(a) = &self.audio
-            && let Some(d) = a.duration()
+            && a.is_loaded()
+            && dur > 0.0
         {
-            let to = (self.pos + delta).clamp(0.0, d);
+            let to = secs.clamp(0.0, dur - 0.5);
             a.seek(to);
             self.pos = to;
         }
@@ -633,22 +767,13 @@ impl App {
     }
 
     fn tick(&mut self) {
-        if self.logged_in() && !self.refreshing && self.last_refresh.elapsed() > REFRESH_EVERY {
-            self.refreshing = true;
-            self.spawn(async {
-                let r = async { Api::with_cookie(login::refresh().await?).await };
-                Event::Refreshed(s(r.await))
-            });
-        }
         let Some(a) = &mut self.audio else { return };
         self.pos = a.position();
         if self.loading || !a.finished() {
             return;
         }
-        match self.current.map(|i| i + 1).filter(|&n| n < self.queue.len()) {
-            Some(n) => self.play(n),
-            None => a.stop(),
-        }
+        a.stop();
+        self.next();
     }
 
     fn is_playing(&self) -> bool {
@@ -700,5 +825,45 @@ mod live_tests {
             let t = api.clone().playlist_tracks(p.id.clone()).await.expect("playlist");
             println!("first playlist: {} tracks", t.len());
         }
+    }
+}
+
+#[cfg(test)]
+mod lyrics_probe {
+    use super::*;
+
+    /// How many of the user's liked songs LRCLIB finds lyrics for.
+    #[tokio::test]
+    #[ignore]
+    async fn liked_lyrics_coverage() {
+        let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
+        let api = Api::with_cookie(cookie).await.expect("login");
+        let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
+        println!("liked: {}", liked.len());
+        for t in liked.into_iter().take(15) {
+            let r = lyrics::lrclib(t.title.clone(), t.artist.clone(), t.album.clone(), parse_duration(&t.duration)).await;
+            let res = match r {
+                Ok(Some(l)) => format!("LRCLIB synced={} plain={}", l.synced.len(), l.plain.len()),
+                Ok(None) => match api.clone().lyrics(t.video_id.clone()).await {
+                    Ok(Some(l)) => format!("{} plain={}", l.source, l.plain.len()),
+                    _ => "NONE".into(),
+                },
+                Err(e) => format!("ERR {e}"),
+            };
+            println!("{:<45} | {:<25} | {res}", t.title, t.artist);
+        }
+    }
+}
+
+#[cfg(test)]
+mod ytm_lyrics_probe {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn ytm_lyrics_fallback() {
+        let api = Api::guest().await.unwrap();
+        let l = api.lyrics("lYBUbBu4W08".into()).await.unwrap();
+        println!("ytm lyrics: {:?}", l.map(|l| (l.source, l.plain.len())));
     }
 }

@@ -22,6 +22,11 @@ pub fn cached(video_id: &str) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
+/// Song length saved by an earlier download, in seconds.
+pub fn cached_duration(video_id: &str) -> Option<f32> {
+    std::fs::read_to_string(cache_dir().join(format!("{video_id}.secs"))).ok()?.trim().parse().ok()
+}
+
 pub async fn fetch(video_id: String, cookies: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = cached(&video_id) {
         return Ok(p);
@@ -49,7 +54,7 @@ async fn download(video_id: &str, cookies: Option<PathBuf>, dir: &Path) -> Resul
 
     let mut cmd = Command::new("yt-dlp");
     cmd.args(["--js-runtimes", "node", "-f", FORMATS, "--no-playlist", "--no-progress"])
-        .args(["--no-part", "--print", "after_move:filepath", "-o"])
+        .args(["--no-part", "--print", "after_move:%(duration)s\t%(filepath)s", "-o"])
         .arg(&out);
     if let Some(c) = &cookies {
         cmd.arg("--cookies").arg(c);
@@ -65,8 +70,12 @@ async fn download(video_id: &str, cookies: Option<PathBuf>, dir: &Path) -> Resul
         return Err(anyhow!("{last}"));
     }
     let printed = String::from_utf8_lossy(&output.stdout);
-    let path = printed.lines().last().map(|l| PathBuf::from(l.trim()));
-    path.filter(|p| p.exists()).ok_or_else(|| anyhow!("download finished but file is missing"))
+    let (secs, path) = printed.lines().last().and_then(|l| l.trim().split_once('\t')).unzip();
+    // WebM files don't carry their length; keep the one YouTube reported next to the cache.
+    if let Some(secs) = secs.and_then(|s| s.parse::<f32>().ok()) {
+        let _ = std::fs::write(cache_dir().join(format!("{video_id}.secs")), secs.to_string());
+    }
+    path.map(PathBuf::from).filter(|p| p.exists()).ok_or_else(|| anyhow!("download finished but file is missing"))
 }
 
 /// yt-dlp wants a Netscape cookie file; convert the browser's `Cookie:` header.

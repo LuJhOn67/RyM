@@ -3425,6 +3425,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "rymplayer"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "directories",
+ "ratatui",
+ "reqwest",
+ "rodio",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "symphonia-adapter-libopus",
+ "tao",
+ "tokio",
+ "wry",
+ "ytmapi-rs",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5268,26 +5288,6 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "synstructure",
-]
-
-[[package]]
-name = "ytm-player"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "directories",
- "ratatui",
- "reqwest",
- "rodio",
- "serde",
- "serde_json",
- "symphonia",
- "symphonia-adapter-libopus",
- "tao",
- "tokio",
- "wry",
- "ytmapi-rs",
 ]
 
 [[package]]

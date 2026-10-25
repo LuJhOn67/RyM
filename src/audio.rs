@@ -161,6 +161,7 @@ impl Source for FileSource {
 pub struct Audio {
     _sink: MixerDeviceSink,
     player: Player,
+    loaded: bool,
     duration: Option<Duration>,
 }
 
@@ -169,12 +170,14 @@ impl Audio {
         let mut sink = DeviceSinkBuilder::open_default_sink()?;
         sink.log_on_drop(false);
         let player = Player::connect_new(sink.mixer());
-        Ok(Audio { _sink: sink, player, duration: None })
+        Ok(Audio { _sink: sink, player, loaded: false, duration: None })
     }
 
-    pub fn play_file(&mut self, path: &Path) -> Result<()> {
+    /// `known_secs`: length from YouTube Music, used when the file doesn't say (WebM).
+    pub fn play_file(&mut self, path: &Path, known_secs: Option<f32>) -> Result<()> {
         let src = FileSource::open(path)?;
-        self.duration = src.total_duration();
+        self.duration = src.total_duration().or(known_secs.map(Duration::from_secs_f32));
+        self.loaded = true;
         self.player.clear();
         self.player.append(src);
         self.player.play();
@@ -191,16 +194,21 @@ impl Audio {
 
     /// A track is loaded, not paused, and not finished.
     pub fn is_playing(&self) -> bool {
-        self.duration.is_some() && !self.player.is_paused() && !self.player.empty()
+        self.loaded && !self.player.is_paused() && !self.player.empty()
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
     }
 
     /// True once a track was loaded and has played to the end.
     pub fn finished(&self) -> bool {
-        self.duration.is_some() && self.player.empty()
+        self.loaded && self.player.empty()
     }
 
     pub fn stop(&mut self) {
         self.player.clear();
+        self.loaded = false;
         self.duration = None;
     }
 
@@ -229,4 +237,22 @@ pub fn decode_seconds(path: &Path) -> Result<f64> {
     let (ch, rate) = (src.channels as f64, src.rate as f64);
     let samples = src.by_ref().count() as f64;
     Ok(samples / ch / rate)
+}
+
+#[cfg(test)]
+mod seek_tests {
+    use super::*;
+
+    /// Uses a song the live test downloaded.
+    #[test]
+    #[ignore]
+    fn webm_duration_and_seek() {
+        let path = crate::stream::cached("lYBUbBu4W08").expect("run the live test first");
+        let mut src = FileSource::open(&path).unwrap();
+        println!("duration: {:?}", src.duration);
+        let r = Source::try_seek(&mut src, Duration::from_secs(60));
+        println!("seek: {r:?}");
+        let rest = src.by_ref().count() as f64 / src.channels as f64 / src.rate as f64;
+        println!("seconds left after seeking to 60s: {rest:.1}");
+    }
 }
