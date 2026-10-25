@@ -285,6 +285,12 @@ impl App {
                 self.status = format!("Sign-in failed: {e}");
             }
             Event::Playlists(Ok(p)) => self.rebuild_nav(p),
+            Event::Playlists(Err(e)) if e.contains("signed out") => {
+                // The saved session is dead: send the user to sign in again.
+                self.mode = Mode::Login;
+                self.busy = false;
+                self.status = "Google ended your session. Press g to sign in again.".into();
+            }
             Event::Playlists(Err(e)) => self.status = format!("Playlists: {e}"),
             Event::Tracks(page, result) => {
                 if page != self.page {
@@ -420,6 +426,7 @@ impl App {
             KeyCode::Char('-') => self.set_volume(self.volume - 0.05),
             KeyCode::Char('l') => self.toggle_like(),
             KeyCode::Char('O') => self.sign_out(),
+            KeyCode::Char('g') if !self.busy => self.google_login(),
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
             KeyCode::PageUp => self.move_sel(-10),

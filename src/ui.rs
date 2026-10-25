@@ -227,6 +227,7 @@ fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
         ("l", "like"),
         ("/", "search"),
         ("tab", "switch"),
+        ("g", "google sign-in"),
         ("O", "sign out"),
         ("q", "quit"),
     ];
