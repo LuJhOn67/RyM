@@ -189,8 +189,9 @@ impl Audio {
         }
     }
 
-    pub fn is_paused(&self) -> bool {
-        self.player.is_paused()
+    /// A track is loaded, not paused, and not finished.
+    pub fn is_playing(&self) -> bool {
+        self.duration.is_some() && !self.player.is_paused() && !self.player.empty()
     }
 
     /// True once a track was loaded and has played to the end.

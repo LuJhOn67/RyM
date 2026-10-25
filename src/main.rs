@@ -1,20 +1,17 @@
-#![windows_subsystem = "windows"]
-
 mod api;
 mod audio;
 mod login;
 mod lyrics;
 mod stream;
+mod ui;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use iced::widget::{
-    button, center, column, container, image, row, rule, scrollable, slider, space, text,
-    text_input,
-};
-use iced::{Alignment, Color, Element, Fill, Font, Length, Subscription, Task, Theme, font};
+use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::widgets::{ListState, TableState};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use api::{Api, Playlist, Track};
 use audio::Audio;
@@ -34,100 +31,6 @@ fn ytdlp_cookie_path() -> PathBuf {
     data_dir().join("cookies-ytdlp.txt")
 }
 
-const ACCENT: Color = Color::from_rgb(1.0, 0.0, 0.2);
-const DIM: Color = Color::from_rgb(0.62, 0.62, 0.62);
-const BOLD: Font = Font { weight: font::Weight::Bold, ..Font::DEFAULT };
-
-fn main() -> iced::Result {
-    if std::env::args().any(|a| a == "--login") {
-        login::run();
-    }
-    iced::application(App::boot, App::update, App::view)
-        .title(App::title)
-        .subscription(App::subscription)
-        .theme(App::theme)
-        .window_size((1280.0, 800.0))
-        .centered()
-        .run()
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum Screen {
-    Login,
-    Main,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum Page {
-    Search,
-    Playlist(String),
-}
-
-struct App {
-    screen: Screen,
-    cookie_input: String,
-    busy: bool,
-    status: String,
-    api: Option<Api>,
-
-    playlists: Vec<Playlist>,
-    page: Page,
-    page_title: String,
-    tracks: Vec<Track>,
-    search: String,
-
-    queue: Vec<Track>,
-    current: Option<usize>,
-    loading: bool,
-    audio: Option<Audio>,
-    pos: f32,
-    seeking: Option<f32>,
-    volume: f32,
-
-    lyrics: Option<Lyrics>,
-    lyrics_status: String,
-    art: Option<image::Handle>,
-    liked: HashSet<String>,
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    CookieChanged(String),
-    Login,
-    Guest,
-    GoogleLogin,
-    LoggedIn(Result<Api, String>),
-    Logout,
-
-    Playlists(Result<Vec<Playlist>, String>),
-    OpenSearch,
-    OpenPlaylist(String, String),
-    Tracks(Page, Result<Vec<Track>, String>),
-    SearchChanged(String),
-    SearchSubmit,
-
-    Play(usize),
-    Fetched(String, Result<PathBuf, String>),
-    Prefetched,
-    Toggle,
-    Next,
-    Prev,
-    SeekChanged(f32),
-    SeekReleased,
-    Volume(f32),
-    Tick,
-
-    Lyrics(String, Result<Option<Lyrics>, String>),
-    Art(String, Result<Vec<u8>, String>),
-    Like,
-    Rated(String, bool, Result<(), String>),
-    Ignore,
-}
-
-fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
-    r.map_err(|e| e.to_string())
-}
-
 fn parse_duration(d: &str) -> Option<f32> {
     let mut secs = 0.0;
     for part in d.split(':') {
@@ -141,316 +44,270 @@ fn fmt_time(secs: f32) -> String {
     format!("{}:{:02}", t / 60, t % 60)
 }
 
+fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|a| a == "--login") {
+        login::run();
+    }
+    let rt = tokio::runtime::Runtime::new()?;
+    let _guard = rt.enter();
+
+    let (tx, rx) = unbounded_channel();
+    let mut app = App::new(tx);
+    app.start();
+    let mut terminal = ratatui::init();
+    // Optional: legacy Windows consoles reject it, and pasted text then arrives as key presses.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+    let result = app.run(&mut terminal, rx);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+    ratatui::restore();
+    result
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mode {
+    Login,
+    Main,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Focus {
+    Nav,
+    Tracks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Input {
+    Search,
+    Cookie,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Page {
+    Search,
+    Playlist(String),
+}
+
+#[derive(Debug, Clone)]
+enum NavItem {
+    Search,
+    Playlist(Playlist),
+}
+
+/// Results of background work, sent back to the UI loop.
+enum Event {
+    LoggedIn(Result<Api, String>),
+    Playlists(Result<Vec<Playlist>, String>),
+    Tracks(Page, Result<Vec<Track>, String>),
+    Fetched(String, Result<PathBuf, String>),
+    Lyrics(String, Result<Option<Lyrics>, String>),
+    Rated(String, bool, Result<(), String>),
+}
+
+fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
+    r.map_err(|e| e.to_string())
+}
+
+struct App {
+    tx: UnboundedSender<Event>,
+    mode: Mode,
+    focus: Focus,
+    input: Option<Input>,
+    buffer: String,
+    busy: bool,
+    status: String,
+    api: Option<Api>,
+
+    nav: Vec<NavItem>,
+    nav_state: ListState,
+    page: Page,
+    page_title: String,
+    tracks: Vec<Track>,
+    track_state: TableState,
+
+    queue: Vec<Track>,
+    current: Option<usize>,
+    loading: bool,
+    audio: Option<Audio>,
+    pos: f32,
+    volume: f32,
+
+    lyrics: Option<Lyrics>,
+    lyrics_status: String,
+    liked: HashSet<String>,
+}
+
 impl App {
-    fn boot() -> (Self, Task<Message>) {
-        let saved = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty());
-        let mut app = App {
-            screen: Screen::Login,
-            cookie_input: String::new(),
+    fn new(tx: UnboundedSender<Event>) -> Self {
+        App {
+            tx,
+            mode: Mode::Login,
+            focus: Focus::Tracks,
+            input: None,
+            buffer: String::new(),
             busy: false,
             status: String::new(),
             api: None,
-            playlists: Vec::new(),
+            nav: vec![NavItem::Search],
+            nav_state: ListState::default().with_selected(Some(0)),
             page: Page::Search,
             page_title: "Search".into(),
             tracks: Vec::new(),
-            search: String::new(),
+            track_state: TableState::default(),
             queue: Vec::new(),
             current: None,
             loading: false,
             audio: None,
             pos: 0.0,
-            seeking: None,
             volume: 0.8,
             lyrics: None,
             lyrics_status: String::new(),
-            art: None,
             liked: HashSet::new(),
-        };
+        }
+    }
+
+    /// Opens the audio device and signs in with a saved session, if any.
+    fn start(&mut self) {
         match Audio::new() {
             Ok(a) => {
-                a.set_volume(app.volume);
-                app.audio = Some(a);
+                a.set_volume(self.volume);
+                self.audio = Some(a);
             }
-            Err(e) => app.status = format!("No audio device: {e}"),
+            Err(e) => self.status = format!("No audio device: {e}"),
         }
-        let task = match saved {
-            Some(cookie) => {
-                app.busy = true;
-                app.status = "Signing in...".into();
-                Task::perform(Api::with_cookie(cookie), |r| Message::LoggedIn(s(r)))
+        if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+            self.busy = true;
+            self.status = "Signing in...".into();
+            self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(cookie).await)) });
+        }
+    }
+
+    fn spawn(&self, fut: impl Future<Output = Event> + Send + 'static) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(fut.await);
+        });
+    }
+
+    fn run(&mut self, terminal: &mut ratatui::DefaultTerminal, mut rx: UnboundedReceiver<Event>) -> anyhow::Result<()> {
+        loop {
+            terminal.draw(|f| ui::draw(f, self))?;
+            while let Ok(ev) = rx.try_recv() {
+                self.handle(ev);
             }
-            None => Task::none(),
-        };
-        (app, task)
-    }
-
-    fn title(&self) -> String {
-        match self.now_playing() {
-            Some(t) => format!("{} - {} | YTM Player", t.title, t.artist),
-            None => "YTM Player".into(),
+            // Drain everything pending before redrawing: a pasted cookie can be thousands of keys.
+            let mut wait = Duration::from_millis(100);
+            while event::poll(wait)? {
+                wait = Duration::ZERO;
+                match event::read()? {
+                    TermEvent::Key(k) if k.kind == KeyEventKind::Press => {
+                        if !self.key(k) {
+                            return Ok(());
+                        }
+                    }
+                    TermEvent::Paste(text) if self.input.is_some() => {
+                        self.buffer.push_str(text.trim_end_matches(['\r', '\n']));
+                    }
+                    _ => {}
+                }
+            }
+            self.tick();
         }
     }
 
-    fn theme(&self) -> Theme {
-        Theme::custom(
-            "YTM",
-            iced::theme::Palette {
-                background: Color::from_rgb8(0x0f, 0x0f, 0x0f),
-                text: Color::WHITE,
-                primary: ACCENT,
-                success: Color::from_rgb8(0x2e, 0xcc, 0x71),
-                warning: Color::from_rgb8(0xf3, 0x9c, 0x12),
-                danger: Color::from_rgb8(0xe7, 0x4c, 0x3c),
-            },
-        )
-    }
-
-    fn subscription(&self) -> Subscription<Message> {
-        if self.current.is_some() {
-            iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick)
-        } else {
-            Subscription::none()
-        }
+    fn logged_in(&self) -> bool {
+        self.api.as_ref().is_some_and(Api::logged_in)
     }
 
     fn now_playing(&self) -> Option<&Track> {
         self.current.and_then(|i| self.queue.get(i))
     }
 
-    fn api(&self) -> Option<Api> {
-        self.api.clone()
-    }
-
     fn cookie_file(&self) -> Option<PathBuf> {
         let p = ytdlp_cookie_path();
-        (self.api.as_ref().is_some_and(Api::logged_in) && p.exists()).then_some(p)
+        (self.logged_in() && p.exists()).then_some(p)
     }
 
-    fn update(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::CookieChanged(c) => self.cookie_input = c,
-            Message::Login => {
-                let cookie = self.cookie_input.trim().to_string();
-                if cookie.is_empty() {
-                    self.status = "Paste your cookie first.".into();
-                    return Task::none();
-                }
-                self.busy = true;
-                self.status = "Signing in...".into();
-                let dir = data_dir();
-                let _ = std::fs::create_dir_all(&dir);
-                let _ = std::fs::write(cookie_path(), &cookie);
-                let _ = stream::write_cookie_file(&cookie, &ytdlp_cookie_path());
-                return Task::perform(Api::with_cookie(cookie), |r| Message::LoggedIn(s(r)));
-            }
-            Message::GoogleLogin => {
-                self.busy = true;
-                self.status = "Waiting for Google sign-in...".into();
-                return Task::perform(
-                    async {
-                        let cookie = login::sign_in().await?;
-                        Api::with_cookie(cookie).await
-                    },
-                    |r| Message::LoggedIn(s(r)),
-                );
-            }
-            Message::Guest => {
-                self.busy = true;
-                self.status = "Connecting...".into();
-                return Task::perform(Api::guest(), |r| Message::LoggedIn(s(r)));
-            }
-            Message::LoggedIn(Ok(api)) => {
+    // ------------------------------------------------------------ background results
+
+    fn handle(&mut self, ev: Event) {
+        match ev {
+            Event::LoggedIn(Ok(api)) => {
                 self.busy = false;
                 self.status.clear();
-                self.cookie_input.clear();
                 let user = api.logged_in();
                 self.api = Some(api.clone());
-                self.screen = Screen::Main;
+                self.mode = Mode::Main;
                 if user {
                     if let Ok(c) = std::fs::read_to_string(cookie_path()) {
                         let _ = stream::write_cookie_file(&c, &ytdlp_cookie_path());
                     }
-                    return Task::batch([
-                        Task::perform(api.clone().library_playlists(), |r| Message::Playlists(s(r))),
-                        self.open_playlist(api::LIKED_ID.into(), "Liked songs".into()),
-                    ]);
+                    self.spawn(async move { Event::Playlists(s(api.library_playlists().await)) });
+                    self.open_playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into() });
+                } else {
+                    self.input = Some(Input::Search);
                 }
+                self.rebuild_nav(Vec::new());
             }
-            Message::LoggedIn(Err(e)) => {
+            Event::LoggedIn(Err(e)) => {
                 self.busy = false;
-                self.screen = Screen::Login;
+                self.mode = Mode::Login;
                 self.status = format!("Sign-in failed: {e}");
             }
-            Message::Logout => {
-                let _ = std::fs::remove_file(cookie_path());
-                let _ = std::fs::remove_file(ytdlp_cookie_path());
-                if let Some(a) = &mut self.audio {
-                    a.stop();
+            Event::Playlists(Ok(p)) => self.rebuild_nav(p),
+            Event::Playlists(Err(e)) => self.status = format!("Playlists: {e}"),
+            Event::Tracks(page, result) => {
+                if page != self.page {
+                    return;
                 }
-                self.api = None;
-                self.playlists.clear();
-                self.tracks.clear();
-                self.queue.clear();
-                self.current = None;
-                self.lyrics = None;
-                self.art = None;
-                self.screen = Screen::Login;
-            }
-
-            Message::Playlists(Ok(p)) => self.playlists = p,
-            Message::Playlists(Err(e)) => self.status = format!("Playlists: {e}"),
-            Message::OpenSearch => {
-                self.page = Page::Search;
-                self.page_title = "Search".into();
-                self.tracks.clear();
-            }
-            Message::OpenPlaylist(id, title) => return self.open_playlist(id, title),
-            Message::Tracks(page, result) => {
-                if page == self.page {
-                    self.busy = false;
-                    match result {
-                        Ok(t) => {
-                            if page == Page::Playlist(api::LIKED_ID.into()) {
-                                self.liked.extend(t.iter().map(|t| t.video_id.clone()));
-                            }
-                            self.status.clear();
-                            self.tracks = t;
+                self.busy = false;
+                match result {
+                    Ok(t) => {
+                        if page == Page::Playlist(api::LIKED_ID.into()) {
+                            self.liked.extend(t.iter().map(|t| t.video_id.clone()));
                         }
-                        Err(e) => self.status = e,
+                        self.status.clear();
+                        self.track_state.select((!t.is_empty()).then_some(0));
+                        self.tracks = t;
                     }
+                    Err(e) => self.status = e,
                 }
             }
-            Message::SearchChanged(q) => self.search = q,
-            Message::SearchSubmit => {
-                let q = self.search.trim().to_string();
-                if q.is_empty() {
-                    return Task::none();
-                }
-                let Some(api) = self.api() else { return Task::none() };
-                self.page = Page::Search;
-                self.page_title = format!("Results for \"{q}\"");
-                self.busy = true;
-                self.tracks.clear();
-                return Task::perform(api.search(q), |r| Message::Tracks(Page::Search, s(r)));
-            }
-
-            Message::Play(i) => {
-                self.queue = self.tracks.clone();
-                return self.play(i);
-            }
-            Message::Fetched(vid, result) => {
+            Event::Fetched(vid, result) => {
                 if self.now_playing().map(|t| &t.video_id) != Some(&vid) {
-                    return Task::none();
+                    return;
                 }
                 self.loading = false;
                 match result {
                     Ok(path) => {
                         if let Some(a) = &mut self.audio {
                             match a.play_file(&path) {
-                                Ok(()) => {
-                                    a.set_volume(self.volume);
-                                    self.status.clear();
-                                }
+                                Ok(()) => self.status.clear(),
                                 Err(e) => self.status = format!("Can't play: {e}"),
                             }
                         }
-                        return self.prefetch_next();
+                        self.prefetch_next();
                     }
-                    Err(e) => self.status = format!("Download failed: {e}"),
-                }
-            }
-            Message::Prefetched | Message::Ignore => {}
-            Message::Toggle => {
-                if let Some(a) = &self.audio {
-                    a.toggle();
-                }
-            }
-            Message::Next => {
-                if let Some(i) = self.current
-                    && i + 1 < self.queue.len()
-                {
-                    return self.play(i + 1);
-                }
-            }
-            Message::Prev => {
-                if let Some(i) = self.current {
-                    // Like most players: restart the song unless we're at its start.
-                    if self.pos > 3.0 || i == 0 {
-                        if let Some(a) = &self.audio {
-                            a.seek(0.0);
-                        }
-                    } else {
-                        return self.play(i - 1);
+                    Err(e) => {
+                        self.status = format!("Skipped, download failed: {e}");
+                        self.next();
                     }
                 }
             }
-            Message::SeekChanged(v) => self.seeking = Some(v),
-            Message::SeekReleased => {
-                if let (Some(v), Some(a)) = (self.seeking.take(), &self.audio) {
-                    a.seek(v);
-                    self.pos = v;
+            Event::Lyrics(vid, result) => {
+                if self.now_playing().map(|t| &t.video_id) != Some(&vid) {
+                    return;
                 }
-            }
-            Message::Volume(v) => {
-                self.volume = v;
-                if let Some(a) = &self.audio {
-                    a.set_volume(v);
-                }
-            }
-            Message::Tick => {
-                if let Some(a) = &self.audio {
-                    self.pos = a.position();
-                    if !self.loading && a.finished() {
-                        let next = self.current.map(|i| i + 1).filter(|&n| n < self.queue.len());
-                        return match next {
-                            Some(n) => self.play(n),
-                            None => {
-                                if let Some(a) = &mut self.audio {
-                                    a.stop();
-                                }
-                                Task::none()
-                            }
-                        };
+                match result {
+                    Ok(Some(l)) => {
+                        self.lyrics = Some(l);
+                        self.lyrics_status.clear();
                     }
+                    Ok(None) => self.lyrics_status = "No lyrics found".into(),
+                    Err(e) => self.lyrics_status = format!("Lyrics: {e}"),
                 }
             }
-
-            Message::Lyrics(vid, result) => {
-                if self.now_playing().map(|t| &t.video_id) == Some(&vid) {
-                    match result {
-                        Ok(Some(l)) => {
-                            self.lyrics = Some(l);
-                            self.lyrics_status.clear();
-                        }
-                        Ok(None) => self.lyrics_status = "No lyrics found".into(),
-                        Err(e) => self.lyrics_status = format!("Lyrics: {e}"),
-                    }
-                }
-            }
-            Message::Art(vid, Ok(bytes)) => {
-                if self.now_playing().map(|t| &t.video_id) == Some(&vid) {
-                    self.art = Some(image::Handle::from_bytes(bytes));
-                }
-            }
-            Message::Art(_, Err(_)) => {}
-            Message::Like => {
-                let (Some(t), Some(api)) = (self.now_playing(), self.api()) else {
-                    return Task::none();
-                };
-                let vid = t.video_id.clone();
-                let like = !self.liked.contains(&vid);
-                // Optimistic: flip now, roll back if the request fails.
-                if like {
-                    self.liked.insert(vid.clone());
-                } else {
-                    self.liked.remove(&vid);
-                }
-                return Task::perform(api.rate(vid.clone(), like), move |r| {
-                    Message::Rated(vid.clone(), like, s(r))
-                });
-            }
-            Message::Rated(vid, like, Err(e)) => {
+            Event::Rated(vid, like, Err(e)) => {
+                // Roll back the optimistic toggle.
                 if like {
                     self.liked.remove(&vid);
                 } else {
@@ -458,333 +315,304 @@ impl App {
                 }
                 self.status = format!("Like failed: {e}");
             }
-            Message::Rated(_, _, Ok(())) => {}
+            Event::Rated(_, _, Ok(())) => {}
         }
-        Task::none()
     }
 
-    fn open_playlist(&mut self, id: String, title: String) -> Task<Message> {
-        let Some(api) = self.api() else { return Task::none() };
-        let page = Page::Playlist(id.clone());
+    fn rebuild_nav(&mut self, playlists: Vec<Playlist>) {
+        let mut nav = vec![NavItem::Search];
+        if self.logged_in() {
+            nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into() }));
+        }
+        nav.extend(playlists.into_iter().map(NavItem::Playlist));
+        self.nav = nav;
+        let sel = self.nav_state.selected().unwrap_or(0).min(self.nav.len() - 1);
+        self.nav_state.select(Some(sel));
+    }
+
+    // ------------------------------------------------------------ keys
+
+    /// Returns false to quit.
+    fn key(&mut self, k: KeyEvent) -> bool {
+        if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
+            return false;
+        }
+        if let Some(input) = self.input {
+            match k.code {
+                KeyCode::Esc => {
+                    self.input = None;
+                    self.buffer.clear();
+                }
+                KeyCode::Enter => self.submit(input),
+                KeyCode::Backspace => {
+                    self.buffer.pop();
+                }
+                KeyCode::Char(c) => self.buffer.push(c),
+                _ => {}
+            }
+            return true;
+        }
+        if self.mode == Mode::Login {
+            match k.code {
+                KeyCode::Char('q') => return false,
+                KeyCode::Char('g') if !self.busy => self.google_login(),
+                KeyCode::Char('c') if !self.busy => self.input = Some(Input::Cookie),
+                KeyCode::Char('s') if !self.busy => {
+                    self.busy = true;
+                    self.status = "Connecting...".into();
+                    self.spawn(async { Event::LoggedIn(s(Api::guest().await)) });
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        match k.code {
+            KeyCode::Char('q') => return false,
+            KeyCode::Char('/') => {
+                self.input = Some(Input::Search);
+                self.buffer.clear();
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.focus = if self.focus == Focus::Nav { Focus::Tracks } else { Focus::Nav };
+            }
+            KeyCode::Char(' ') => {
+                if let Some(a) = &self.audio {
+                    a.toggle();
+                }
+            }
+            KeyCode::Char('n') => self.next(),
+            KeyCode::Char('p') => self.prev(),
+            KeyCode::Left => self.seek_by(-5.0),
+            KeyCode::Right => self.seek_by(5.0),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.set_volume(self.volume + 0.05),
+            KeyCode::Char('-') => self.set_volume(self.volume - 0.05),
+            KeyCode::Char('l') => self.toggle_like(),
+            KeyCode::Char('O') => self.sign_out(),
+            KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
+            KeyCode::PageUp => self.move_sel(-10),
+            KeyCode::PageDown => self.move_sel(10),
+            KeyCode::Home => self.move_sel(i32::MIN / 2),
+            KeyCode::End => self.move_sel(i32::MAX / 2),
+            KeyCode::Enter => self.activate(),
+            _ => {}
+        }
+        true
+    }
+
+    fn submit(&mut self, input: Input) {
+        let text = std::mem::take(&mut self.buffer).trim().to_string();
+        self.input = None;
+        if text.is_empty() {
+            return;
+        }
+        match input {
+            Input::Search => {
+                let Some(api) = self.api.clone() else { return };
+                self.page = Page::Search;
+                self.page_title = format!("Results for \"{text}\"");
+                self.busy = true;
+                self.tracks.clear();
+                self.focus = Focus::Tracks;
+                self.spawn(async move { Event::Tracks(Page::Search, s(api.search(text).await)) });
+            }
+            Input::Cookie => {
+                self.busy = true;
+                self.status = "Signing in...".into();
+                let _ = std::fs::create_dir_all(data_dir());
+                let _ = std::fs::write(cookie_path(), &text);
+                self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(text).await)) });
+            }
+        }
+    }
+
+    fn google_login(&mut self) {
+        self.busy = true;
+        self.status = "Finish signing in in the Google window...".into();
+        self.spawn(async {
+            let r = async {
+                let cookie = login::sign_in().await?;
+                Api::with_cookie(cookie).await
+            };
+            Event::LoggedIn(s(r.await))
+        });
+    }
+
+    fn sign_out(&mut self) {
+        let _ = std::fs::remove_file(cookie_path());
+        let _ = std::fs::remove_file(ytdlp_cookie_path());
+        if let Some(a) = &mut self.audio {
+            a.stop();
+        }
+        self.api = None;
+        self.tracks.clear();
+        self.queue.clear();
+        self.current = None;
+        self.lyrics = None;
+        self.liked.clear();
+        self.nav = vec![NavItem::Search];
+        self.mode = Mode::Login;
+        self.status.clear();
+    }
+
+    fn move_sel(&mut self, delta: i32) {
+        let (len, sel) = match self.focus {
+            Focus::Nav => (self.nav.len(), self.nav_state.selected()),
+            Focus::Tracks => (self.tracks.len(), self.track_state.selected()),
+        };
+        if len == 0 {
+            return;
+        }
+        let new = (sel.unwrap_or(0) as i64 + delta as i64).clamp(0, len as i64 - 1) as usize;
+        match self.focus {
+            Focus::Nav => self.nav_state.select(Some(new)),
+            Focus::Tracks => self.track_state.select(Some(new)),
+        }
+    }
+
+    fn activate(&mut self) {
+        match self.focus {
+            Focus::Nav => {
+                let Some(item) = self.nav_state.selected().and_then(|i| self.nav.get(i)).cloned() else { return };
+                match item {
+                    NavItem::Search => {
+                        self.page = Page::Search;
+                        self.page_title = "Search".into();
+                        self.tracks.clear();
+                        self.input = Some(Input::Search);
+                    }
+                    NavItem::Playlist(p) => self.open_playlist(p),
+                }
+                self.focus = Focus::Tracks;
+            }
+            Focus::Tracks => {
+                if let Some(i) = self.track_state.selected().filter(|&i| i < self.tracks.len()) {
+                    self.queue = self.tracks.clone();
+                    self.play(i);
+                }
+            }
+        }
+    }
+
+    fn open_playlist(&mut self, p: Playlist) {
+        let Some(api) = self.api.clone() else { return };
+        let page = Page::Playlist(p.id.clone());
         self.page = page.clone();
-        self.page_title = title;
+        self.page_title = p.title;
         self.busy = true;
         self.tracks.clear();
-        Task::perform(api.playlist_tracks(id), move |r| Message::Tracks(page.clone(), s(r)))
+        self.track_state.select(None);
+        self.spawn(async move { Event::Tracks(page, s(api.playlist_tracks(p.id).await)) });
     }
 
-    fn play(&mut self, i: usize) -> Task<Message> {
-        let Some(track) = self.queue.get(i).cloned() else { return Task::none() };
+    // ------------------------------------------------------------ playback
+
+    fn play(&mut self, i: usize) {
+        let Some(track) = self.queue.get(i).cloned() else { return };
         self.current = Some(i);
         self.pos = 0.0;
-        self.seeking = None;
         self.lyrics = None;
         self.lyrics_status = "Loading lyrics...".into();
-        self.art = None;
         self.loading = true;
         if let Some(a) = &mut self.audio {
             a.stop();
         }
 
         let vid = track.video_id.clone();
-        let mut tasks = vec![Task::perform(
-            stream::fetch(vid.clone(), self.cookie_file()),
-            {
-                let vid = vid.clone();
-                move |r| Message::Fetched(vid.clone(), s(r))
-            },
-        )];
+        let cookies = self.cookie_file();
+        let v = vid.clone();
+        self.spawn(async move { Event::Fetched(v.clone(), s(stream::fetch(v, cookies).await)) });
+
+        let v = vid.clone();
         let dur = parse_duration(&track.duration);
-        tasks.push(Task::perform(
-            lyrics::lrclib(track.title.clone(), track.artist.clone(), track.album.clone(), dur),
-            {
-                let vid = vid.clone();
-                move |r| Message::Lyrics(vid.clone(), s(r))
-            },
-        ));
-        if let Some(url) = track.thumb.clone() {
-            let vid = vid.clone();
-            tasks.push(Task::perform(
-                async move {
-                    let bytes = reqwest::get(url).await?.error_for_status()?.bytes().await?;
-                    anyhow::Ok(bytes.to_vec())
-                },
-                move |r| Message::Art(vid.clone(), s(r)),
-            ));
+        self.spawn(async move {
+            Event::Lyrics(v, s(lyrics::lrclib(track.title, track.artist, track.album, dur).await))
+        });
+
+        if let Some(api) = self.api.clone() {
+            // Fire and forget: keeps YouTube Music history in sync.
+            tokio::spawn(api.report_play(vid));
         }
-        if let Some(api) = self.api() {
-            tasks.push(Task::perform(api.report_play(vid), |_| Message::Ignore));
-        }
-        Task::batch(tasks)
     }
 
-    fn prefetch_next(&self) -> Task<Message> {
+    fn prefetch_next(&self) {
         let next = self.current.and_then(|i| self.queue.get(i + 1));
-        match next {
-            Some(t) if stream::cached(&t.video_id).is_none() => {
-                Task::perform(stream::fetch(t.video_id.clone(), self.cookie_file()), |_| {
-                    Message::Prefetched
-                })
+        if let Some(t) = next
+            && stream::cached(&t.video_id).is_none()
+        {
+            tokio::spawn(stream::fetch(t.video_id.clone(), self.cookie_file()));
+        }
+    }
+
+    fn next(&mut self) {
+        if let Some(i) = self.current
+            && i + 1 < self.queue.len()
+        {
+            self.play(i + 1);
+        }
+    }
+
+    fn prev(&mut self) {
+        let Some(i) = self.current else { return };
+        // Like most players: restart the song unless we're at its start.
+        if self.pos > 3.0 || i == 0 {
+            if let Some(a) = &self.audio {
+                a.seek(0.0);
             }
-            _ => Task::none(),
-        }
-    }
-
-    // ---------------------------------------------------------------- view
-
-    fn view(&self) -> Element<'_, Message> {
-        match self.screen {
-            Screen::Login => self.view_login(),
-            Screen::Main => self.view_main(),
-        }
-    }
-
-    fn view_login(&self) -> Element<'_, Message> {
-        let mut google = button(text("Sign in with Google").font(BOLD).size(18)).padding([12, 28]);
-        let mut guest = button("Continue without account").style(button::secondary).padding([12, 28]);
-        let mut paste = button(text("Use cookie").size(13)).style(button::secondary).padding([8, 14]);
-        if !self.busy {
-            google = google.on_press(Message::GoogleLogin);
-            guest = guest.on_press(Message::Guest);
-            paste = paste.on_press(Message::Login);
-        }
-        let card = column![
-            text("YTM Player").size(36).font(BOLD).color(ACCENT),
-            text("Sign in with your YouTube Music account").size(18),
-            row![google, guest].spacing(12),
-            text(&self.status).color(DIM),
-            space().height(12),
-            text("Advanced: paste a cookie header from your browser").size(12).color(DIM),
-            row![
-                text_input("Cookie", &self.cookie_input)
-                    .on_input(Message::CookieChanged)
-                    .on_submit(Message::Login)
-                    .secure(true)
-                    .padding(8),
-                paste,
-            ]
-            .spacing(8),
-            text("Your sign-in is stored only on this computer.").size(12).color(DIM),
-        ]
-        .spacing(16)
-        .max_width(640);
-        center(container(card).padding(32).style(container::rounded_box)).into()
-    }
-
-    fn view_main(&self) -> Element<'_, Message> {
-        let body = row![self.view_sidebar(), self.view_tracks(), self.view_lyrics()];
-        column![
-            container(body).height(Fill),
-            rule::horizontal(1),
-            self.view_player_bar()
-        ]
-        .into()
-    }
-
-    fn view_sidebar(&self) -> Element<'_, Message> {
-        let nav = |label: String, active: bool, msg: Message| {
-            button(text(label).font(if active { BOLD } else { Font::DEFAULT }))
-                .width(Fill)
-                .style(if active { button::secondary } else { button::text })
-                .on_press(msg)
-        };
-        let logged_in = self.api.as_ref().is_some_and(Api::logged_in);
-        let mut items = column![
-            text("YTM Player").size(22).font(BOLD).color(ACCENT),
-            space().height(8),
-            nav("Search".into(), self.page == Page::Search, Message::OpenSearch),
-        ]
-        .spacing(4);
-        if logged_in {
-            items = items.push(nav(
-                "Liked songs".into(),
-                self.page == Page::Playlist(api::LIKED_ID.into()),
-                Message::OpenPlaylist(api::LIKED_ID.into(), "Liked songs".into()),
-            ));
-            items = items.push(space().height(12));
-            items = items.push(text("PLAYLISTS").size(12).color(DIM));
-            for p in &self.playlists {
-                items = items.push(nav(
-                    p.title.clone(),
-                    self.page == Page::Playlist(p.id.clone()),
-                    Message::OpenPlaylist(p.id.clone(), p.title.clone()),
-                ));
-            }
-        }
-        let account = button(text(if logged_in { "Sign out" } else { "Sign in" }).size(13))
-            .style(button::text)
-            .on_press(Message::Logout);
-        container(column![scrollable(items).height(Fill), account].spacing(8))
-            .width(240)
-            .height(Fill)
-            .padding(16)
-            .style(|t: &Theme| container::background(t.extended_palette().background.weak.color))
-            .into()
-    }
-
-    fn view_tracks(&self) -> Element<'_, Message> {
-        let search = text_input("Search songs, artists...", &self.search)
-            .on_input(Message::SearchChanged)
-            .on_submit(Message::SearchSubmit)
-            .padding(10);
-
-        let playing = self.now_playing().map(|t| t.video_id.as_str());
-        let mut list = column![].spacing(2);
-        for (i, t) in self.tracks.iter().enumerate() {
-            let is_current = playing == Some(t.video_id.as_str());
-            let color = if is_current { ACCENT } else { Color::WHITE };
-            let line = row![
-                text(format!("{}", i + 1)).width(36).color(DIM),
-                column![
-                    text(&t.title).color(color).font(BOLD),
-                    text(&t.artist).size(13).color(DIM),
-                ]
-                .width(Length::FillPortion(3)),
-                text(&t.album).size(13).color(DIM).width(Length::FillPortion(2)),
-                text(&t.duration).size(13).color(DIM).width(56),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center);
-            list = list.push(button(line).width(Fill).padding([8, 10]).style(button::text).on_press(Message::Play(i)));
-        }
-
-        let header = row![
-            text(&self.page_title).size(28).font(BOLD),
-            space::horizontal(),
-            text(if self.busy { "Loading..." } else { "" }).color(DIM),
-        ]
-        .align_y(Alignment::Center);
-
-        let mut col = column![search, header].spacing(16);
-        if !self.status.is_empty() {
-            col = col.push(text(&self.status).color(ACCENT));
-        }
-        if self.tracks.is_empty() && !self.busy && self.page == Page::Search {
-            col = col.push(text("Search for something to play.").color(DIM));
-        }
-        col = col.push(scrollable(list).height(Fill));
-        container(col).width(Fill).height(Fill).padding(20).into()
-    }
-
-    fn view_lyrics(&self) -> Element<'_, Message> {
-        let mut col = column![].spacing(10);
-        if let Some(art) = &self.art {
-            col = col.push(image(art.clone()).width(Fill));
-        }
-        if let Some(t) = self.now_playing() {
-            col = col.push(column![text(&t.title).size(18).font(BOLD), text(&t.artist).color(DIM)]);
-        }
-        col = col.push(rule::horizontal(1));
-
-        match &self.lyrics {
-            Some(l) if !l.synced.is_empty() => {
-                let cur = lyrics::current_line(&l.synced, self.pos);
-                let start = cur.unwrap_or(0).saturating_sub(2);
-                for (i, (_, line)) in l.synced.iter().enumerate().skip(start).take(14) {
-                    let active = Some(i) == cur;
-                    let past = cur.is_some_and(|c| i < c);
-                    let line = if line.is_empty() { "♪" } else { line.as_str() };
-                    col = col.push(
-                        text(line)
-                            .size(if active { 22 } else { 17 })
-                            .font(if active { BOLD } else { Font::DEFAULT })
-                            .color(if active {
-                                Color::WHITE
-                            } else if past {
-                                Color::from_rgb(0.4, 0.4, 0.4)
-                            } else {
-                                DIM
-                            }),
-                    );
-                }
-                col = col.push(text(format!("Lyrics: {}", l.source)).size(11).color(DIM));
-            }
-            Some(l) => {
-                let plain: Vec<Element<'_, Message>> =
-                    l.plain.iter().map(|line| text(line).size(16).into()).collect();
-                col = col.push(scrollable(column(plain).spacing(6)).height(Fill));
-            }
-            None => col = col.push(text(&self.lyrics_status).color(DIM)),
-        }
-        container(col)
-            .width(340)
-            .height(Fill)
-            .padding(16)
-            .clip(true)
-            .style(|t: &Theme| container::background(t.extended_palette().background.weak.color))
-            .into()
-    }
-
-    fn view_player_bar(&self) -> Element<'_, Message> {
-        let now = self.now_playing();
-        let info: Element<'_, Message> = match now {
-            Some(t) => column![
-                text(&t.title).font(BOLD),
-                text(&t.artist).size(13).color(DIM),
-            ]
-            .width(280)
-            .into(),
-            None => text("Nothing playing").color(DIM).width(280).into(),
-        };
-
-        let audio_dur = self.audio.as_ref().and_then(Audio::duration);
-        let dur = audio_dur.or_else(|| now.and_then(|t| parse_duration(&t.duration))).unwrap_or(0.0);
-        let shown = self.seeking.unwrap_or(self.pos).min(dur.max(0.0));
-        let paused = self.audio.as_ref().is_none_or(Audio::is_paused);
-        let play_label = if self.loading {
-            "..."
-        } else if paused {
-            "▶"
         } else {
-            "⏸"
-        };
-        let ctrl = |label: &'static str, msg: Message| {
-            button(text(label).size(18).center()).width(44).style(button::text).on_press(msg)
-        };
-        let mut seek = slider(0.0..=dur.max(1.0), shown, Message::SeekChanged).step(0.5f32);
-        if audio_dur.is_some() {
-            seek = seek.on_release(Message::SeekReleased);
+            self.play(i - 1);
         }
-        let controls = column![
-            row![
-                ctrl("⏮", Message::Prev),
-                button(text(play_label).size(20).center())
-                    .width(52)
-                    .style(button::primary)
-                    .on_press(Message::Toggle),
-                ctrl("⏭", Message::Next),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            row![
-                text(fmt_time(shown)).size(12).color(DIM),
-                seek,
-                text(fmt_time(dur)).size(12).color(DIM),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(6)
-        .align_x(Alignment::Center)
-        .width(Fill);
+    }
 
-        let liked = now.is_some_and(|t| self.liked.contains(&t.video_id));
-        let like = button(text(if liked { "♥" } else { "♡" }).size(20).color(if liked { ACCENT } else { Color::WHITE }))
-            .style(button::text)
-            .on_press(Message::Like);
-        let volume = row![
-            like,
-            text("Vol").size(12).color(DIM),
-            slider(0.0..=1.0, self.volume, Message::Volume).step(0.01f32).width(120),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .width(280);
+    fn seek_by(&mut self, delta: f32) {
+        if let Some(a) = &self.audio
+            && let Some(d) = a.duration()
+        {
+            let to = (self.pos + delta).clamp(0.0, d);
+            a.seek(to);
+            self.pos = to;
+        }
+    }
 
-        container(row![info, controls, volume].spacing(24).align_y(Alignment::Center))
-            .padding([12, 20])
-            .width(Fill)
-            .into()
+    fn set_volume(&mut self, v: f32) {
+        self.volume = v.clamp(0.0, 1.0);
+        if let Some(a) = &self.audio {
+            a.set_volume(self.volume);
+        }
+    }
+
+    fn toggle_like(&mut self) {
+        let (Some(t), Some(api)) = (self.now_playing(), self.api.clone()) else { return };
+        let vid = t.video_id.clone();
+        let like = !self.liked.contains(&vid);
+        if like {
+            self.liked.insert(vid.clone());
+        } else {
+            self.liked.remove(&vid);
+        }
+        self.spawn(async move { Event::Rated(vid.clone(), like, s(api.rate(vid, like).await)) });
+    }
+
+    fn tick(&mut self) {
+        let Some(a) = &mut self.audio else { return };
+        self.pos = a.position();
+        if self.loading || !a.finished() {
+            return;
+        }
+        match self.current.map(|i| i + 1).filter(|&n| n < self.queue.len()) {
+            Some(n) => self.play(n),
+            None => a.stop(),
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        !self.loading && self.audio.as_ref().is_some_and(Audio::is_playing)
+    }
+
+    fn duration(&self) -> f32 {
+        let from_audio = self.audio.as_ref().and_then(Audio::duration);
+        from_audio.or_else(|| self.now_playing().and_then(|t| parse_duration(&t.duration))).unwrap_or(0.0)
     }
 }
 
@@ -799,7 +627,7 @@ mod live_tests {
         let api = Api::guest().await.expect("guest api");
         let tracks = api.search("Rick Astley Never Gonna Give You Up".into()).await.expect("search");
         let t = tracks.first().expect("results").clone();
-        println!("first hit: {} - {} [{}] {} {:?}", t.title, t.artist, t.album, t.duration, t.thumb);
+        println!("first hit: {} - {} [{}] {}", t.title, t.artist, t.album, t.duration);
 
         let path = stream::fetch(t.video_id.clone(), None).await.expect("fetch");
         println!("audio: {}", path.display());
@@ -811,5 +639,21 @@ mod live_tests {
         let l = l.expect("lyrics found");
         println!("lyrics: {} synced lines, first: {:?}", l.synced.len(), l.synced.first());
         assert!(!l.synced.is_empty());
+    }
+
+    /// Uses the signed-in session the app saved. Prints counts and ids only, never the cookie.
+    #[tokio::test]
+    #[ignore]
+    async fn signed_in_library() {
+        let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
+        let api = Api::with_cookie(cookie).await.expect("login");
+        let playlists = api.clone().library_playlists().await.expect("playlists");
+        println!("playlists: {}", playlists.len());
+        let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
+        println!("liked: {} tracks", liked.len());
+        if let Some(p) = playlists.first() {
+            let t = api.clone().playlist_tracks(p.id.clone()).await.expect("playlist");
+            println!("first playlist: {} tracks", t.len());
+        }
     }
 }

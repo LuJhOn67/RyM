@@ -1,6 +1,7 @@
 //! Fetches a song's audio into the local cache with yt-dlp.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::{Result, anyhow};
 use tokio::process::Command;
@@ -25,8 +26,25 @@ pub async fn fetch(video_id: String, cookies: Option<PathBuf>) -> Result<PathBuf
     if let Some(p) = cached(&video_id) {
         return Ok(p);
     }
+    // Download into a private folder, then move into the cache: a prefetch and a play of the
+    // same song can run at once, and the cache must never expose a half-written file.
+    static SEQ: AtomicU32 = AtomicU32::new(0);
     let dir = cache_dir();
-    tokio::fs::create_dir_all(&dir).await?;
+    let tmp = dir.join(format!(".dl-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    tokio::fs::create_dir_all(&tmp).await?;
+    let result = download(&video_id, cookies, &tmp).await.and_then(|p| {
+        let name = p.file_name().ok_or_else(|| anyhow!("bad file name"))?;
+        let dest = dir.join(name);
+        if !dest.exists() {
+            std::fs::rename(&p, &dest)?;
+        }
+        Ok(dest)
+    });
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    result
+}
+
+async fn download(video_id: &str, cookies: Option<PathBuf>, dir: &Path) -> Result<PathBuf> {
     let out = dir.join("%(id)s.%(ext)s");
 
     let mut cmd = Command::new("yt-dlp");
@@ -48,10 +66,7 @@ pub async fn fetch(video_id: String, cookies: Option<PathBuf>) -> Result<PathBuf
     }
     let printed = String::from_utf8_lossy(&output.stdout);
     let path = printed.lines().last().map(|l| PathBuf::from(l.trim()));
-    match path {
-        Some(p) if p.exists() => Ok(p),
-        _ => cached(&video_id).ok_or_else(|| anyhow!("download finished but file is missing")),
-    }
+    path.filter(|p| p.exists()).ok_or_else(|| anyhow!("download finished but file is missing"))
 }
 
 /// yt-dlp wants a Netscape cookie file; convert the browser's `Cookie:` header.

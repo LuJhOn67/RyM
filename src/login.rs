@@ -61,7 +61,13 @@ pub fn run() -> ! {
 /// Opens the sign-in window and waits; returns the cookie header on success.
 pub async fn sign_in() -> anyhow::Result<String> {
     let exe = std::env::current_exe()?;
-    let status = tokio::process::Command::new(exe).arg("--login").status().await?;
+    let status = tokio::process::Command::new(exe)
+        .arg("--login")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await?;
     if !status.success() {
         anyhow::bail!("sign-in window was closed");
     }

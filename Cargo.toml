@@ -5,8 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+crossterm = "0.29.0"
 directories = "6.0.0"
-iced = { version = "0.14", features = ["tokio", "image", "advanced", "advanced-shaping"] }
+ratatui = "0.30.2"
 reqwest = { version = "0.13.5", features = ["json"] }
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 serde = { version = "1.0.229", features = ["derive"] }
