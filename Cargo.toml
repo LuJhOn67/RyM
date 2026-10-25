@@ -1,0 +1,22 @@
+[package]
+name = "ytm-player"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+directories = "6.0.0"
+iced = { version = "0.14", features = ["tokio", "image", "advanced", "advanced-shaping"] }
+reqwest = { version = "0.13.5", features = ["json"] }
+rodio = { version = "0.23", default-features = false, features = ["playback"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+symphonia = { version = "0.6.1", default-features = false, features = ["mkv", "ogg", "isomp4", "aac", "opt-simd"] }
+symphonia-adapter-libopus = "0.3"
+tokio = { version = "1.54.1", features = ["full"] }
+ytmapi-rs = "0.3.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
