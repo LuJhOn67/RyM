@@ -4,13 +4,22 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, LineGauge, List, ListItem, Paragraph, Row, Table};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, HighlightSpacing, LineGauge, List, ListItem, Paragraph, Row, Table};
 
 use crate::{App, Focus, Input, Mode, NavItem, fmt_time, lyrics};
 
 const ACCENT: Color = Color::Rgb(255, 0, 51);
 const DIM: Color = Color::Rgb(140, 140, 140);
 const FAINT: Color = Color::Rgb(90, 90, 90);
+
+/// Selected row: bright red in the pane you're in, grey in the other one.
+fn cursor_style(focused: bool) -> Style {
+    if focused {
+        Style::new().bg(Color::Rgb(150, 0, 30)).fg(Color::White).bold()
+    } else {
+        Style::new().bg(Color::Rgb(50, 50, 50))
+    }
+}
 
 fn pane(title: &str, focused: bool) -> Block<'_> {
     Block::default()
@@ -79,8 +88,9 @@ fn draw_nav(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items)
         .block(pane("Library", app.focus == Focus::Nav))
-        .highlight_style(Style::new().bg(Color::Rgb(45, 45, 45)).bold())
-        .highlight_symbol("› ");
+        .highlight_style(cursor_style(app.focus == Focus::Nav))
+        .highlight_symbol(if app.focus == Focus::Nav { "▶ " } else { "› " })
+        .highlight_spacing(HighlightSpacing::Always);
     f.render_stateful_widget(list, area, &mut app.nav_state);
 }
 
@@ -95,7 +105,7 @@ fn draw_tracks(f: &mut Frame, app: &mut App, area: Rect) {
             let title_style = if is_current { Style::new().fg(ACCENT).bold() } else { Style::new() };
             let mark = if app.liked.contains(&t.video_id) { "♥" } else { "" };
             Row::new(vec![
-                Cell::from(format!("{}", i + 1)).fg(DIM),
+                if is_current { Cell::from("♪").fg(ACCENT).bold() } else { Cell::from(format!("{}", i + 1)).fg(DIM) },
                 Cell::from(t.title.clone()).style(title_style),
                 Cell::from(t.artist.clone()).fg(DIM),
                 Cell::from(t.album.clone()).fg(DIM),
@@ -125,7 +135,9 @@ fn draw_tracks(f: &mut Frame, app: &mut App, area: Rect) {
         .header(header)
         .block(block)
         .column_spacing(1)
-        .row_highlight_style(Style::new().bg(Color::Rgb(45, 45, 45)));
+        .row_highlight_style(cursor_style(app.focus == Focus::Tracks))
+        .highlight_symbol(if app.focus == Focus::Tracks { "▶ " } else { "› " })
+        .highlight_spacing(HighlightSpacing::Always);
     f.render_stateful_widget(table, area, &mut app.track_state);
 }
 
