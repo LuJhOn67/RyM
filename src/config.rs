@@ -42,6 +42,36 @@ pub struct Config {
     pub gui_tint: bool,
     /// Window app icon: a file name in the icons folder, or none for the default.
     pub gui_icon: Option<String>,
+    /// How the window app draws.
+    pub gui_renderer: Renderer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Renderer {
+    /// Graphics card, Vulkan first (widest support), then Direct3D 12, then OpenGL.
+    Vulkan,
+    /// Graphics card, Direct3D 12 first: same speed as Vulkan on Windows, less RAM.
+    Dx12,
+    /// Processor only: least RAM, choppy scrolling on large screens.
+    Cpu,
+}
+
+impl Renderer {
+    pub fn label(self) -> &'static str {
+        match self {
+            Renderer::Vulkan => "Vulkan",
+            Renderer::Dx12 => "DirectX 12",
+            Renderer::Cpu => "Processor",
+        }
+    }
+
+    pub fn next(self) -> Renderer {
+        match self {
+            Renderer::Vulkan => Renderer::Dx12,
+            Renderer::Dx12 => Renderer::Cpu,
+            Renderer::Cpu => Renderer::Vulkan,
+        }
+    }
 }
 
 impl Default for Config {
@@ -58,6 +88,7 @@ impl Default for Config {
             gui_theme: 0,
             gui_tint: true,
             gui_icon: None,
+            gui_renderer: Renderer::Vulkan,
         }
     }
 }

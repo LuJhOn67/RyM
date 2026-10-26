@@ -329,6 +329,23 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        let renderer = self.config.gui_renderer;
+        let gpu = renderer != rymplayer::config::Renderer::Cpu;
+        let gpu_toggle = button(line(renderer.label(), 13, BOLD, if gpu { p.pill_text } else { p.text }))
+            .padding([6, 16])
+            .style(move |theme: &iced::Theme, status| if gpu { style::pill(p)(theme, status) } else { style::chip(p)(theme, status) })
+            .on_press(Message::ToggleGpu);
+        let gpu_row = row![
+            column![
+                line("Drawing", 15, SEMI, p.text),
+                line("Vulkan: works on most PCs. DirectX 12: same speed, less RAM. Processor: least RAM, less smooth. Applies after a restart.", 13, FONT, p.dim)
+            ]
+            .spacing(4)
+            .width(Fill),
+            gpu_toggle,
+        ]
+        .align_y(Alignment::Center);
+
         let account: Element<'_, Message> = if self.logged_in() {
             button(line("Sign out", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
@@ -341,6 +358,7 @@ impl Gui {
             space().height(8),
             heading("Look", p),
             tint_row,
+            gpu_row,
             space().height(8),
             heading("Account", p),
             row![account],
