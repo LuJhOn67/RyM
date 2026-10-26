@@ -33,7 +33,7 @@ name = "rymplayer"
 path = "src/lib.rs"
 
 [[bin]]
-name = "RymPlayer"
+name = "RyM"
 path = "src/main.rs"
 
 [[bin]]

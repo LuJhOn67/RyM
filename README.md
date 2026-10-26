@@ -5,7 +5,7 @@ A light YouTube Music player written in Rust, in two flavors from one shared cor
 - **RymPlayer-GUI**: a windowed app with light and dark themes (including YouTube Music and
   Spotify looks), a background that takes a soft shade of the playing song's cover, animated
   synced lyrics, a right-click song menu, and software rendering that keeps RAM low.
-- **RymPlayer**: the same player in the terminal.
+- **RyM**: the same player in the terminal.
 
 An Android app (Kotlin + Jetpack Compose) is in `android/` and in early development.
 
@@ -28,7 +28,7 @@ An Android app (Kotlin + Jetpack Compose) is in `android/` and in early developm
 
 ## Use
 
-Download `RymPlayer-GUI.exe` (windowed) or `RymPlayer.exe` (terminal) from [Releases](../../releases) and run it. Press `g` to sign in with Google,
+Download `RymPlayer-GUI.exe` (windowed) or `RyM.exe` (terminal) from [Releases](../../releases) and run it. Press `g` to sign in with Google,
 or `s` to browse without an account.
 
 | Key | Action |
