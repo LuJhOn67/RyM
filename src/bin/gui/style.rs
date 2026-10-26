@@ -1,11 +1,8 @@
 //! Colors and widget styles. Light themes follow a clean desktop-player look; the dark ones
 //! include YouTube Music and Spotify styles. Every theme can be tinted by the cover art.
 
-use std::f32::consts::PI;
-
-use iced::gradient::Linear;
 use iced::widget::{button, container, scrollable, slider, text_input};
-use iced::{Background, Border, Color, Gradient, Radians, Shadow, Theme};
+use iced::{Background, Border, Color, Shadow, Theme};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
@@ -150,17 +147,13 @@ pub fn tinted(p: Palette, base: Color, tint: Option<Color>, strength: f32) -> Co
     }
 }
 
-/// Top-to-bottom wash used behind the content and the player page.
+/// Wash behind the content and the player page. A flat color: gradients are costly to paint
+/// in software on large screens, and every scroll repaints the content area.
 pub fn wash(p: Palette, tint: Option<Color>, strength: f32) -> impl Fn(&Theme) -> container::Style {
-    move |_| {
-        let top = tinted(p, p.surface, tint, strength);
-        let bottom = tinted(p, p.surface, tint, strength * 0.35);
-        let gradient = Linear::new(Radians(PI)).add_stop(0.0, top).add_stop(0.75, bottom);
-        container::Style {
-            background: Some(Background::Gradient(Gradient::Linear(gradient))),
-            border: Border { radius: p.panel_radius.into(), ..Default::default() },
-            ..Default::default()
-        }
+    move |_| container::Style {
+        background: Some(Background::Color(tinted(p, p.surface, tint, strength * 0.7))),
+        border: Border { radius: p.panel_radius.into(), ..Default::default() },
+        ..Default::default()
     }
 }
 

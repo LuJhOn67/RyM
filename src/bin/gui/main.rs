@@ -2,6 +2,7 @@
 //! RymPlayer with a window: YouTube Music / Spotify inspired, software-rendered to stay light.
 
 mod icons;
+mod right_click;
 mod style;
 mod view;
 
@@ -360,8 +361,9 @@ impl Gui {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        // Only window resizes: listening to every mouse move would rebuild the whole interface
+        // each time the mouse moves. Right-click positions come from `right_click::tracker`.
         let mut subs = vec![iced::event::listen_with(|event, _status, _window| match event {
-            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => Some(Message::Cursor(position)),
             iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             _ => None,
         })];

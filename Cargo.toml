@@ -1,12 +1,12 @@
 [package]
 name = "rymplayer"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 autobins = false
 
 [dependencies]
 # Software rendering only (tiny-skia): no GPU driver memory, keeps the window app light.
-iced = { version = "0.14", default-features = false, features = ["tiny-skia", "image", "svg", "tokio", "advanced-shaping", "crisp", "x11", "wayland"] }
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "image", "svg", "tokio", "advanced", "advanced-shaping", "crisp", "x11", "wayland"] }
 anyhow = "1.0.104"
 crossterm = "0.29.0"
 directories = "6.0.0"

@@ -75,7 +75,7 @@ impl Gui {
                 .on_right_press(Message::CloseMenu);
             layers = layers.push(catcher).push(pin(self.menu(p, m)).position(self.menu_pos));
         }
-        layers.into()
+        crate::right_click::tracker(layers, Message::Cursor).into()
     }
 
     fn login(&self, p: Palette) -> Element<'_, Message> {
