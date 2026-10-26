@@ -1,9 +1,3 @@
-mod api;
-mod audio;
-mod config;
-mod login;
-mod lyrics;
-mod stream;
 mod ui;
 
 use std::collections::HashSet;
@@ -16,37 +10,12 @@ use crossterm::event::{
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use rymplayer::{api, audio, config, cookie_path, data_dir, fmt_time, login, lyrics, parse_duration, stream, ytdlp_cookie_path};
+
 use api::{Api, Link, Playlist, Track};
 use audio::Audio;
 use config::{Config, SETTINGS, Side};
 use lyrics::Lyrics;
-
-pub fn data_dir() -> PathBuf {
-    directories::ProjectDirs::from("", "", "RymPlayer")
-        .map(|d| d.data_local_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn cookie_path() -> PathBuf {
-    data_dir().join("cookie.txt")
-}
-
-fn ytdlp_cookie_path() -> PathBuf {
-    data_dir().join("cookies-ytdlp.txt")
-}
-
-fn parse_duration(d: &str) -> Option<f32> {
-    let mut secs = 0.0;
-    for part in d.split(':') {
-        secs = secs * 60.0 + part.trim().parse::<f32>().ok()?;
-    }
-    Some(secs)
-}
-
-fn fmt_time(secs: f32) -> String {
-    let t = secs.max(0.0) as u32;
-    format!("{}:{:02}", t / 60, t % 60)
-}
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|a| a == "--login") {

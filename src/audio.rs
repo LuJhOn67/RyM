@@ -231,7 +231,6 @@ impl Audio {
 }
 
 /// Decodes a whole file and returns its length in seconds (used by tests).
-#[cfg(test)]
 pub fn decode_seconds(path: &Path) -> Result<f64> {
     let mut src = FileSource::open(path)?;
     let (ch, rate) = (src.channels as f64, src.rate as f64);

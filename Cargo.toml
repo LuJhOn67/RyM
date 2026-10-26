@@ -1,9 +1,12 @@
 [package]
 name = "rymplayer"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
+autobins = false
 
 [dependencies]
+# Software rendering only (tiny-skia): no GPU driver memory, keeps the window app light.
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "image", "svg", "tokio", "advanced-shaping", "crisp", "x11", "wayland"] }
 anyhow = "1.0.104"
 crossterm = "0.29.0"
 directories = "6.0.0"
@@ -18,12 +21,24 @@ tao = "0.37.2"
 tokio = { version = "1.54.1", features = ["full"] }
 wry = "0.57.1"
 ytmapi-rs = "0.3.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
 
+[lib]
+name = "rymplayer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "RymPlayer"
 path = "src/main.rs"
+
+[[bin]]
+name = "RymPlayer-GUI"
+path = "src/bin/gui/main.rs"
+
+[dev-dependencies]
+iced_test = "0.14.0"

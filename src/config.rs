@@ -36,6 +36,8 @@ pub struct Config {
     pub lyrics_centered: bool,
     pub player: BarPlace,
     pub help: bool,
+    /// Look of the window app (index into its palettes).
+    pub gui_theme: usize,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             lyrics_centered: true,
             player: BarPlace::Bottom,
             help: true,
+            gui_theme: 0,
         }
     }
 }
@@ -245,7 +248,7 @@ impl Config {
             Setting::Player => self.player = cycle(&[BarPlace::Bottom, BarPlace::Top], self.player, step),
             Setting::Help => self.help = !self.help,
             // Keeps the theme, puts every panel back where it started.
-            Setting::Reset => *self = Config { theme: self.theme, ..Config::default() },
+            Setting::Reset => *self = Config { theme: self.theme, gui_theme: self.gui_theme, ..Config::default() },
         }
     }
 }

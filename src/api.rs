@@ -9,7 +9,7 @@ use ytmapi_rs::auth::BrowserToken;
 use ytmapi_rs::auth::noauth::NoAuthToken;
 use serde_json::Value;
 use ytmapi_rs::auth::AuthToken;
-use ytmapi_rs::common::{AlbumID, LikeStatus, PlaylistID, VideoID, YoutubeID};
+use ytmapi_rs::common::{AlbumID, LikeStatus, PlaylistID, Thumbnail, VideoID, YoutubeID};
 use ytmapi_rs::parse::{HistoryItem, ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
 use ytmapi_rs::query::playlist::{CreatePlaylistQuery, PrivacyStatus};
 use ytmapi_rs::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMethod, PostQuery, Query};
@@ -24,6 +24,8 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration: String,
+    /// Cover art URL (any size; see [`thumb_sized`]).
+    pub thumb: Option<String>,
     /// Set for rows that open something instead of playing (home feed playlists, albums, mixes).
     pub link: Option<Link>,
 }
@@ -86,6 +88,7 @@ impl Api {
                 album: s.album.map(|a| a.name).unwrap_or_default(),
                 duration: s.duration,
                 link: None,
+                thumb: best_thumb(&s.thumbnails),
             })
             .collect())
     }
@@ -139,6 +142,7 @@ impl Api {
                     album: s.album.name,
                     duration: s.duration,
                     link: None,
+                    thumb: best_thumb(&s.thumbnails),
                 }),
                 PlaylistItem::Video(v) if v.is_available => Some(Track {
                     video_id: v.video_id.get_raw().to_string(),
@@ -147,6 +151,7 @@ impl Api {
                     album: String::new(),
                     duration: v.duration,
                     link: None,
+                    thumb: best_thumb(&v.thumbnails),
                 }),
                 _ => None,
             })
@@ -197,6 +202,7 @@ impl Api {
         }
         .map_err(err)?;
         let artist = album.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+        let album_thumb = best_thumb(&album.thumbnails);
         Ok(album
             .tracks
             .into_iter()
@@ -207,6 +213,7 @@ impl Api {
                 album: album.title.clone(),
                 duration: t.duration,
                 link: None,
+                thumb: album_thumb.clone(),
             })
             .collect())
     }
@@ -248,6 +255,7 @@ impl Api {
                         album: p.period_name.clone(),
                         duration: s.duration,
                         link: None,
+                        thumb: best_thumb(&s.thumbnails),
                     },
                     HistoryItem::Video(v) => Track {
                         video_id: v.video_id.get_raw().to_string(),
@@ -256,6 +264,7 @@ impl Api {
                         album: p.period_name.clone(),
                         duration: v.duration,
                         link: None,
+                        thumb: best_thumb(&v.thumbnails),
                     },
                     _ => continue,
                 };
@@ -315,6 +324,30 @@ impl Api {
 }
 
 
+/// Largest thumbnail of a list.
+fn best_thumb(thumbs: &[Thumbnail]) -> Option<String> {
+    thumbs.iter().max_by_key(|t| t.width).map(|t| t.url.clone())
+}
+
+/// Largest thumbnail inside a raw renderer (`.../thumbnail/thumbnails[]`).
+fn json_thumb(node: &Value) -> Option<String> {
+    let list = node
+        .pointer("/thumbnailRenderer/musicThumbnailRenderer/thumbnail/thumbnails")
+        .or_else(|| node.pointer("/thumbnail/musicThumbnailRenderer/thumbnail/thumbnails"))?
+        .as_array()?;
+    list.last()?.get("url")?.as_str().map(String::from)
+}
+
+/// Google image URLs take a size suffix (`=w120-h120...`); ask for `px` square.
+pub fn thumb_sized(url: &str, px: u32) -> String {
+    match url.rfind("=w") {
+        Some(i) if url.contains("googleusercontent") || url.contains("ggpht") => {
+            format!("{}=w{px}-h{px}-l90-rj", &url[..i])
+        }
+        _ => url.to_string(),
+    }
+}
+
 fn watch_track(t: WatchPlaylistTrack) -> Track {
     Track {
         video_id: t.video_id.get_raw().to_string(),
@@ -323,6 +356,7 @@ fn watch_track(t: WatchPlaylistTrack) -> Track {
         album: String::new(),
         duration: t.duration,
         link: None,
+        thumb: best_thumb(&t.thumbnails),
     }
 }
 
@@ -355,14 +389,16 @@ fn home_item(item: &Value, section: &str) -> Option<Track> {
             };
             (String::new(), Some(link))
         };
-        return Some(Track { video_id, title, artist: subtitle, album: section.to_string(), duration: String::new(), link });
+        let thumb = json_thumb(r);
+        return Some(Track { video_id, title, artist: subtitle, album: section.to_string(), duration: String::new(), thumb, link });
     }
     // "Quick picks" style song rows.
     let r = item.get("musicResponsiveListItemRenderer")?;
     let video_id = r.pointer("/playlistItemData/videoId").and_then(Value::as_str)?.to_string();
     let col = |i: usize| text(r.pointer(&format!("/flexColumns/{i}/musicResponsiveListItemFlexColumnRenderer/text")));
     let artist = col(1).split(" • ").next().unwrap_or_default().to_string();
-    Some(Track { video_id, title: col(0), artist, album: section.to_string(), duration: String::new(), link: None })
+    let thumb = json_thumb(r);
+    Some(Track { video_id, title: col(0), artist, album: section.to_string(), duration: String::new(), thumb, link: None })
 }
 
 /// The YouTube Music home feed ("Quick picks", mixes...). Not in ytmapi-rs, so it's a custom
