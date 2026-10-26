@@ -266,7 +266,17 @@ pub struct Gui {
     tint_from: Option<Color>,
     tint_to: Option<Color>,
     tint_changed: Instant,
+    /// `RYM_BENCH=<file>`: scroll the home page by itself and write frame times there.
+    bench: Option<Bench>,
 }
+
+pub struct Bench {
+    out: PathBuf,
+    start: Option<Instant>,
+    frames: Vec<Instant>,
+}
+
+pub const HOME_SCROLL: &str = "home-scroll";
 
 /// 0 to 1 over `ms` since `since`, easing out (fast start, soft landing).
 pub fn ease(since: Instant, ms: f32) -> f32 {
@@ -320,6 +330,7 @@ impl Gui {
             tint_from: None,
             tint_to: None,
             tint_changed: long_ago(),
+            bench: std::env::var_os("RYM_BENCH").map(|out| Bench { out: out.into(), start: None, frames: Vec::new() }),
         }
     }
 
@@ -400,6 +411,34 @@ impl Gui {
             self.tint_changed = Instant::now();
             self.animate(950);
         }
+    }
+
+    /// Bench mode: once the home page has had time to load its covers, scroll down and up for a
+    /// few seconds, then write the frame times and quit.
+    fn bench_frame(&mut self, now: Instant) -> Option<Task<Message>> {
+        let loaded = self.page == Page::Home && !self.tracks.is_empty();
+        let b = self.bench.as_mut()?;
+        if !loaded {
+            self.anim_until = Instant::now() + Duration::from_secs(1);
+            return None;
+        }
+        let start = *b.start.get_or_insert(now + Duration::from_secs(8));
+        self.anim_until = Instant::now() + Duration::from_secs(1);
+        if now < start {
+            return None;
+        }
+        b.frames.push(now);
+        let t = now.duration_since(start).as_secs_f32();
+        if t > 6.0 {
+            let gaps: Vec<f32> = b.frames.windows(2).map(|w| w[1].duration_since(w[0]).as_secs_f32() * 1000.0).collect();
+            let avg = gaps.iter().sum::<f32>() / gaps.len().max(1) as f32;
+            let worst = gaps.iter().cloned().fold(0.0, f32::max);
+            let _ = std::fs::write(&b.out, format!("frames={} avg_ms={avg:.1} fps={:.1} worst_ms={worst:.1}
+", gaps.len(), 1000.0 / avg));
+            return Some(iced::exit());
+        }
+        let dy = if t < 3.0 { 24.0 } else { -24.0 };
+        Some(iced::widget::operation::scroll_by(HOME_SCROLL, iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: dy }))
     }
 
     /// Keeps redrawing for `ms` so an animation can play.
@@ -804,11 +843,14 @@ impl Gui {
             Message::CloseMenu => {}
             Message::Cursor(p) => self.cursor = p,
             Message::Resized(s) => self.window = s,
-            Message::Frame(_) => {
+            Message::Frame(now) => {
                 if let Some(a) = &self.audio {
                     self.pos = a.position();
                 }
                 self.track_lyrics();
+                if let Some(task) = self.bench_frame(now) {
+                    return task;
+                }
             }
             Message::PlayNext(t) => {
                 let Some(i) = self.current else { return self.update(Message::PlaySong(t)) };
@@ -1207,5 +1249,56 @@ mod queue_tests {
         // Any action closes it.
         let _ = g.update(Message::Toggle);
         assert!(g.menu.is_none());
+    }
+}
+
+#[cfg(test)]
+mod frame_cost {
+    //! How long one full software-rendered frame takes: `cargo test --release --bin RymPlayer-GUI frame_cost -- --ignored --nocapture`.
+
+    use super::*;
+    use iced_test::simulator::Simulator;
+
+    fn cover(seed: u8) -> Thumb {
+        let mut px = Vec::with_capacity(360 * 360 * 4);
+        for y in 0..360u32 {
+            for x in 0..360u32 {
+                px.extend_from_slice(&[(x as u8).wrapping_add(seed), (y as u8).wrapping_mul(3), seed.wrapping_mul(7), 255]);
+            }
+        }
+        Thumb { handle: image::Handle::from_rgba(360, 360, px), width: 360, height: 360, loaded: long_ago(), tint: None }
+    }
+
+    #[test]
+    #[ignore]
+    fn home_frame() {
+        let mut gui = Gui::empty();
+        gui.window = Size::new(1920.0, 1200.0);
+        gui.tracks = (0..90)
+            .map(|i| Track {
+                video_id: format!("v{i}"),
+                title: format!("Song title number {i} with a longer name"),
+                artist: "Some Artist".into(),
+                album: format!("Section {}", i / 15),
+                duration: "3:30".into(),
+                thumb: Some(format!("https://lh3.googleusercontent.com/x{i}=w120-h120")),
+                album_id: None,
+                artist_id: None,
+                link: None,
+            })
+            .collect();
+        for (i, t) in gui.tracks.clone().iter().enumerate() {
+            gui.images.insert(api::thumb_sized(t.thumb.as_ref().unwrap(), CARD_PX), cover(i as u8));
+        }
+        for theme in [0usize, 4] {
+            gui.config.gui_theme = theme;
+            let settings = iced_test::core::Settings { default_font: view::FONT, ..Default::default() };
+            let mut sim = Simulator::with_size(settings, Size::new(1920.0, 1200.0), gui.view());
+            let t = Instant::now();
+            for _ in 0..5 {
+                sim.snapshot(&gui.theme()).unwrap();
+            }
+            println!("{}: {:.1} ms per full frame", style::PALETTES[theme].name, t.elapsed().as_secs_f64() * 1000.0 / 5.0);
+        }
     }
 }

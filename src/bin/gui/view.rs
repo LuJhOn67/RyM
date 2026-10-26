@@ -273,7 +273,7 @@ impl Gui {
                 .collect();
             col = col.push(column![heading(name, p), self.grid(cards)].spacing(12));
         }
-        scrollable(col).height(Fill).style(style::scroll(p)).into()
+        scrollable(col).id(crate::HOME_SCROLL).height(Fill).style(style::scroll(p)).into()
     }
 
     fn library(&self, p: Palette) -> Element<'_, Message> {
