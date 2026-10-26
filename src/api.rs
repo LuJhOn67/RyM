@@ -10,7 +10,8 @@ use ytmapi_rs::auth::noauth::NoAuthToken;
 use serde_json::Value;
 use ytmapi_rs::auth::AuthToken;
 use ytmapi_rs::common::{AlbumID, LikeStatus, PlaylistID, VideoID, YoutubeID};
-use ytmapi_rs::parse::{ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
+use ytmapi_rs::parse::{HistoryItem, ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
+use ytmapi_rs::query::playlist::{CreatePlaylistQuery, PrivacyStatus};
 use ytmapi_rs::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMethod, PostQuery, Query};
 
 /// Liked Music is a regular playlist with a fixed id.
@@ -230,6 +231,56 @@ impl Api {
         }
         .map_err(err)?;
         Ok(tracks.into_iter().map(watch_track).collect())
+    }
+
+    /// Listening history, newest first; `album` holds the period ("Today", "Yesterday"...).
+    pub async fn history(self) -> Result<Vec<Track>> {
+        let Api::User(y) = &self else { return Ok(Vec::new()) };
+        let periods = y.get_history().await.map_err(err)?;
+        let mut out = Vec::new();
+        for p in periods {
+            for item in p.items {
+                let t = match item {
+                    HistoryItem::Song(s) => Track {
+                        video_id: s.video_id.get_raw().to_string(),
+                        title: s.title,
+                        artist: s.artists.into_iter().map(|a| a.name).collect::<Vec<_>>().join(", "),
+                        album: p.period_name.clone(),
+                        duration: s.duration,
+                        link: None,
+                    },
+                    HistoryItem::Video(v) => Track {
+                        video_id: v.video_id.get_raw().to_string(),
+                        title: v.title,
+                        artist: v.channel_name,
+                        album: p.period_name.clone(),
+                        duration: v.duration,
+                        link: None,
+                    },
+                    _ => continue,
+                };
+                out.push(t);
+            }
+        }
+        Ok(out)
+    }
+
+    /// New private playlist; returns it ready for the library list.
+    pub async fn create_playlist(self, title: String) -> Result<Playlist> {
+        let Api::User(y) = &self else { return Err(anyhow!("sign in to make playlists")) };
+        let query = CreatePlaylistQuery::new(&title, None, PrivacyStatus::Private);
+        let id = y.create_playlist(query).await.map_err(err)?;
+        Ok(Playlist { id: format!("VL{}", id.get_raw()), title })
+    }
+
+    pub async fn add_to_playlist(self, playlist_id: String, video_id: String) -> Result<()> {
+        let Api::User(y) = &self else { return Err(anyhow!("sign in to edit playlists")) };
+        // Library ids are browse ids ("VL..."); editing wants the bare playlist id.
+        let id = playlist_id.strip_prefix("VL").unwrap_or(&playlist_id).to_string();
+        y.add_video_items_to_playlist(PlaylistID::from_raw(id), [VideoID::from_raw(video_id)])
+            .await
+            .map_err(err)?;
+        Ok(())
     }
 
     /// YouTube Music's own lyrics for a song; `None` when it has none.

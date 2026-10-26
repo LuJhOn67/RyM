@@ -1,5 +1,6 @@
 mod api;
 mod audio;
+mod config;
 mod login;
 mod lyrics;
 mod stream;
@@ -17,6 +18,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use api::{Api, Link, Playlist, Track};
 use audio::Audio;
+use config::{Config, SETTINGS, Side};
 use lyrics::Lyrics;
 
 pub fn data_dir() -> PathBuf {
@@ -83,11 +85,13 @@ enum Focus {
 enum Input {
     Search,
     Cookie,
+    NewPlaylist,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Page {
     ForYou,
+    History,
     Search,
     Playlist(String),
     Album(String),
@@ -99,7 +103,8 @@ enum Page {
 #[derive(Debug, Clone)]
 enum NavItem {
     ForYou,
-    Search,
+    History,
+    NewPlaylist,
     Playlist(Playlist),
 }
 
@@ -113,6 +118,10 @@ enum Event {
     Fetched(String, Result<PathBuf, String>),
     Lyrics(String, Result<Option<Lyrics>, String>),
     Rated(String, bool, Result<(), String>),
+    /// A playlist was made; the song to put in it, if it was made from the picker.
+    Created(Result<Playlist, String>, Option<String>),
+    /// A song was added to the named playlist.
+    Added(String, Result<(), String>),
 }
 
 fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
@@ -151,6 +160,15 @@ struct App {
     radio_pending: bool,
     /// Where things were drawn, for mouse clicks.
     areas: ui::Areas,
+    config: Config,
+    /// Selected row while the settings screen is open.
+    settings: Option<usize>,
+    /// Selected row while the add-to-playlist picker is open.
+    picker: Option<usize>,
+    /// Song the picker (or a new playlist) is for.
+    pick_song: Option<Track>,
+    /// The user's own playlists, for the picker.
+    playlists: Vec<Playlist>,
 }
 
 impl App {
@@ -164,7 +182,7 @@ impl App {
             busy: false,
             status: String::new(),
             api: None,
-            nav: vec![NavItem::Search],
+            nav: vec![NavItem::ForYou],
             nav_state: ListState::default().with_selected(Some(0)),
             page: Page::Search,
             page_title: "Search".into(),
@@ -182,11 +200,17 @@ impl App {
             play_when_loaded: None,
             radio_pending: false,
             areas: ui::Areas::default(),
+            config: Config::default(),
+            settings: None,
+            picker: None,
+            pick_song: None,
+            playlists: Vec::new(),
         }
     }
 
     /// Opens the audio device and signs in with a saved session, if any.
     fn start(&mut self) {
+        self.config = Config::load();
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(self.volume);
@@ -364,12 +388,26 @@ impl App {
                 self.status = format!("Like failed: {e}");
             }
             Event::Rated(_, _, Ok(())) => {}
+            Event::Created(Ok(p), song) => {
+                self.status = format!("Created \"{}\"", p.title);
+                if let Some(vid) = song {
+                    self.add_to(p.clone(), vid);
+                }
+                self.playlists.insert(0, p);
+                self.rebuild_nav(self.playlists.clone());
+            }
+            Event::Created(Err(e), _) => self.status = format!("Couldn't create the playlist: {e}"),
+            Event::Added(title, Ok(())) => self.status = format!("Added to \"{title}\""),
+            Event::Added(title, Err(e)) => self.status = format!("Couldn't add to \"{title}\": {e}"),
         }
     }
 
     fn rebuild_nav(&mut self, playlists: Vec<Playlist>) {
-        let mut nav = vec![NavItem::ForYou, NavItem::Search];
+        self.playlists = playlists.clone();
+        let mut nav = vec![NavItem::ForYou];
         if self.logged_in() {
+            nav.push(NavItem::History);
+            nav.push(NavItem::NewPlaylist);
             nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into() }));
         }
         nav.extend(playlists.into_iter().map(NavItem::Playlist));
@@ -400,6 +438,14 @@ impl App {
             }
             return true;
         }
+        if let Some(sel) = self.settings {
+            self.settings_key(sel, k.code);
+            return true;
+        }
+        if let Some(sel) = self.picker {
+            self.picker_key(sel, k.code);
+            return true;
+        }
         if self.mode == Mode::Login {
             match k.code {
                 KeyCode::Char('q') => return false,
@@ -421,9 +467,13 @@ impl App {
                 self.input = Some(Input::Search);
                 self.buffer.clear();
             }
-            KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Tab | KeyCode::BackTab if self.config.library != Side::Hidden => {
                 self.focus = if self.focus == Focus::Nav { Focus::Tracks } else { Focus::Nav };
             }
+            KeyCode::Char(',') => self.settings = Some(0),
+            KeyCode::Char('h') => self.open(Page::History, "History".into()),
+            KeyCode::Char('a') => self.open_picker(),
+            KeyCode::Char('N') => self.new_playlist(None),
             KeyCode::Char(' ') => {
                 if let Some(a) = &self.audio {
                     a.toggle();
@@ -472,6 +522,12 @@ impl App {
                 self.focus = Focus::Tracks;
                 self.spawn(async move { Event::Tracks(Page::Search, s(api.search(text).await)) });
             }
+            Input::NewPlaylist => {
+                let Some(api) = self.api.clone() else { return };
+                let song = self.pick_song.take().map(|t| t.video_id);
+                self.status = format!("Creating \"{text}\"...");
+                self.spawn(async move { Event::Created(s(api.create_playlist(text).await), song) });
+            }
             Input::Cookie => {
                 self.busy = true;
                 self.status = "Signing in...".into();
@@ -506,7 +562,8 @@ impl App {
         self.current = None;
         self.lyrics = None;
         self.liked.clear();
-        self.nav = vec![NavItem::ForYou, NavItem::Search];
+        self.nav = vec![NavItem::ForYou];
+        self.playlists.clear();
         self.mode = Mode::Login;
         self.status.clear();
     }
@@ -532,11 +589,10 @@ impl App {
                 let Some(item) = self.nav_state.selected().and_then(|i| self.nav.get(i)).cloned() else { return };
                 match item {
                     NavItem::ForYou => self.open(Page::ForYou, "For you".into()),
-                    NavItem::Search => {
-                        self.page = Page::Search;
-                        self.page_title = "Search".into();
-                        self.tracks.clear();
-                        self.input = Some(Input::Search);
+                    NavItem::History => self.open(Page::History, "History".into()),
+                    NavItem::NewPlaylist => {
+                        self.new_playlist(None);
+                        return;
                     }
                     NavItem::Playlist(p) => self.open(Page::Playlist(p.id), p.title),
                 }
@@ -574,6 +630,7 @@ impl App {
         self.spawn(async move {
             let r = match page.clone() {
                 Page::ForYou => api.home().await,
+                Page::History => api.history().await,
                 Page::Playlist(id) => api.playlist_tracks(id).await,
                 Page::Album(id) => api.album_tracks(id).await,
                 Page::Mix(id) => api.mix_tracks(id).await,
@@ -607,15 +664,136 @@ impl App {
         self.spawn(async move { Event::Radio(s(api.radio(vid).await)) });
     }
 
+    // ------------------------------------------------------------ settings and playlists
+
+    fn settings_key(&mut self, sel: usize, code: KeyCode) {
+        let last = SETTINGS.len() - 1;
+        match code {
+            KeyCode::Esc | KeyCode::Char(',') | KeyCode::Char('q') => self.settings = None,
+            KeyCode::Up | KeyCode::Char('k') => self.settings = Some(sel.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.settings = Some((sel + 1).min(last)),
+            KeyCode::Left => self.change_setting(sel, -1),
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(sel, 1),
+            _ => {}
+        }
+    }
+
+    fn change_setting(&mut self, i: usize, step: i32) {
+        self.config.change(SETTINGS[i], step);
+        self.config.save();
+        if self.config.library == Side::Hidden {
+            self.focus = Focus::Tracks;
+        }
+    }
+
+    /// Picker rows: "new playlist", then the user's playlists.
+    fn picker_rows(&self) -> Vec<String> {
+        std::iter::once(ui::NEW_PLAYLIST_ROW.to_string())
+            .chain(self.playlists.iter().map(|p| p.title.clone()))
+            .collect()
+    }
+
+    /// The song the picker acts on.
+    fn pick_target(&self) -> Option<&Track> {
+        self.pick_song.as_ref()
+    }
+
+    /// `a`: add the selected song (or the playing one) to a playlist.
+    fn open_picker(&mut self) {
+        if !self.logged_in() {
+            self.status = "Sign in to add songs to playlists".into();
+            return;
+        }
+        let selected = (self.focus == Focus::Tracks)
+            .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))
+            .flatten()
+            .filter(|t| t.link.is_none());
+        let Some(song) = selected.or(self.now_playing()).cloned() else { return };
+        self.pick_song = Some(song);
+        self.picker = Some(0);
+    }
+
+    fn picker_key(&mut self, sel: usize, code: KeyCode) {
+        let last = self.playlists.len();
+        match code {
+            KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('q') => self.picker = None,
+            KeyCode::Up | KeyCode::Char('k') => self.picker = Some(sel.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.picker = Some((sel + 1).min(last)),
+            KeyCode::Enter => self.pick(sel),
+            _ => {}
+        }
+    }
+
+    fn pick(&mut self, i: usize) {
+        self.picker = None;
+        let Some(song) = self.pick_song.clone() else { return };
+        if i == 0 {
+            self.new_playlist(Some(song));
+        } else if let Some(p) = self.playlists.get(i - 1).cloned() {
+            self.add_to(p, song.video_id);
+        }
+    }
+
+    /// Asks for a name; the playlist is made on Enter, with `song` in it if given.
+    fn new_playlist(&mut self, song: Option<Track>) {
+        if !self.logged_in() {
+            self.status = "Sign in to make playlists".into();
+            return;
+        }
+        self.pick_song = song;
+        self.buffer.clear();
+        self.input = Some(Input::NewPlaylist);
+    }
+
+    fn add_to(&mut self, p: Playlist, video_id: String) {
+        let Some(api) = self.api.clone() else { return };
+        self.status = format!("Adding to \"{}\"...", p.title);
+        self.spawn(async move { Event::Added(p.title, s(api.add_to_playlist(p.id, video_id).await)) });
+    }
+
+    fn button(&mut self, click: ui::Click) {
+        match click {
+            ui::Click::ForYou => self.open(Page::ForYou, "For you".into()),
+            ui::Click::History => self.open(Page::History, "History".into()),
+            ui::Click::Search => {
+                self.input = Some(Input::Search);
+                self.buffer.clear();
+            }
+            ui::Click::Settings => self.settings = if self.settings.is_some() { None } else { Some(0) },
+            ui::Click::Setting(i) => {
+                self.settings = Some(i);
+                self.change_setting(i, 1);
+            }
+            ui::Click::Pick(i) => self.pick(i),
+        }
+    }
+
     fn mouse(&mut self, m: MouseEvent) {
-        let a = self.areas;
+        let a = self.areas.clone();
         let inside = |r: ratatui::layout::Rect| {
             m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
         };
+        if m.kind == MouseEventKind::Down(MouseButton::Left) {
+            // Popups are drawn last, so their buttons are at the end and win.
+            if let Some((_, click)) = a.buttons.iter().rev().find(|(r, _)| inside(*r)) {
+                self.button(*click);
+                return;
+            }
+            if self.settings.is_some() || self.picker.is_some() {
+                if !inside(a.popup) {
+                    self.settings = None;
+                    self.picker = None;
+                }
+                return;
+            }
+        }
+        if self.settings.is_some() || self.picker.is_some() {
+            return;
+        }
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let delta = if m.kind == MouseEventKind::ScrollUp { -3 } else { 3 };
-                if inside(a.nav) {
+                if a.nav.width > 0 && inside(a.nav) {
                     self.focus = Focus::Nav;
                 } else if inside(a.tracks) {
                     self.focus = Focus::Tracks;
@@ -635,7 +813,7 @@ impl App {
                     if i < self.tracks.len() {
                         self.click(Focus::Tracks, i);
                     }
-                } else if inside(a.nav) && m.row > a.nav.y {
+                } else if a.nav.width > 0 && inside(a.nav) && m.row > a.nav.y {
                     let i = self.nav_state.offset() + (m.row - a.nav.y - 1) as usize;
                     if i < self.nav.len() {
                         self.click(Focus::Nav, i);
@@ -865,5 +1043,25 @@ mod ytm_lyrics_probe {
         let api = Api::guest().await.unwrap();
         let l = api.lyrics("lYBUbBu4W08".into()).await.unwrap();
         println!("ytm lyrics: {:?}", l.map(|l| (l.source, l.plain.len())));
+    }
+}
+
+#[cfg(test)]
+mod history_probe {
+    use super::*;
+
+    /// Read-only: counts only.
+    #[tokio::test]
+    #[ignore]
+    async fn history_loads() {
+        let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
+        let api = Api::with_cookie(cookie).await.expect("login");
+        match api.history().await {
+            Ok(h) => {
+                let periods: std::collections::BTreeSet<_> = h.iter().map(|t| t.album.clone()).collect();
+                println!("history: {} songs, periods {:?}", h.len(), periods);
+            }
+            Err(e) => println!("history ERR: {e}"),
+        }
     }
 }
