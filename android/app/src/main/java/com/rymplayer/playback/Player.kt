@@ -21,11 +21,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Finds a playable audio URL for a song. Not available yet in this build. */
-object Streams {
-    suspend fun resolve(@Suppress("UNUSED_PARAMETER") videoId: String): String? = null
-}
-
 /** The queue and the audio player, as Compose state. */
 class Player(context: Context, private val scope: CoroutineScope) {
     lateinit var api: YtMusic
@@ -101,10 +96,10 @@ class Player(context: Context, private val scope: CoroutineScope) {
         loading = true
         loadJob?.cancel()
         loadJob = scope.launch {
-            val url = runCatching { Streams.resolve(t.videoId) }.getOrNull()
+            val url = runCatching { Streams.resolve(t.videoId) }.onFailure { message = "Can't play: ${it.message}" }.getOrNull()
             loading = false
             if (url == null) {
-                message = "Playback isn't in this test build yet"
+                if (message.isEmpty()) message = "No playable audio for this song"
                 return@launch
             }
             exo.setMediaItem(MediaItem.fromUri(url))
