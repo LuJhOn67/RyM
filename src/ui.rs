@@ -504,8 +504,8 @@ mod tests {
     fn main_app() -> App {
         let mut a = app();
         a.mode = Mode::Main;
-        a.nav.push(NavItem::Playlist(Playlist { id: "LM".into(), title: "Liked songs".into() }));
-        a.nav.push(NavItem::Playlist(Playlist { id: "VLx".into(), title: "Gym mix".into() }));
+        a.nav.push(NavItem::Playlist(Playlist { id: "LM".into(), title: "Liked songs".into(), thumb: None }));
+        a.nav.push(NavItem::Playlist(Playlist { id: "VLx".into(), title: "Gym mix".into(), thumb: None }));
         a.page_title = "Liked songs".into();
         a.tracks = (1..=5)
             .map(|i| Track {
@@ -558,8 +558,8 @@ mod tests {
         let mut a = main_app();
         a.config.theme = 1;
         a.playlists = vec![
-            Playlist { id: "VLa".into(), title: "Gym mix".into() },
-            Playlist { id: "VLb".into(), title: "Night drive".into() },
+            Playlist { id: "VLa".into(), title: "Gym mix".into(), thumb: None },
+            Playlist { id: "VLb".into(), title: "Night drive".into(), thumb: None },
         ];
         a.pick_song = a.tracks.get(1).cloned();
         a.picker = Some(2);

@@ -377,7 +377,7 @@ impl App {
         if self.logged_in() {
             nav.push(NavItem::History);
             nav.push(NavItem::NewPlaylist);
-            nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into() }));
+            nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into(), thumb: None }));
         }
         nav.extend(playlists.into_iter().map(NavItem::Playlist));
         self.nav = nav;

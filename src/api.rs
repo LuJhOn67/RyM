@@ -45,6 +45,7 @@ pub enum Link {
 pub struct Playlist {
     pub id: String,
     pub title: String,
+    pub thumb: Option<String>,
 }
 
 #[derive(Clone)]
@@ -123,6 +124,7 @@ impl Api {
                 (id.starts_with("VL") && id != "VLLM").then(|| Playlist {
                     id: id.to_string(),
                     title: title.to_string(),
+                    thumb: json_thumb(r),
                 })
             })
             .collect())
@@ -296,7 +298,7 @@ impl Api {
         let Api::User(y) = &self else { return Err(anyhow!("sign in to make playlists")) };
         let query = CreatePlaylistQuery::new(&title, None, PrivacyStatus::Private);
         let id = y.create_playlist(query).await.map_err(err)?;
-        Ok(Playlist { id: format!("VL{}", id.get_raw()), title })
+        Ok(Playlist { id: format!("VL{}", id.get_raw()), title, thumb: None })
     }
 
     pub async fn add_to_playlist(self, playlist_id: String, video_id: String) -> Result<()> {

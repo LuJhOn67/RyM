@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::widget::image;
-use iced::{Point, Size, Subscription, Task, Theme, window};
+use iced::{Color, Point, Size, Subscription, Task, Theme, window};
 
 use rymplayer::api::{self, Api, Link, Playlist, Track};
 use rymplayer::audio::Audio;
@@ -46,6 +46,9 @@ pub enum Page {
     Mix(String),
     Radio(String),
     Artist(String),
+    /// The user's playlists as cards.
+    Library,
+    Settings,
 }
 
 /// What a right-click menu is about.
@@ -108,7 +111,10 @@ pub enum Message {
     Image(String, Option<Thumb>),
     ToggleNowPlaying,
     ShowTab(Tab),
-    CycleTheme,
+    /// Open the player page on its lyrics (or close it if it's already showing them).
+    ShowLyrics,
+    SetTheme(usize),
+    ToggleTint,
 
     NewPlaylist(Option<Track>),
     NameChanged(String),
@@ -154,18 +160,50 @@ pub struct Thumb {
     pub height: u32,
     /// When it arrived, for the fade-in.
     pub loaded: Instant,
+    /// The cover's main color (small thumbnails only), for the background wash.
+    pub tint: Option<Color>,
+}
+
+/// The cover's most colorful shade, brightened to a usable level. Greys count a little so
+/// black-and-white covers still give a neutral wash instead of nothing.
+fn cover_tint(img: &::image::RgbaImage) -> Option<Color> {
+    let (mut r, mut g, mut b, mut w) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for px in img.pixels().step_by(3) {
+        let [pr, pg, pb, _] = px.0.map(|c| c as f32 / 255.0);
+        let max = pr.max(pg).max(pb);
+        let min = pr.min(pg).min(pb);
+        let sat = if max > 0.0 { (max - min) / max } else { 0.0 };
+        let weight = sat * sat * max + 0.02;
+        r += pr * weight;
+        g += pg * weight;
+        b += pb * weight;
+        w += weight;
+    }
+    if w == 0.0 {
+        return None;
+    }
+    let (r, g, b) = (r / w, g / w, b / w);
+    let max = r.max(g).max(b);
+    if max < 0.04 {
+        return None;
+    }
+    Some(Color::from_rgb(r / max * 0.85, g / max * 0.85, b / max * 0.85))
 }
 
 impl Thumb {
     /// Square covers are kept encoded (iced decodes them when drawn). Video thumbnails are
     /// 16:9 or letterboxed, so they're decoded once here and cut to their centered square.
-    pub fn new(bytes: Vec<u8>) -> Option<Thumb> {
+    pub fn new(bytes: Vec<u8>, with_tint: bool) -> Option<Thumb> {
         let reader = || ::image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok();
         let (width, height) = reader()?.into_dimensions().ok()?;
-        if width == height {
-            return Some(Thumb { handle: image::Handle::from_bytes(bytes), width, height, loaded: Instant::now() });
+        if width == height && !with_tint {
+            return Some(Thumb { handle: image::Handle::from_bytes(bytes), width, height, loaded: Instant::now(), tint: None });
         }
         let img = reader()?.decode().ok()?;
+        let tint = if with_tint { cover_tint(&img.to_rgba8()) } else { None };
+        if width == height {
+            return Some(Thumb { handle: image::Handle::from_bytes(bytes), width, height, loaded: Instant::now(), tint });
+        }
         let side = width.min(height);
         let square = img.crop_imm((width - side) / 2, (height - side) / 2, side, side).to_rgba8();
         Some(Thumb {
@@ -173,6 +211,7 @@ impl Thumb {
             width: side,
             height: side,
             loaded: Instant::now(),
+            tint,
         })
     }
 }
@@ -222,6 +261,10 @@ pub struct Gui {
     /// Lyrics line being sung, and when it changed.
     pub lyric_line: Option<usize>,
     pub lyric_changed: Instant,
+    /// Background wash: fades from one cover's color to the next.
+    tint_from: Option<Color>,
+    tint_to: Option<Color>,
+    tint_changed: Instant,
 }
 
 /// 0 to 1 over `ms` since `since`, easing out (fast start, soft landing).
@@ -260,7 +303,7 @@ impl Gui {
             lyrics: None,
             lyrics_status: String::new(),
             now_playing_open: false,
-            tab: Tab::UpNext,
+            tab: Tab::Lyrics,
             dialog: None,
             images: HashMap::new(),
             requested: HashSet::new(),
@@ -273,6 +316,9 @@ impl Gui {
             page_shown: long_ago(),
             lyric_line: None,
             lyric_changed: long_ago(),
+            tint_from: None,
+            tint_to: None,
+            tint_changed: long_ago(),
         }
     }
 
@@ -326,6 +372,32 @@ impl Gui {
             subs.push(window::frames().map(Message::Frame));
         }
         Subscription::batch(subs)
+    }
+
+    /// The background wash color right now and how strong it is (fades between songs).
+    pub fn tint(&self) -> (Option<Color>, f32) {
+        let k = ease(self.tint_changed, 900.0);
+        match (self.tint_from, self.tint_to) {
+            (Some(a), Some(b)) => (Some(style::mix(a, b, k)), 1.0),
+            (None, Some(b)) => (Some(b), k),
+            (Some(a), None) => (Some(a), 1.0 - k),
+            (None, None) => (None, 0.0),
+        }
+    }
+
+    /// Starts a fade when the playing song's cover color is known (or changes).
+    fn refresh_tint(&mut self) {
+        let target = if self.config.gui_tint {
+            self.now_playing().and_then(|t| self.image(t.thumb.as_ref(), ROW_PX)).and_then(|t| t.tint)
+        } else {
+            None
+        };
+        if target != self.tint_to {
+            self.tint_from = self.tint().0;
+            self.tint_to = target;
+            self.tint_changed = Instant::now();
+            self.animate(950);
+        }
     }
 
     /// Keeps redrawing for `ms` so an animation can play.
@@ -385,7 +457,8 @@ impl Gui {
                     async move {
                         let r = reqwest::get(&url).await.ok()?.error_for_status().ok()?;
                         let bytes = r.bytes().await.ok()?.to_vec();
-                        tokio::task::spawn_blocking(move || Thumb::new(bytes)).await.ok().flatten()
+                        let tint = px == ROW_PX;
+                        tokio::task::spawn_blocking(move || Thumb::new(bytes, tint)).await.ok().flatten()
                     }
                 },
                 move |thumb| Message::Image(url.clone(), thumb),
@@ -456,7 +529,11 @@ impl Gui {
                 self.config = config;
                 self.signed_in_screen = false;
             }
-            Message::Playlists(Ok(p)) => self.playlists = p,
+            Message::Playlists(Ok(p)) => {
+                self.playlists = p;
+                let wanted: Vec<_> = self.playlists.iter().map(|p| p.thumb.clone()).collect();
+                return self.want_images(wanted.iter().map(|u| (u, CARD_PX)));
+            }
             Message::Playlists(Err(e)) if e.contains("signed out") => {
                 self.signed_in_screen = false;
                 self.status = "Google ended your session. Sign in again.".into();
@@ -465,6 +542,15 @@ impl Gui {
 
             Message::Open(page, title) => {
                 self.now_playing_open = false;
+                if matches!(page, Page::Library | Page::Settings) {
+                    // Drawn from what's already loaded.
+                    self.page = page;
+                    self.page_title = title;
+                    self.busy = false;
+                    self.page_shown = Instant::now();
+                    self.animate(400);
+                    return Task::none();
+                }
                 return self.open(page, title);
             }
             Message::Loaded(page, result) => {
@@ -640,6 +726,7 @@ impl Gui {
             Message::Image(url, Some(t)) => {
                 self.images.insert(url, t);
                 self.animate(320);
+                self.refresh_tint();
             }
             Message::Image(url, None) => {
                 // Allow a retry later.
@@ -651,9 +738,24 @@ impl Gui {
                 self.animate(400);
             }
             Message::ShowTab(t) => self.tab = t,
-            Message::CycleTheme => {
-                self.config.gui_theme = (self.config.gui_theme + 1) % style::PALETTES.len();
+            Message::ShowLyrics => {
+                if self.now_playing_open && self.tab == Tab::Lyrics {
+                    self.now_playing_open = false;
+                } else if self.current.is_some() {
+                    self.now_playing_open = true;
+                    self.tab = Tab::Lyrics;
+                }
+                self.page_shown = Instant::now();
+                self.animate(400);
+            }
+            Message::SetTheme(i) => {
+                self.config.gui_theme = i % style::PALETTES.len();
                 self.config.save();
+            }
+            Message::ToggleTint => {
+                self.config.gui_tint = !self.config.gui_tint;
+                self.config.save();
+                self.refresh_tint();
             }
 
             Message::NewPlaylist(song) => self.dialog = Some(Dialog::NewPlaylist(String::new(), song)),
@@ -816,6 +918,7 @@ impl Gui {
                         Page::Mix(id) => api.mix_tracks(id).await,
                         Page::Radio(vid) => api.radio(vid).await,
                         Page::Artist(id) => api.artist_songs(id).await,
+                        Page::Library | Page::Settings => Ok(Vec::new()),
                     }
                 }
             },
@@ -875,6 +978,7 @@ impl Gui {
             None => Task::none(),
         };
         let art = self.want_images([(&track.thumb, ART_PX), (&track.thumb, ROW_PX)]);
+        self.refresh_tint();
         Task::batch([fetch, lyr, report, art])
     }
 
@@ -963,12 +1067,12 @@ mod shots {
             let url = api::thumb_sized(&url, px);
             set.spawn(async move {
                 let bytes = reqwest::get(&url).await.ok()?.bytes().await.ok()?;
-                Some((url, bytes.to_vec()))
+                Some((url, bytes.to_vec(), px == ROW_PX))
             });
         }
         while let Some(r) = set.join_next().await {
-            if let Ok(Some((url, bytes))) = r
-                && let Some(mut t) = Thumb::new(bytes)
+            if let Ok(Some((url, bytes, tint))) = r
+                && let Some(mut t) = Thumb::new(bytes, tint)
             {
                 // Already faded in by the time the shot is taken.
                 t.loaded = long_ago();
@@ -1010,9 +1114,14 @@ mod shots {
             source: "LRCLIB".into(),
         });
 
-        for theme in 0..style::PALETTES.len() {
+        gui.refresh_tint();
+        gui.tint_changed = long_ago();
+        gui.playlists = api.clone().library_playlists().await.unwrap_or_default();
+        let covers = gui.playlists.iter().map(|p| (p.thumb.clone(), CARD_PX)).collect();
+        fetch_images(&mut gui, covers).await;
+        for theme in [0, 2, 3, 4] {
             gui.config.gui_theme = theme;
-            let tag = if theme == 0 { "ytm" } else { "spotify" };
+            let tag = style::PALETTES[theme].name.to_lowercase().replace(' ', "-");
             gui.page = Page::Home;
             gui.page_title = "For you".into();
             shot(&gui, &format!("{tag}-home"));
@@ -1023,15 +1132,15 @@ mod shots {
             shot(&gui, &format!("{tag}-playlist"));
 
             gui.now_playing_open = true;
-            gui.tab = Tab::UpNext;
-            shot(&gui, &format!("{tag}-player"));
             gui.tab = Tab::Lyrics;
             shot(&gui, &format!("{tag}-lyrics"));
             gui.now_playing_open = false;
 
-            gui.dialog = Some(Dialog::AddTo(liked[0].clone()));
-            shot(&gui, &format!("{tag}-add-to"));
-            gui.dialog = None;
+            gui.page = Page::Library;
+            shot(&gui, &format!("{tag}-library"));
+            gui.page = Page::Settings;
+            shot(&gui, &format!("{tag}-settings"));
+            gui.page = Page::Playlist(api::LIKED_ID.into());
 
             gui.menu = Some(MenuFor { track: liked[2].clone(), queue_index: None });
             gui.menu_pos = Point::new(900.0, 300.0);

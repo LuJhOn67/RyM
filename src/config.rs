@@ -38,6 +38,10 @@ pub struct Config {
     pub help: bool,
     /// Look of the window app (index into its palettes).
     pub gui_theme: usize,
+    /// Window app: wash the background with the cover art's color.
+    pub gui_tint: bool,
+    /// Window app icon: a file name in the icons folder, or none for the default.
+    pub gui_icon: Option<String>,
 }
 
 impl Default for Config {
@@ -52,6 +56,8 @@ impl Default for Config {
             player: BarPlace::Bottom,
             help: true,
             gui_theme: 0,
+            gui_tint: true,
+            gui_icon: None,
         }
     }
 }
@@ -248,7 +254,9 @@ impl Config {
             Setting::Player => self.player = cycle(&[BarPlace::Bottom, BarPlace::Top], self.player, step),
             Setting::Help => self.help = !self.help,
             // Keeps the theme, puts every panel back where it started.
-            Setting::Reset => *self = Config { theme: self.theme, gui_theme: self.gui_theme, ..Config::default() },
+            Setting::Reset => {
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), ..Config::default() }
+            }
         }
     }
 }

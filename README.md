@@ -1,6 +1,13 @@
 # RymPlayer
 
-A fast YouTube Music player for the terminal, written in Rust.
+A light YouTube Music player written in Rust, in two flavors from one shared core:
+
+- **RymPlayer-GUI**: a windowed app with light and dark themes (including YouTube Music and
+  Spotify looks), a background that takes a soft shade of the playing song's cover, animated
+  synced lyrics, a right-click song menu, and software rendering that keeps RAM low.
+- **RymPlayer**: the same player in the terminal.
+
+An Android app (Kotlin + Jetpack Compose) is in `android/` and in early development.
 
 - Your YouTube Music account: liked songs, library playlists, likes and listening history stay in sync
 - **For you**: your YouTube Music home feed, with its playlists, albums and mixes
@@ -21,7 +28,7 @@ A fast YouTube Music player for the terminal, written in Rust.
 
 ## Use
 
-Download `RymPlayer.exe` from [Releases](../../releases) and run it. Press `g` to sign in with Google,
+Download `RymPlayer-GUI.exe` (windowed) or `RymPlayer.exe` (terminal) from [Releases](../../releases) and run it. Press `g` to sign in with Google,
 or `s` to browse without an account.
 
 | Key | Action |
@@ -52,7 +59,7 @@ Settings are saved in `config.json`. Sign-in data, settings and the song cache l
 ## Build
 
 ```sh
-cargo build --release
+cargo build --release   # builds both apps
 ```
 
 Building on Windows needs the Visual Studio C++ build tools. CMake is used to compile libopus; the
