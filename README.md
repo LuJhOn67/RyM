@@ -4,6 +4,8 @@ A fast YouTube Music player for the terminal, written in Rust.
 
 - Your YouTube Music account: liked songs, library playlists, likes and listening history stay in sync
 - **For you**: your YouTube Music home feed, with its playlists, albums and mixes
+- History, new playlists, and adding any song to your playlists
+- Settings screen: 7 themes (including a YouTube Music look), and move or hide the library, lyrics and player bar
 - Radio: press `r` on any song, and playback continues with radio when the queue ends
 - Best available audio (Opus up to 256 kbps with Premium), no ads
 - Synced lyrics from [LRCLIB](https://lrclib.net), with YouTube Music's own lyrics as a fallback
@@ -34,6 +36,10 @@ or `s` to browse without an account.
 | `+` / `-` | Volume |
 | `l` | Like / unlike |
 | `r` | Radio from the selected song |
+| `h` | History |
+| `a` | Add the song to a playlist (or a new one) |
+| `N` | New playlist |
+| `,` | Settings: theme and layout |
 | `/` | Search |
 | `g` | Sign in with Google |
 | `O` (Shift+o) | Sign out |
@@ -41,7 +47,7 @@ or `s` to browse without an account.
 
 Mouse: click a row to select it, click it again to play; click the progress bar to seek; the wheel scrolls.
 
-Sign-in data and the song cache live in `%LOCALAPPDATA%\RymPlayer`.
+Settings are saved in `config.json`. Sign-in data, settings and the song cache live in `%LOCALAPPDATA%\RymPlayer`.
 
 ## Build
 
