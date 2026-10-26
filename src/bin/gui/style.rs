@@ -115,6 +115,17 @@ pub fn ghost(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> but
     }
 }
 
+/// Right-click menu row: square, lighter on hover.
+pub fn menu_item(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| button::Style {
+        background: matches!(status, button::Status::Hovered | button::Status::Pressed).then_some(Background::Color(p.hover)),
+        text_color: p.text,
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
 /// White rounded "Play" / "New playlist" button.
 pub fn pill(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {

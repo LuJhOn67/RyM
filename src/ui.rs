@@ -515,6 +515,8 @@ mod tests {
                 album: "Album".into(),
                 duration: format!("3:3{i}"),
                 thumb: None,
+                album_id: None,
+                artist_id: None,
                 link: None,
             })
             .collect();

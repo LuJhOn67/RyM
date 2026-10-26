@@ -2,7 +2,8 @@
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    Column, button, center, column, container, image, opaque, row, scrollable, slider, space, stack, text, text_input,
+    Column, button, center, column, container, image, mouse_area, opaque, pin, row, scrollable, slider, space, stack, text,
+    text_input,
 };
 use iced::{Alignment, Background, Border, Color, Element, Fill, FillPortion, Font, Length, font};
 
@@ -11,7 +12,10 @@ use rymplayer::{fmt_time, lyrics};
 
 use crate::icons::{Icon, icon};
 use crate::style::{self, Palette};
-use crate::{ART_PX, CARD_PX, Dialog, Gui, Message, Page, ROW_PX, Tab};
+use crate::{ART_PX, CARD_PX, Dialog, Gui, MenuFor, Message, Page, ROW_PX, Tab, ease};
+
+pub const MENU_W: f32 = 272.0;
+const MENU_ITEM_H: f32 = 44.0;
 
 pub const FONT: Font = if cfg!(windows) { Font::with_name("Segoe UI") } else { Font::DEFAULT };
 const SEMI: Font = Font { weight: font::Weight::Semibold, ..FONT };
@@ -48,13 +52,40 @@ impl Gui {
             .width(Fill)
             .height(Fill)
             .style(style::bg(p.bg));
-        match &self.dialog {
-            None => base.into(),
-            Some(d) => {
-                let backdrop = center(self.dialog(p, d)).style(style::bg(Color::from_rgba8(0, 0, 0, 0.6)));
-                stack![base, opaque(backdrop)].into()
-            }
+        let mut layers = stack![base];
+        if let Some(d) = &self.dialog {
+            layers = layers.push(opaque(center(self.dialog(p, d)).style(style::bg(Color::from_rgba8(0, 0, 0, 0.6)))));
         }
+        if let Some(m) = &self.menu {
+            // A click anywhere else closes the menu.
+            let catcher = mouse_area(container(space()).width(Fill).height(Fill))
+                .on_press(Message::CloseMenu)
+                .on_right_press(Message::CloseMenu);
+            layers = layers.push(catcher).push(pin(self.menu(p, m)).position(self.menu_pos));
+        }
+        layers.into()
+    }
+
+    /// YouTube Music's song menu.
+    fn menu<'a>(&'a self, p: Palette, m: &'a MenuFor) -> Element<'a, Message> {
+        let mut col = Column::new().padding([8, 0]);
+        for (ic, label, msg) in menu_items(self, m) {
+            col = col.push(
+                button(row![icon(ic, 22.0, p.dim), line(label, 14, FONT, p.text)].spacing(18).align_y(Alignment::Center))
+                    .width(Fill)
+                    .height(MENU_ITEM_H)
+                    .padding([0, 18])
+                    .style(style::menu_item(p))
+                    .on_press(msg),
+            );
+        }
+        let bg = if p.panel_radius > 0.0 { Color::from_rgb8(40, 40, 40) } else { Color::from_rgb8(58, 52, 49) };
+        opaque(container(col).width(MENU_W).style(move |_| container::Style {
+            background: Some(Background::Color(bg)),
+            border: Border { radius: 6.0.into(), ..Default::default() },
+            shadow: iced::Shadow { color: Color::from_rgba8(0, 0, 0, 0.5), offset: iced::Vector::new(0.0, 6.0), blur_radius: 20.0 },
+            ..Default::default()
+        }))
     }
 
     fn login(&self, p: Palette) -> Element<'_, Message> {
@@ -174,10 +205,10 @@ impl Gui {
         column![top, content].into()
     }
 
-    /// Cover art (or a note placeholder) at `size` px, rounded.
+    /// Cover art (or a note placeholder) at `size` px, rounded; fades in when it arrives.
     fn art(&self, url: Option<&String>, px: u32, size: f32, radius: f32, p: Palette) -> Element<'_, Message> {
         match self.image(url, px) {
-            Some(t) => image(t.handle).width(size).height(size).border_radius(radius).into(),
+            Some(t) => image(t.handle).width(size).height(size).border_radius(radius).opacity(ease(t.loaded, 320.0)).into(),
             None => container(center(icon(Icon::Note, size * 0.4, p.dim)))
                 .width(size)
                 .height(size)
@@ -207,7 +238,7 @@ impl Gui {
                 None => sections.push((&t.album, vec![(i, t)])),
             }
         }
-        let mut col = Column::new().spacing(28).padding([8, 28]);
+        let mut col = Column::new().spacing(28).padding(iced::Padding { top: 8.0 + self.slide_in(), right: 28.0, bottom: 8.0, left: 28.0 });
         for (name, items) in sections {
             let cards = items.into_iter().map(|(i, t)| {
                 let kind = match &t.link {
@@ -223,7 +254,12 @@ impl Gui {
                 ]
                 .spacing(6);
                 let msg = if t.link.is_none() { Message::PlaySong(t.clone()) } else { Message::PlayRow(i) };
-                button(card).padding(10).style(style::row(p, false)).on_press(msg).into()
+                let card = button(card).padding(10).style(style::row(p, false)).on_press(msg);
+                if t.link.is_none() {
+                    mouse_area(card).on_right_press(Message::Menu(MenuFor { track: t.clone(), queue_index: None })).into()
+                } else {
+                    card.into()
+                }
             });
             let shelf = scrollable(row(cards).spacing(4).padding([0, 0]))
                 .direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new().width(4).scroller_width(4)))
@@ -243,6 +279,7 @@ impl Gui {
             Page::History => "HISTORY",
             Page::Album(_) => "ALBUM",
             Page::Mix(_) | Page::Radio(_) => "MIX",
+            Page::Artist(_) => "ARTIST",
             _ => "PLAYLIST",
         };
         let songs = self.tracks.iter().filter(|t| t.link.is_none()).count();
@@ -308,9 +345,15 @@ impl Gui {
             ]
             .spacing(16)
             .align_y(Alignment::Center);
-            rows = rows.push(button(r).width(Fill).padding([6, 10]).style(style::row(p, current)).on_press(Message::PlayRow(i)));
+            let b = button(r).width(Fill).padding([6, 10]).style(style::row(p, current)).on_press(Message::PlayRow(i));
+            rows = rows.push(if t.link.is_none() {
+                Element::from(mouse_area(b).on_right_press(Message::Menu(MenuFor { track: t.clone(), queue_index: None })))
+            } else {
+                b.into()
+            });
         }
-        scrollable(column![header, space().height(12), head, divider(p), rows].spacing(10).padding([8, 28]))
+        let pad = iced::Padding { top: 8.0 + self.slide_in(), right: 28.0, bottom: 8.0, left: 28.0 };
+        scrollable(column![header, space().height(12), head, divider(p), rows].spacing(10).padding(pad))
             .height(Fill)
             .style(style::scroll(p))
             .into()
@@ -343,7 +386,11 @@ impl Gui {
             Tab::Lyrics => self.lyrics_view(p),
         };
         let side = column![tabs, divider(p), body].width(420).height(Fill);
-        row![cover, side].spacing(24).padding([8, 28]).height(Fill).into()
+        row![cover, side]
+            .spacing(24)
+            .padding(iced::Padding { top: 8.0 + self.slide_in(), right: 28.0, bottom: 8.0, left: 28.0 })
+            .height(Fill)
+            .into()
     }
 
     fn up_next(&self, p: Palette) -> Element<'_, Message> {
@@ -357,7 +404,8 @@ impl Gui {
             ]
             .spacing(14)
             .align_y(Alignment::Center);
-            col = col.push(button(r).width(Fill).padding([6, 8]).style(style::row(p, current)).on_press(Message::PlayQueue(i)));
+            let b = button(r).width(Fill).padding([6, 8]).style(style::row(p, current)).on_press(Message::PlayQueue(i));
+            col = col.push(mouse_area(b).on_right_press(Message::Menu(MenuFor { track: t.clone(), queue_index: Some(i) })));
         }
         if self.radio_pending {
             col = col.push(container(text("Finding more songs...").size(13).color(p.dim)).padding(10));
@@ -374,16 +422,22 @@ impl Gui {
             let lines = Column::with_children(l.plain.iter().map(|s| text(s).size(18).color(p.text).into())).spacing(8);
             return scrollable(column![lines, space().height(8), source].padding([16, 8])).height(Fill).style(style::scroll(p)).into();
         }
-        // A window around the sung line keeps it in view without scrolling state.
+        // A window around the sung line keeps it in view without scrolling state. When the line
+        // changes, the window moves down one line and starts one line lower, then slides up.
         let cur = lyrics::current_line(&l.synced, self.pos);
+        let k = ease(self.lyric_changed, 420.0);
         let start = cur.unwrap_or(0).saturating_sub(2);
-        let mut col = Column::new().spacing(16).padding([24, 8]);
+        let slide = if cur.is_some_and(|c| c >= 2) { (1.0 - k) * LYRIC_STEP } else { 0.0 };
+        let mut col = Column::new().spacing(16).padding(iced::Padding { top: 24.0 + slide, right: 8.0, bottom: 24.0, left: 8.0 });
+        let faded = Color { a: 0.35, ..p.text };
         for (i, (_, s)) in l.synced.iter().enumerate().skip(start).take(14) {
             let s = if s.is_empty() { "♪" } else { s.as_str() };
+            // The sung line grows and lights up; the one before it shrinks and dims.
             let (size, font, color) = match cur {
-                Some(c) if c == i => (26, BOLD, p.text),
-                Some(c) if i < c => (21, SEMI, Color { a: 0.35, ..p.text }),
-                _ => (21, SEMI, p.dim),
+                Some(c) if c == i => (21.0 + 5.0 * k, BOLD, mix(p.dim, p.text, k)),
+                Some(c) if i + 1 == c => (26.0 - 5.0 * k, SEMI, mix(p.text, faded, k)),
+                Some(c) if i < c => (21.0, SEMI, faded),
+                _ => (21.0, SEMI, p.dim),
             };
             col = col.push(text(s).size(size).font(font).color(color));
         }
@@ -410,18 +464,27 @@ impl Gui {
         let middle: Element<'_, Message> = match self.now_playing() {
             Some(t) => {
                 let liked = self.liked.contains(&t.video_id);
+                let menu = Message::Menu(MenuFor { track: t.clone(), queue_index: self.current });
                 let mut r = row![
-                    button(self.art(t.thumb.as_ref(), ROW_PX, 48.0, 4.0, p)).padding(0).style(style::row(p, false)).on_press(Message::ToggleNowPlaying),
+                    mouse_area(button(self.art(t.thumb.as_ref(), ROW_PX, 48.0, 4.0, p)).padding(0).style(style::row(p, false)).on_press(Message::ToggleNowPlaying))
+                        .on_right_press(menu),
                     container(column![line(&t.title, 15, SEMI, p.text), line(&t.artist, 13, FONT, p.dim)].spacing(2)).max_width(320).clip(true),
                 ]
                 .spacing(14)
                 .align_y(Alignment::Center);
                 if self.logged_in() {
+                    let disliked = self.disliked.contains(&t.video_id);
                     r = r.push(
-                        button(icon(if liked { Icon::HeartFilled } else { Icon::Heart }, 20.0, if liked { p.accent } else { p.dim }))
+                        button(icon(if liked { Icon::ThumbUpFilled } else { Icon::ThumbUp }, 20.0, if liked { p.text } else { p.dim }))
                             .padding(8)
                             .style(style::icon_button(p, false))
                             .on_press(Message::Like(t.clone())),
+                    );
+                    r = r.push(
+                        button(icon(if disliked { Icon::ThumbDownFilled } else { Icon::ThumbDown }, 20.0, if disliked { p.text } else { p.dim }))
+                            .padding(8)
+                            .style(style::icon_button(p, false))
+                            .on_press(Message::Dislike(t.clone())),
                     );
                     r = r.push(button(icon(Icon::PlaylistAdd, 20.0, p.dim)).padding(8).style(style::icon_button(p, false)).on_press(Message::AddTo(t.clone())));
                 }
@@ -510,5 +573,55 @@ impl Gui {
                 ..Default::default()
             })
             .into()
+    }
+}
+
+/// Height of one lyrics line plus the gap, for the slide.
+const LYRIC_STEP: f32 = 44.0;
+
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }
+}
+
+/// The song menu's rows, in YouTube Music's order. Only what RymPlayer can do is listed.
+fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {
+    let t = &m.track;
+    let mut items = vec![
+        (Icon::Radio, "Start mix", Message::StartRadio(t.clone())),
+        (Icon::PlayNext, "Play next", Message::PlayNext(t.clone())),
+        (Icon::Queue, "Add to queue", Message::AddToQueue(t.clone())),
+    ];
+    if gui.logged_in() {
+        let liked = gui.liked.contains(&t.video_id);
+        items.push((Icon::ThumbUp, if liked { "Remove from liked songs" } else { "Add to liked songs" }, Message::Like(t.clone())));
+    }
+    items.push((Icon::Download, "Download", Message::Download(t.clone())));
+    if gui.logged_in() {
+        items.push((Icon::PlaylistAdd, "Save to playlist", Message::AddTo(t.clone())));
+    }
+    if let Some(i) = m.queue_index {
+        items.push((Icon::Remove, "Remove from queue", Message::RemoveFromQueue(i)));
+    }
+    if t.album_id.is_some() {
+        items.push((Icon::Album, "Go to album", Message::GoAlbum(t.clone())));
+    }
+    if t.artist_id.is_some() {
+        items.push((Icon::Artist, "Go to artist", Message::GoArtist(t.clone())));
+    }
+    items.push((Icon::Share, "Share", Message::Share(t.clone())));
+    if m.queue_index.is_some() && gui.queue.len() > 1 {
+        items.push((Icon::ClearQueue, "Dismiss queue", Message::DismissQueue));
+    }
+    items
+}
+
+pub fn menu_height(gui: &Gui, m: &MenuFor) -> f32 {
+    menu_items(gui, m).len() as f32 * MENU_ITEM_H + 16.0
+}
+
+impl Gui {
+    /// Pages rise into place when they open.
+    fn slide_in(&self) -> f32 {
+        24.0 * (1.0 - ease(self.page_shown, 380.0))
     }
 }

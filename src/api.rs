@@ -9,7 +9,7 @@ use ytmapi_rs::auth::BrowserToken;
 use ytmapi_rs::auth::noauth::NoAuthToken;
 use serde_json::Value;
 use ytmapi_rs::auth::AuthToken;
-use ytmapi_rs::common::{AlbumID, LikeStatus, PlaylistID, Thumbnail, VideoID, YoutubeID};
+use ytmapi_rs::common::{AlbumID, ArtistChannelID, LikeStatus, PlaylistID, Thumbnail, VideoID, YoutubeID};
 use ytmapi_rs::parse::{HistoryItem, ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
 use ytmapi_rs::query::playlist::{CreatePlaylistQuery, PrivacyStatus};
 use ytmapi_rs::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMethod, PostQuery, Query};
@@ -26,6 +26,9 @@ pub struct Track {
     pub duration: String,
     /// Cover art URL (any size; see [`thumb_sized`]).
     pub thumb: Option<String>,
+    /// For "Go to album" / "Go to artist", when YouTube Music says.
+    pub album_id: Option<String>,
+    pub artist_id: Option<String>,
     /// Set for rows that open something instead of playing (home feed playlists, albums, mixes).
     pub link: Option<Link>,
 }
@@ -83,9 +86,11 @@ impl Api {
             .into_iter()
             .map(|s| Track {
                 video_id: s.video_id.get_raw().to_string(),
+                album_id: s.album.as_ref().map(|a| a.id.get_raw().to_string()),
+                artist_id: None,
                 title: s.title,
                 artist: s.artist,
-                album: s.album.map(|a| a.name).unwrap_or_default(),
+                album: s.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
                 duration: s.duration,
                 link: None,
                 thumb: best_thumb(&s.thumbnails),
@@ -137,6 +142,8 @@ impl Api {
             .filter_map(|item| match item {
                 PlaylistItem::Song(s) if s.is_available => Some(Track {
                     video_id: s.video_id.get_raw().to_string(),
+                    album_id: Some(s.album.id.get_raw().to_string()),
+                    artist_id: s.artists.first().and_then(|a| a.id.as_ref()).map(|i| i.get_raw().to_string()),
                     title: s.title,
                     artist: s.artists.into_iter().map(|a| a.name).collect::<Vec<_>>().join(", "),
                     album: s.album.name,
@@ -146,6 +153,8 @@ impl Api {
                 }),
                 PlaylistItem::Video(v) if v.is_available => Some(Track {
                     video_id: v.video_id.get_raw().to_string(),
+                    album_id: None,
+                    artist_id: None,
                     title: v.title,
                     artist: v.channel_name,
                     album: String::new(),
@@ -195,6 +204,7 @@ impl Api {
     }
 
     pub async fn album_tracks(self, id: String) -> Result<Vec<Track>> {
+        let album_id = id.clone();
         let aid = AlbumID::from_raw(id);
         let album = match &self {
             Api::Guest(y) => y.get_album(aid).await,
@@ -203,11 +213,14 @@ impl Api {
         .map_err(err)?;
         let artist = album.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
         let album_thumb = best_thumb(&album.thumbnails);
+        let album_artist = album.artists.first().and_then(|a| a.id.as_ref()).map(|i| i.get_raw().to_string());
         Ok(album
             .tracks
             .into_iter()
             .map(|t| Track {
                 video_id: t.video_id.get_raw().to_string(),
+                album_id: Some(album_id.clone()),
+                artist_id: album_artist.clone(),
                 title: t.title,
                 artist: artist.clone(),
                 album: album.title.clone(),
@@ -250,6 +263,8 @@ impl Api {
                 let t = match item {
                     HistoryItem::Song(s) => Track {
                         video_id: s.video_id.get_raw().to_string(),
+                        album_id: Some(s.album.id.get_raw().to_string()),
+                        artist_id: s.artists.first().and_then(|a| a.id.as_ref()).map(|i| i.get_raw().to_string()),
                         title: s.title,
                         artist: s.artists.into_iter().map(|a| a.name).collect::<Vec<_>>().join(", "),
                         album: p.period_name.clone(),
@@ -259,6 +274,8 @@ impl Api {
                     },
                     HistoryItem::Video(v) => Track {
                         video_id: v.video_id.get_raw().to_string(),
+                        album_id: None,
+                        artist_id: None,
                         title: v.title,
                         artist: v.channel_name,
                         album: p.period_name.clone(),
@@ -308,6 +325,39 @@ impl Api {
         Ok(l.ok().and_then(|l| crate::lyrics::from_ytm(&l.lyrics, &l.source)))
     }
 
+    /// An artist's top songs.
+    pub async fn artist_songs(self, channel_id: String) -> Result<Vec<Track>> {
+        let cid = ArtistChannelID::from_raw(channel_id.clone());
+        let artist = match &self {
+            Api::Guest(y) => y.get_artist(cid).await,
+            Api::User(y) => y.get_artist(cid).await,
+        }
+        .map_err(err)?;
+        let thumb = best_thumb(&artist.thumbnails);
+        let songs = artist.top_releases.songs.map(|s| s.results).unwrap_or_default();
+        Ok(songs
+            .into_iter()
+            .map(|s| Track {
+                video_id: s.video_id.get_raw().to_string(),
+                album_id: Some(s.album.id.get_raw().to_string()),
+                artist_id: Some(channel_id.clone()),
+                title: s.title,
+                artist: s.artists.into_iter().map(|a| a.name).collect::<Vec<_>>().join(", "),
+                album: s.album.name,
+                duration: String::new(),
+                thumb: thumb.clone(),
+                link: None,
+            })
+            .collect())
+    }
+
+    /// Thumbs down (or takes it back). YouTube Music plays disliked songs less.
+    pub async fn dislike(self, video_id: String, on: bool) -> Result<()> {
+        let Api::User(y) = &self else { return Err(anyhow!("sign in to rate songs")) };
+        let status = if on { LikeStatus::Disliked } else { LikeStatus::Indifferent };
+        y.rate_song(VideoID::from_raw(video_id), status).await.map_err(err)
+    }
+
     pub async fn rate(self, video_id: String, liked: bool) -> Result<()> {
         let Api::User(y) = &self else { return Err(anyhow!("sign in to like songs")) };
         let status = if liked { LikeStatus::Liked } else { LikeStatus::Indifferent };
@@ -351,6 +401,8 @@ pub fn thumb_sized(url: &str, px: u32) -> String {
 fn watch_track(t: WatchPlaylistTrack) -> Track {
     Track {
         video_id: t.video_id.get_raw().to_string(),
+        album_id: None,
+        artist_id: None,
         title: t.title,
         artist: t.author,
         album: String::new(),
@@ -390,7 +442,17 @@ fn home_item(item: &Value, section: &str) -> Option<Track> {
             (String::new(), Some(link))
         };
         let thumb = json_thumb(r);
-        return Some(Track { video_id, title, artist: subtitle, album: section.to_string(), duration: String::new(), thumb, link });
+        return Some(Track {
+            video_id,
+            title,
+            artist: subtitle,
+            album: section.to_string(),
+            duration: String::new(),
+            thumb,
+            album_id: None,
+            artist_id: None,
+            link,
+        });
     }
     // "Quick picks" style song rows.
     let r = item.get("musicResponsiveListItemRenderer")?;
@@ -398,7 +460,17 @@ fn home_item(item: &Value, section: &str) -> Option<Track> {
     let col = |i: usize| text(r.pointer(&format!("/flexColumns/{i}/musicResponsiveListItemFlexColumnRenderer/text")));
     let artist = col(1).split(" • ").next().unwrap_or_default().to_string();
     let thumb = json_thumb(r);
-    Some(Track { video_id, title: col(0), artist, album: section.to_string(), duration: String::new(), thumb, link: None })
+    Some(Track {
+        video_id,
+        title: col(0),
+        artist,
+        album: section.to_string(),
+        duration: String::new(),
+        thumb,
+        album_id: None,
+        artist_id: None,
+        link: None,
+    })
 }
 
 /// The YouTube Music home feed ("Quick picks", mixes...). Not in ytmapi-rs, so it's a custom

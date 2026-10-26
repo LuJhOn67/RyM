@@ -7,10 +7,10 @@ mod view;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::widget::image;
-use iced::{Size, Subscription, Task, Theme, window};
+use iced::{Point, Size, Subscription, Task, Theme, window};
 
 use rymplayer::api::{self, Api, Link, Playlist, Track};
 use rymplayer::audio::Audio;
@@ -45,6 +45,15 @@ pub enum Page {
     Album(String),
     Mix(String),
     Radio(String),
+    Artist(String),
+}
+
+/// What a right-click menu is about.
+#[derive(Debug, Clone)]
+pub struct MenuFor {
+    pub track: Track,
+    /// Set when opened on the "Up next" list.
+    pub queue_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,6 +118,23 @@ pub enum Message {
     Pick(Playlist),
     Added(String, Result<(), String>),
     CloseDialog,
+
+    Menu(MenuFor),
+    CloseMenu,
+    Cursor(Point),
+    Resized(Size),
+    Frame(Instant),
+    PlayNext(Track),
+    AddToQueue(Track),
+    RemoveFromQueue(usize),
+    DismissQueue,
+    Download(Track),
+    Downloaded(Result<PathBuf, String>),
+    Share(Track),
+    GoAlbum(Track),
+    GoArtist(Track),
+    Dislike(Track),
+    Disliked(String, bool, Result<(), String>),
     Ignore,
 }
 
@@ -126,6 +152,8 @@ pub struct Thumb {
     pub handle: image::Handle,
     pub width: u32,
     pub height: u32,
+    /// When it arrived, for the fade-in.
+    pub loaded: Instant,
 }
 
 impl Thumb {
@@ -135,12 +163,17 @@ impl Thumb {
         let reader = || ::image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok();
         let (width, height) = reader()?.into_dimensions().ok()?;
         if width == height {
-            return Some(Thumb { handle: image::Handle::from_bytes(bytes), width, height });
+            return Some(Thumb { handle: image::Handle::from_bytes(bytes), width, height, loaded: Instant::now() });
         }
         let img = reader()?.decode().ok()?;
         let side = width.min(height);
         let square = img.crop_imm((width - side) / 2, (height - side) / 2, side, side).to_rgba8();
-        Some(Thumb { handle: image::Handle::from_rgba(side, side, square.into_raw()), width: side, height: side })
+        Some(Thumb {
+            handle: image::Handle::from_rgba(side, side, square.into_raw()),
+            width: side,
+            height: side,
+            loaded: Instant::now(),
+        })
     }
 }
 
@@ -176,6 +209,29 @@ pub struct Gui {
     /// Thumbnails with their pixel size (needed to crop 16:9 video thumbnails square).
     pub images: HashMap<String, Thumb>,
     requested: HashSet<String>,
+
+    pub disliked: HashSet<String>,
+    pub menu: Option<MenuFor>,
+    pub menu_pos: Point,
+    cursor: Point,
+    pub window: Size,
+    /// Redraw every frame until then (fades, slides).
+    anim_until: Instant,
+    /// When the current page appeared, for its slide-in.
+    pub page_shown: Instant,
+    /// Lyrics line being sung, and when it changed.
+    pub lyric_line: Option<usize>,
+    pub lyric_changed: Instant,
+}
+
+/// 0 to 1 over `ms` since `since`, easing out (fast start, soft landing).
+pub fn ease(since: Instant, ms: f32) -> f32 {
+    let t = (since.elapsed().as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn long_ago() -> Instant {
+    Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now)
 }
 
 impl Gui {
@@ -208,6 +264,15 @@ impl Gui {
             dialog: None,
             images: HashMap::new(),
             requested: HashSet::new(),
+            disliked: HashSet::new(),
+            menu: None,
+            menu_pos: Point::ORIGIN,
+            cursor: Point::ORIGIN,
+            window: Size::new(1280.0, 800.0),
+            anim_until: Instant::now(),
+            page_shown: long_ago(),
+            lyric_line: None,
+            lyric_changed: long_ago(),
         }
     }
 
@@ -249,10 +314,32 @@ impl Gui {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let mut subs = vec![iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => Some(Message::Cursor(position)),
+            iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
+            _ => None,
+        })];
         if self.current.is_some() {
-            iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick)
-        } else {
-            Subscription::none()
+            subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
+        }
+        if Instant::now() < self.anim_until {
+            subs.push(window::frames().map(Message::Frame));
+        }
+        Subscription::batch(subs)
+    }
+
+    /// Keeps redrawing for `ms` so an animation can play.
+    fn animate(&mut self, ms: u64) {
+        self.anim_until = self.anim_until.max(Instant::now() + Duration::from_millis(ms));
+    }
+
+    /// Notices when the sung lyrics line changes, to animate it.
+    fn track_lyrics(&mut self) {
+        let line = self.lyrics.as_ref().and_then(|l| lyrics::current_line(&l.synced, self.pos));
+        if line != self.lyric_line {
+            self.lyric_line = line;
+            self.lyric_changed = Instant::now();
+            self.animate(450);
         }
     }
 
@@ -308,6 +395,14 @@ impl Gui {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Anything the user does closes an open right-click menu.
+        let passive = matches!(
+            message,
+            Message::Cursor(_) | Message::Resized(_) | Message::Frame(_) | Message::Tick | Message::Image(..) | Message::Menu(_)
+        );
+        if !passive {
+            self.menu = None;
+        }
         match message {
             Message::SignIn => {
                 self.busy = true;
@@ -386,6 +481,8 @@ impl Gui {
                     Ok(t) => {
                         self.status.clear();
                         self.tracks = t;
+                        self.page_shown = Instant::now();
+                        self.animate(400);
                         let px = if self.page == Page::Home { CARD_PX } else { ROW_PX };
                         let wanted: Vec<_> = self.tracks.iter().map(|t| t.thumb.clone()).collect();
                         let header = self.tracks.first().map(|t| t.thumb.clone());
@@ -491,6 +588,7 @@ impl Gui {
                     a.stop();
                     return self.next();
                 }
+                self.track_lyrics();
             }
             Message::Radio(result) => {
                 self.radio_pending = false;
@@ -523,6 +621,7 @@ impl Gui {
                 let like = !self.liked.contains(&vid);
                 if like {
                     self.liked.insert(vid.clone());
+                    self.disliked.remove(&vid);
                 } else {
                     self.liked.remove(&vid);
                 }
@@ -540,12 +639,17 @@ impl Gui {
 
             Message::Image(url, Some(t)) => {
                 self.images.insert(url, t);
+                self.animate(320);
             }
             Message::Image(url, None) => {
                 // Allow a retry later.
                 self.requested.remove(&url);
             }
-            Message::ToggleNowPlaying => self.now_playing_open = !self.now_playing_open && self.current.is_some(),
+            Message::ToggleNowPlaying => {
+                self.now_playing_open = !self.now_playing_open && self.current.is_some();
+                self.page_shown = Instant::now();
+                self.animate(400);
+            }
             Message::ShowTab(t) => self.tab = t,
             Message::CycleTheme => {
                 self.config.gui_theme = (self.config.gui_theme + 1) % style::PALETTES.len();
@@ -584,6 +688,110 @@ impl Gui {
             Message::Added(title, Ok(())) => self.status = format!("Added to \"{title}\""),
             Message::Added(title, Err(e)) => self.status = format!("Couldn't add to \"{title}\": {e}"),
             Message::CloseDialog => self.dialog = None,
+
+            Message::Menu(m) => {
+                // Keep the menu inside the window.
+                let (w, h) = (view::MENU_W, view::menu_height(self, &m));
+                let x = self.cursor.x.min(self.window.width - w - 8.0).max(8.0);
+                let y = if self.cursor.y + h > self.window.height - 8.0 { (self.cursor.y - h).max(8.0) } else { self.cursor.y };
+                self.menu_pos = Point::new(x, y);
+                self.menu = Some(m);
+            }
+            Message::CloseMenu => {}
+            Message::Cursor(p) => self.cursor = p,
+            Message::Resized(s) => self.window = s,
+            Message::Frame(_) => {
+                if let Some(a) = &self.audio {
+                    self.pos = a.position();
+                }
+                self.track_lyrics();
+            }
+            Message::PlayNext(t) => {
+                let Some(i) = self.current else { return self.update(Message::PlaySong(t)) };
+                self.queue.insert(i + 1, t);
+                self.status = "Plays next".into();
+            }
+            Message::AddToQueue(t) => {
+                self.queue.push(t);
+                self.status = "Added to queue".into();
+                if self.current.is_none() {
+                    return self.play(self.queue.len() - 1);
+                }
+            }
+            Message::RemoveFromQueue(i) => {
+                if i >= self.queue.len() {
+                    return Task::none();
+                }
+                self.queue.remove(i);
+                match self.current {
+                    Some(c) if i < c => self.current = Some(c - 1),
+                    Some(c) if i == c => {
+                        if c < self.queue.len() {
+                            return self.play(c);
+                        }
+                        self.current = None;
+                        if let Some(a) = &mut self.audio {
+                            a.stop();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Message::DismissQueue => {
+                if let Some(c) = self.current {
+                    let t = self.queue[c].clone();
+                    self.queue = vec![t];
+                    self.current = Some(0);
+                }
+            }
+            Message::Download(t) => {
+                self.status = format!("Downloading \"{}\"...", t.title);
+                return Task::perform(download(t, self.cookie_file()), |r| Message::Downloaded(s(r)));
+            }
+            Message::Downloaded(Ok(p)) => self.status = format!("Saved to {}", p.display()),
+            Message::Downloaded(Err(e)) => self.status = format!("Download failed: {e}"),
+            Message::Share(t) => {
+                self.status = "Link copied".into();
+                return iced::clipboard::write(format!("https://music.youtube.com/watch?v={}", t.video_id));
+            }
+            Message::GoAlbum(t) => {
+                let Some(id) = t.album_id.clone() else { return Task::none() };
+                self.now_playing_open = false;
+                return self.open(Page::Album(id), t.album);
+            }
+            Message::GoArtist(t) => {
+                let Some(id) = t.artist_id.clone() else { return Task::none() };
+                self.now_playing_open = false;
+                let name = t.artist.split(", ").next().unwrap_or(&t.artist).to_string();
+                return self.open(Page::Artist(id), name);
+            }
+            Message::Dislike(t) => {
+                let Some(api) = self.api.clone() else { return Task::none() };
+                let vid = t.video_id.clone();
+                let on = !self.disliked.contains(&vid);
+                let mut tasks = Vec::new();
+                if on {
+                    self.disliked.insert(vid.clone());
+                    self.liked.remove(&vid);
+                    // Like YouTube Music: a thumbs-down on the playing song skips it.
+                    if self.now_playing().map(|n| &n.video_id) == Some(&vid) {
+                        tasks.push(self.next());
+                    }
+                } else {
+                    self.disliked.remove(&vid);
+                }
+                tasks.push(Task::perform(api.dislike(vid.clone(), on), move |r| Message::Disliked(vid.clone(), on, s(r))));
+                return Task::batch(tasks);
+            }
+            Message::Disliked(vid, on, Err(e)) => {
+                if on {
+                    self.disliked.remove(&vid);
+                } else {
+                    self.disliked.insert(vid);
+                }
+                self.status = format!("Couldn't rate: {e}");
+            }
+            Message::Disliked(..) => {}
             Message::Ignore => {}
         }
         Task::none()
@@ -607,6 +815,7 @@ impl Gui {
                         Page::Album(id) => api.album_tracks(id).await,
                         Page::Mix(id) => api.mix_tracks(id).await,
                         Page::Radio(vid) => api.radio(vid).await,
+                        Page::Artist(id) => api.artist_songs(id).await,
                     }
                 }
             },
@@ -706,6 +915,24 @@ impl Gui {
     }
 }
 
+/// Saves a song as a file in the Music folder (`Music\\RymPlayer\\Artist - Title.ext`).
+async fn download(t: Track, cookies: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let src = stream::fetch(t.video_id.clone(), cookies).await?;
+    let music = directories::UserDirs::new()
+        .and_then(|d| d.audio_dir().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = music.join("RymPlayer");
+    tokio::fs::create_dir_all(&dir).await?;
+    let clean: String = format!("{} - {}", t.artist, t.title)
+        .chars()
+        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
+        .collect();
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");
+    let dest = dir.join(format!("{}.{ext}", clean.trim()));
+    tokio::fs::copy(&src, &dest).await?;
+    Ok(dest)
+}
+
 #[cfg(test)]
 mod shots {
     //! Renders screens to PNG without opening a window: `cargo test --bin RymPlayer-GUI -- --ignored`.
@@ -741,8 +968,10 @@ mod shots {
         }
         while let Some(r) = set.join_next().await {
             if let Ok(Some((url, bytes))) = r
-                && let Some(t) = Thumb::new(bytes)
+                && let Some(mut t) = Thumb::new(bytes)
             {
+                // Already faded in by the time the shot is taken.
+                t.loaded = long_ago();
                 gui.images.insert(url, t);
             }
         }
@@ -803,10 +1032,69 @@ mod shots {
             gui.dialog = Some(Dialog::AddTo(liked[0].clone()));
             shot(&gui, &format!("{tag}-add-to"));
             gui.dialog = None;
+
+            gui.menu = Some(MenuFor { track: liked[2].clone(), queue_index: None });
+            gui.menu_pos = Point::new(900.0, 300.0);
+            shot(&gui, &format!("{tag}-menu"));
+            gui.menu = None;
             gui.tracks = home;
         }
         gui.signed_in_screen = false;
         gui.config.gui_theme = 0;
         shot(&gui, "ytm-login");
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    fn song(id: &str) -> Track {
+        Track {
+            video_id: id.into(),
+            title: id.into(),
+            artist: "A".into(),
+            album: String::new(),
+            duration: "3:00".into(),
+            thumb: None,
+            album_id: None,
+            artist_id: None,
+            link: None,
+        }
+    }
+
+    fn ids(g: &Gui) -> Vec<&str> {
+        g.queue.iter().map(|t| t.video_id.as_str()).collect()
+    }
+
+    #[test]
+    fn queue_actions() {
+        let mut g = Gui::empty();
+        g.queue = vec![song("a"), song("b"), song("c")];
+        g.current = Some(1);
+        let _ = g.update(Message::PlayNext(song("x")));
+        assert_eq!(ids(&g), ["a", "b", "x", "c"]);
+        let _ = g.update(Message::AddToQueue(song("z")));
+        assert_eq!(ids(&g), ["a", "b", "x", "c", "z"]);
+        // Removing a song before the playing one keeps the same song playing.
+        let _ = g.update(Message::RemoveFromQueue(0));
+        assert_eq!(g.now_playing().map(|t| t.video_id.as_str()), Some("b"));
+        let _ = g.update(Message::DismissQueue);
+        assert_eq!(ids(&g), ["b"]);
+        assert_eq!(g.current, Some(0));
+    }
+
+    #[test]
+    fn menu_stays_inside_the_window() {
+        let mut g = Gui::empty();
+        g.window = Size::new(1000.0, 700.0);
+        g.cursor = Point::new(990.0, 690.0);
+        let _ = g.update(Message::Menu(MenuFor { track: song("a"), queue_index: Some(0) }));
+        let h = view::menu_height(&g, g.menu.as_ref().unwrap());
+        assert!(g.menu_pos.x + view::MENU_W <= 1000.0);
+        assert!(g.menu_pos.y + h <= 700.0);
+        // Any action closes it.
+        let _ = g.update(Message::Toggle);
+        assert!(g.menu.is_none());
     }
 }
