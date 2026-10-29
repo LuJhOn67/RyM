@@ -24,3 +24,11 @@ class StreamsTest {
         assertEquals("Sign in to confirm your age", e.message)
     }
 }
+
+class DownloadNameTest {
+    @Test
+    fun safeNames() {
+        assertEquals("AC_DC - What_ _Live_", com.rymplayer.data.Downloads.safeName("AC/DC - What? <Live>"))
+        assertEquals("A - Song", com.rymplayer.data.Downloads.safeName("A - Song..."))
+    }
+}

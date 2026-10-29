@@ -17,6 +17,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as ExoListener
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.rymplayer.data.Downloads
 import com.rymplayer.data.Track
 import com.rymplayer.data.YtMusic
 import com.rymplayer.data.parseDuration
@@ -32,7 +33,7 @@ import kotlinx.coroutines.launch
  * The queue, as Compose state. Audio plays in [PlaybackService] (so it keeps going in the
  * background and shows the media notification); this drives it through a [MediaController].
  */
-class Player(context: Context, private val scope: CoroutineScope) {
+class Player(private val context: Context, private val scope: CoroutineScope) {
     lateinit var api: YtMusic
     var onTrackChanged: (Track?) -> Unit = {}
 
@@ -124,7 +125,9 @@ class Player(context: Context, private val scope: CoroutineScope) {
         loading = true
         loadJob?.cancel()
         loadJob = scope.launch {
-            val url = runCatching { Streams.resolve(t.videoId) }.onFailure { message = "Can't play: ${it.message}" }.getOrNull()
+            // A downloaded song plays from its file.
+            val url = Downloads.uriFor(context, t.videoId)?.toString()
+                ?: runCatching { Streams.resolve(t.videoId) }.onFailure { message = "Can't play: ${it.message}" }.getOrNull()
             if (url == null) {
                 loading = false
                 if (message.isEmpty()) message = "No playable audio for this song"

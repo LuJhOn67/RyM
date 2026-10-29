@@ -6,6 +6,7 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -30,8 +31,9 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         // YouTube's links want the user agent of the app client they were made for.
-        val http = DefaultHttpDataSource.Factory()
-        val withAgent = ResolvingDataSource.Factory(http) { spec ->
+        // Files (downloaded songs) and web links both go through DefaultDataSource.
+        val any = DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory())
+        val withAgent = ResolvingDataSource.Factory(any) { spec ->
             Streams.userAgentFor(spec.uri)?.let { spec.withAdditionalHeaders(mapOf("User-Agent" to it)) } ?: spec
         }
         val exo = ExoPlayer.Builder(this)

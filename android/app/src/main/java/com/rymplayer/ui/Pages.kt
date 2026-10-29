@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
@@ -135,6 +136,11 @@ fun LibraryPage(vm: AppViewModel) {
     var naming by remember { mutableStateOf(false) }
     LazyColumn(contentPadding = pagePadding) {
         item { Title("Library") }
+        item {
+            LibraryRow("Downloads", "Saved on this phone, play without internet", Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
+                vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", "Downloads"))
+            }
+        }
         if (vm.api.signedIn) {
             item {
                 LibraryRow("Liked Music", "Auto playlist", Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.Default.Favorite) {

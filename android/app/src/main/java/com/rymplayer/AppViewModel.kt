@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.rymplayer.data.Downloads
 import com.rymplayer.data.LIKED_ID
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
@@ -27,7 +28,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -116,7 +117,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun open(page: Screen.Songs) {
         stack += page
         playerOpen = false
-        if (pages[page] == null) load(page)
+        // Downloads can change at any time; the rest is loaded once.
+        if (pages[page] == null || page.kind == Screen.Kind.Downloads) load(page)
     }
 
     /** True when something was closed. */
@@ -160,6 +162,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.Artist -> api.artist(page.id)
                     Screen.Kind.History -> api.history()
                     Screen.Kind.Results -> api.search(page.id)
+                    Screen.Kind.Downloads -> Downloads.list(getApplication())
                 }
             }
             r.onFailure { status = it.message.orEmpty() }
@@ -182,6 +185,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> player.append(radio.filter { it.videoId != t.videoId }) }
         }
+    }
+
+    /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
+    fun download(t: Track) = viewModelScope.launch {
+        status = "Downloading \"${t.title}\"..."
+        status = runCatching { Downloads.save(getApplication(), t) }.fold({ "Saved to Music/RymPlayer" }, { "Download failed: ${it.message}" })
     }
 
     fun toggleLike(t: Track) {

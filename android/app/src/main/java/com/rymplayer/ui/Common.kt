@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
@@ -162,6 +163,7 @@ fun SongMenu(vm: AppViewModel, t: Track, open: Boolean, onDismiss: () -> Unit, q
         item("Start radio", Icons.Default.Radio) { vm.playRadio(t) }()
         item("Play next", Icons.Default.SkipNext) { vm.player.playNext(t) }()
         item("Add to queue", Icons.AutoMirrored.Filled.QueueMusic) { vm.player.append(listOf(t)) }()
+        item("Download", Icons.Default.Download) { vm.download(t) }()
         if (vm.api.signedIn) {
             val liked = t.videoId in vm.liked
             item(if (liked) "Remove from liked songs" else "Add to liked songs", if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder) { vm.toggleLike(t) }()
