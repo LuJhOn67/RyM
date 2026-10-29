@@ -17,7 +17,7 @@ use rymplayer::api::{self, Api, Link, Playlist, Track};
 use rymplayer::audio::Audio;
 use rymplayer::config::{Config, Renderer};
 use rymplayer::lyrics::{self, Lyrics};
-use rymplayer::{cookie_path, login, parse_duration, stream, ytdlp_cookie_path};
+use rymplayer::{cookie_path, login, parse_duration, stream};
 
 fn main() -> iced::Result {
     if std::env::args().any(|a| a == "--login") {
@@ -502,11 +502,6 @@ impl Gui {
         self.images.get(&api::thumb_sized(url?, px)).cloned()
     }
 
-    fn cookie_file(&self) -> Option<PathBuf> {
-        let p = ytdlp_cookie_path();
-        (self.logged_in() && p.exists()).then_some(p)
-    }
-
     /// Starts downloading thumbnails that aren't cached or on their way.
     fn want_images<'a>(&mut self, items: impl IntoIterator<Item = (&'a Option<String>, u32)>) -> Task<Message> {
         let mut tasks = Vec::new();
@@ -565,9 +560,6 @@ impl Gui {
                 self.api = Some(api.clone());
                 let mut tasks = vec![self.open(Page::Home, "For you".into())];
                 if user {
-                    if let Ok(c) = std::fs::read_to_string(cookie_path()) {
-                        let _ = stream::write_cookie_file(&c, &ytdlp_cookie_path());
-                    }
                     tasks.push(Task::perform(api.clone().library_playlists(), |r| Message::Playlists(s(r))));
                     // Liked songs, so hearts show everywhere.
                     tasks.push(Task::perform(api.playlist_tracks(api::LIKED_ID.into()), |r| {
@@ -583,7 +575,6 @@ impl Gui {
             }
             Message::SignOut => {
                 let _ = std::fs::remove_file(cookie_path());
-                let _ = std::fs::remove_file(ytdlp_cookie_path());
                 if let Some(a) = &mut self.audio {
                     a.stop();
                 }
@@ -921,7 +912,7 @@ impl Gui {
             }
             Message::Download(t) => {
                 self.status = format!("Downloading \"{}\"...", t.title);
-                return Task::perform(download(t, self.cookie_file()), |r| Message::Downloaded(s(r)));
+                return Task::perform(download(t), |r| Message::Downloaded(s(r)));
             }
             Message::Downloaded(Ok(p)) => self.status = format!("Saved to {}", p.display()),
             Message::Downloaded(Err(e)) => self.status = format!("Download failed: {e}"),
@@ -1021,7 +1012,7 @@ impl Gui {
             a.stop();
         }
         let vid = track.video_id.clone();
-        let fetch = Task::perform(stream::fetch(vid.clone(), self.cookie_file()), {
+        let fetch = Task::perform(stream::fetch(vid.clone()), {
             let vid = vid.clone();
             move |r| Message::Fetched(vid.clone(), s(r))
         });
@@ -1078,7 +1069,7 @@ impl Gui {
     fn prefetch_next(&self) -> Task<Message> {
         match self.current.and_then(|i| self.queue.get(i + 1)) {
             Some(t) if stream::cached(&t.video_id).is_none() => {
-                Task::perform(stream::fetch(t.video_id.clone(), self.cookie_file()), |_| Message::Ignore)
+                Task::perform(stream::fetch(t.video_id.clone()), |_| Message::Ignore)
             }
             _ => Task::none(),
         }
@@ -1093,8 +1084,8 @@ impl Gui {
 }
 
 /// Saves a song as a file in the Music folder (`Music\\RymPlayer\\Artist - Title.ext`).
-async fn download(t: Track, cookies: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    let src = stream::fetch(t.video_id.clone(), cookies).await?;
+async fn download(t: Track) -> anyhow::Result<PathBuf> {
+    let src = stream::fetch(t.video_id.clone()).await?;
     let music = directories::UserDirs::new()
         .and_then(|d| d.audio_dir().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));

@@ -1,13 +1,15 @@
-//! Fetches a song's audio into the local cache with yt-dlp.
+//! Fetches a song's audio into the local cache, straight from the link YouTube's player API
+//! gives ([`crate::innertube`]). No outside programs are needed.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use tokio::process::Command;
+use tokio::io::AsyncWriteExt;
 
-/// Best first: Premium Opus 256k, Opus 160k, Premium AAC 256k, AAC 128k.
-const FORMATS: &str = "774/251/141/140/bestaudio";
+/// Bytes asked for per request: YouTube slows down single requests for whole songs.
+const RANGE: u64 = 4 << 20;
 
 pub fn cache_dir() -> PathBuf {
     crate::data_dir().join("cache")
@@ -27,7 +29,7 @@ pub fn cached_duration(video_id: &str) -> Option<f32> {
     std::fs::read_to_string(cache_dir().join(format!("{video_id}.secs"))).ok()?.trim().parse().ok()
 }
 
-pub async fn fetch(video_id: String, cookies: Option<PathBuf>) -> Result<PathBuf> {
+pub async fn fetch(video_id: String) -> Result<PathBuf> {
     if let Some(p) = cached(&video_id) {
         return Ok(p);
     }
@@ -37,7 +39,7 @@ pub async fn fetch(video_id: String, cookies: Option<PathBuf>) -> Result<PathBuf
     let dir = cache_dir();
     let tmp = dir.join(format!(".dl-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
     tokio::fs::create_dir_all(&tmp).await?;
-    let result = download(&video_id, cookies, &tmp).await.and_then(|p| {
+    let result = download(&video_id, &tmp).await.and_then(|p| {
         let name = p.file_name().ok_or_else(|| anyhow!("bad file name"))?;
         let dest = dir.join(name);
         if !dest.exists() {
@@ -49,42 +51,99 @@ pub async fn fetch(video_id: String, cookies: Option<PathBuf>) -> Result<PathBuf
     result
 }
 
-async fn download(video_id: &str, cookies: Option<PathBuf>, dir: &Path) -> Result<PathBuf> {
-    let out = dir.join("%(id)s.%(ext)s");
-
-    let mut cmd = Command::new("yt-dlp");
-    cmd.args(["--js-runtimes", "node", "-f", FORMATS, "--no-playlist", "--no-progress"])
-        .args(["--no-part", "--print", "after_move:%(duration)s\t%(filepath)s", "-o"])
-        .arg(&out);
-    if let Some(c) = &cookies {
-        cmd.arg("--cookies").arg(c);
-    }
-    cmd.arg(format!("https://music.youtube.com/watch?v={video_id}"));
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-
-    let output = cmd.output().await.map_err(|e| anyhow!("yt-dlp not found: {e}"))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        let last = err.lines().rev().find(|l| l.contains("ERROR")).unwrap_or("yt-dlp failed");
-        return Err(anyhow!("{last}"));
-    }
-    let printed = String::from_utf8_lossy(&output.stdout);
-    let (secs, path) = printed.lines().last().and_then(|l| l.trim().split_once('\t')).unzip();
-    // WebM files don't carry their length; keep the one YouTube reported next to the cache.
-    if let Some(secs) = secs.and_then(|s| s.parse::<f32>().ok()) {
-        let _ = std::fs::write(cache_dir().join(format!("{video_id}.secs")), secs.to_string());
-    }
-    path.map(PathBuf::from).filter(|p| p.exists()).ok_or_else(|| anyhow!("download finished but file is missing"))
+fn http() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    // No overall timeout: a range can take a while on a slow connection.
+    C.get_or_init(|| reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().expect("http client"))
 }
 
-/// yt-dlp wants a Netscape cookie file; convert the browser's `Cookie:` header.
-pub fn write_cookie_file(header: &str, path: &Path) -> Result<()> {
-    let mut out = String::from("# Netscape HTTP Cookie File\n");
-    for pair in header.split(';') {
-        let Some((name, value)) = pair.trim().split_once('=') else { continue };
-        out.push_str(&format!(".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}\n"));
+async fn download(video_id: &str, dir: &Path) -> Result<PathBuf> {
+    let audio = crate::innertube::audio(video_id).await?;
+    let path = dir.join(format!("{video_id}.{}", audio.ext));
+    save(&audio.url, audio.user_agent, audio.size, &path).await?;
+    // WebM files don't carry their length; keep the one YouTube reported next to the cache.
+    if let Some(secs) = audio.seconds {
+        let _ = std::fs::write(cache_dir().join(format!("{video_id}.secs")), secs.to_string());
     }
-    std::fs::write(path, out)?;
+    Ok(path)
+}
+
+/// Writes `url` to `path`, in ranges when the size is known.
+async fn save(url: &str, user_agent: &str, size: Option<u64>, path: &Path) -> Result<()> {
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut pos = 0u64;
+    loop {
+        let mut req = http().get(url).header("User-Agent", user_agent);
+        if let Some(size) = size {
+            if pos >= size {
+                break;
+            }
+            req = req.header("Range", format!("bytes={pos}-{}", (pos + RANGE).min(size) - 1));
+        }
+        let mut resp = req.send().await?.error_for_status().map_err(|e| anyhow!("audio download: {e}"))?;
+        let before = pos;
+        while let Some(chunk) = resp.chunk().await? {
+            file.write_all(&chunk).await?;
+            pos += chunk.len() as u64;
+        }
+        if size.is_none() {
+            break;
+        }
+        if pos == before {
+            return Err(anyhow!("audio download stopped at {pos} bytes"));
+        }
+    }
+    file.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    /// A local server answering `Range` requests, cutting every third answer short like a real
+    /// one sometimes does. No internet involved.
+    fn serve(data: std::sync::Arc<Vec<u8>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for (n, conn) in listener.incoming().enumerate() {
+                let Ok(mut conn) = conn else { continue };
+                let mut reader = BufReader::new(conn.try_clone().unwrap());
+                let mut range = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (a, b) = r.trim().split_once('-').unwrap();
+                        range = Some((a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap()));
+                    }
+                }
+                let (a, b) = range.unwrap_or((0, data.len() - 1));
+                let b = if n % 3 == 2 && b - a > 2000 { b - 1000 } else { b };
+                let body = &data[a..=b];
+                let head = format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = conn.write_all(head.as_bytes());
+                let _ = conn.write_all(body);
+            }
+        });
+        format!("http://{addr}/audio")
+    }
+
+    #[tokio::test]
+    async fn saves_in_ranges() {
+        let data: std::sync::Arc<Vec<u8>> = std::sync::Arc::new((0..(RANGE as usize * 2 + 12345)).map(|i| (i * 7 % 251) as u8).collect());
+        let url = serve(data.clone());
+        let dir = std::env::temp_dir().join(format!("rym-range-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("song.webm");
+        save(&url, "test", Some(data.len() as u64), &path).await.unwrap();
+        let written = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(written == *data, "file matches ({} of {} bytes)", written.len(), data.len());
+    }
 }

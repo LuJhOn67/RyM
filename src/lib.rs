@@ -4,6 +4,7 @@
 pub mod api;
 pub mod audio;
 pub mod config;
+pub mod innertube;
 pub mod login;
 pub mod lyrics;
 pub mod stream;
@@ -18,10 +19,6 @@ pub fn data_dir() -> PathBuf {
 
 pub fn cookie_path() -> PathBuf {
     data_dir().join("cookie.txt")
-}
-
-pub fn ytdlp_cookie_path() -> PathBuf {
-    data_dir().join("cookies-ytdlp.txt")
 }
 
 /// "3:45" or "1:02:03" to seconds.

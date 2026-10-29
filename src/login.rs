@@ -78,8 +78,7 @@ pub fn run() -> ! {
                     .collect::<Vec<_>>()
                     .join("; ");
                 let _ = std::fs::create_dir_all(crate::data_dir());
-                let ok = std::fs::write(crate::cookie_path(), &header).is_ok()
-                    && crate::stream::write_cookie_file(&header, &crate::ytdlp_cookie_path()).is_ok();
+                let ok = std::fs::write(crate::cookie_path(), &header).is_ok();
                 *flow = ControlFlow::ExitWithCode(if ok { 0 } else { 1 });
             }
             _ => {}

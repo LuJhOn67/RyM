@@ -10,7 +10,7 @@ use crossterm::event::{
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use rymplayer::{api, audio, config, cookie_path, data_dir, fmt_time, login, lyrics, parse_duration, stream, ytdlp_cookie_path};
+use rymplayer::{api, audio, config, cookie_path, data_dir, fmt_time, login, lyrics, parse_duration, stream};
 
 use api::{Api, Link, Playlist, Track};
 use audio::Audio;
@@ -236,11 +236,6 @@ impl App {
         self.current.and_then(|i| self.queue.get(i))
     }
 
-    fn cookie_file(&self) -> Option<PathBuf> {
-        let p = ytdlp_cookie_path();
-        (self.logged_in() && p.exists()).then_some(p)
-    }
-
     // ------------------------------------------------------------ background results
 
     fn handle(&mut self, ev: Event) {
@@ -252,9 +247,6 @@ impl App {
                 self.api = Some(api.clone());
                 self.mode = Mode::Main;
                 if user {
-                    if let Ok(c) = std::fs::read_to_string(cookie_path()) {
-                        let _ = stream::write_cookie_file(&c, &ytdlp_cookie_path());
-                    }
                     self.spawn(async move { Event::Playlists(s(api.library_playlists().await)) });
                 }
                 self.rebuild_nav(Vec::new());
@@ -521,7 +513,6 @@ impl App {
 
     fn sign_out(&mut self) {
         let _ = std::fs::remove_file(cookie_path());
-        let _ = std::fs::remove_file(ytdlp_cookie_path());
         if let Some(a) = &mut self.audio {
             a.stop();
         }
@@ -824,9 +815,8 @@ impl App {
         }
 
         let vid = track.video_id.clone();
-        let cookies = self.cookie_file();
         let v = vid.clone();
-        self.spawn(async move { Event::Fetched(v.clone(), s(stream::fetch(v, cookies).await)) });
+        self.spawn(async move { Event::Fetched(v.clone(), s(stream::fetch(v).await)) });
 
         let v = vid.clone();
         let dur = parse_duration(&track.duration);
@@ -853,7 +843,7 @@ impl App {
         if let Some(t) = next
             && stream::cached(&t.video_id).is_none()
         {
-            tokio::spawn(stream::fetch(t.video_id.clone(), self.cookie_file()));
+            tokio::spawn(stream::fetch(t.video_id.clone()));
         }
     }
 
@@ -946,7 +936,7 @@ mod live_tests {
         let t = tracks.first().expect("results").clone();
         println!("first hit: {} - {} [{}] {}", t.title, t.artist, t.album, t.duration);
 
-        let path = stream::fetch(t.video_id.clone(), None).await.expect("fetch");
+        let path = stream::fetch(t.video_id.clone()).await.expect("fetch");
         println!("audio: {}", path.display());
         let secs = audio::decode_seconds(&path).expect("decode");
         println!("decoded {secs:.1}s of audio");

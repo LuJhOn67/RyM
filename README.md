@@ -20,10 +20,11 @@ An Android app (Kotlin + Jetpack Compose) is in `android/` and in early developm
 
 ## Requirements (Windows 10/11)
 
+Nothing else to install for playback: audio comes straight from YouTube's player API.
+
+
 | Needed | Install |
 |---|---|
-| yt-dlp + its YouTube helper | `pip install -U yt-dlp yt-dlp-ejs` |
-| Node.js (yt-dlp uses it to unlock YouTube streams) | <https://nodejs.org> |
 | WebView2 (only for the Google sign-in window) | built into Windows 11; Windows 10: <https://developer.microsoft.com/microsoft-edge/webview2/> |
 
 ## Use
