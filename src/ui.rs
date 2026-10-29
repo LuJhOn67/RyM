@@ -423,6 +423,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("+/-", vol.as_str()),
         ("l", "like"),
         ("r", "radio"),
+        ("d", "download"),
         ("/", "search"),
         ("h", "history"),
         ("a", "add to playlist"),

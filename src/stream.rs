@@ -51,6 +51,29 @@ pub async fn fetch(video_id: String) -> Result<PathBuf> {
     result
 }
 
+/// Saves a song as a file in the Music folder: `Music\RymPlayer\Artist - Title.ext`.
+pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<PathBuf> {
+    let src = fetch(video_id.to_string()).await?;
+    let music = directories::UserDirs::new()
+        .and_then(|d| d.audio_dir().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = music.join("RymPlayer");
+    tokio::fs::create_dir_all(&dir).await?;
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");
+    let dest = dir.join(format!("{}.{ext}", file_name(artist, title)));
+    tokio::fs::copy(&src, &dest).await?;
+    Ok(dest)
+}
+
+/// "Artist - Title" with the characters Windows refuses in file names replaced.
+fn file_name(artist: &str, title: &str) -> String {
+    let clean: String = format!("{artist} - {title}")
+        .chars()
+        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
+        .collect();
+    clean.trim().trim_end_matches('.').to_string()
+}
+
 fn http() -> &'static reqwest::Client {
     static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     // No overall timeout: a range can take a while on a slow connection.
@@ -132,6 +155,12 @@ mod tests {
             }
         });
         format!("http://{addr}/audio")
+    }
+
+    #[test]
+    fn safe_file_names() {
+        assert_eq!(file_name("AC/DC", "What? <Live>"), "AC_DC - What_ _Live_");
+        assert_eq!(file_name("A", "Song..."), "A - Song");
     }
 
     #[tokio::test]

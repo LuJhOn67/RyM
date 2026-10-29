@@ -44,6 +44,7 @@ or `s` to browse without an account.
 | `+` / `-` | Volume |
 | `l` | Like / unlike |
 | `r` | Radio from the selected song |
+| `d` | Download the selected song to `Music\RymPlayer` |
 | `h` | History |
 | `a` | Add the song to a playlist (or a new one) |
 | `N` | New playlist |

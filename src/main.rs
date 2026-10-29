@@ -91,6 +91,8 @@ enum Event {
     Created(Result<Playlist, String>, Option<String>),
     /// A song was added to the named playlist.
     Added(String, Result<(), String>),
+    /// A song was saved to the Music folder.
+    Downloaded(Result<PathBuf, String>),
 }
 
 fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
@@ -360,6 +362,8 @@ impl App {
             Event::Created(Err(e), _) => self.status = format!("Couldn't create the playlist: {e}"),
             Event::Added(title, Ok(())) => self.status = format!("Added to \"{title}\""),
             Event::Added(title, Err(e)) => self.status = format!("Couldn't add to \"{title}\": {e}"),
+            Event::Downloaded(Ok(p)) => self.status = format!("Saved to {}", p.display()),
+            Event::Downloaded(Err(e)) => self.status = format!("Download failed: {e}"),
         }
     }
 
@@ -450,6 +454,7 @@ impl App {
             KeyCode::Char('O') => self.sign_out(),
             KeyCode::Char('g') if !self.busy => self.google_login(),
             KeyCode::Char('r') => self.start_radio(),
+            KeyCode::Char('d') => self.download(),
             // Like YouTube: 0-9 jump to 0%..90% of the song.
             KeyCode::Char(c @ '0'..='9') => {
                 let tenth = c.to_digit(10).unwrap_or(0) as f32 / 10.0;
@@ -602,6 +607,17 @@ impl App {
     }
 
     /// `r`: radio from the selected song, or the playing one.
+    /// Saves the selected song (or the playing one) to the Music folder.
+    fn download(&mut self) {
+        let selected = (self.focus == Focus::Tracks)
+            .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))
+            .flatten()
+            .filter(|t| t.link.is_none());
+        let Some(t) = selected.or(self.now_playing()).cloned() else { return };
+        self.status = format!("Downloading \"{}\"...", t.title);
+        self.spawn(async move { Event::Downloaded(s(stream::save_to_music(&t.video_id, &t.artist, &t.title).await)) });
+    }
+
     fn start_radio(&mut self) {
         let selected = (self.focus == Focus::Tracks)
             .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))

@@ -1083,22 +1083,8 @@ impl Gui {
     }
 }
 
-/// Saves a song as a file in the Music folder (`Music\\RymPlayer\\Artist - Title.ext`).
 async fn download(t: Track) -> anyhow::Result<PathBuf> {
-    let src = stream::fetch(t.video_id.clone()).await?;
-    let music = directories::UserDirs::new()
-        .and_then(|d| d.audio_dir().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let dir = music.join("RymPlayer");
-    tokio::fs::create_dir_all(&dir).await?;
-    let clean: String = format!("{} - {}", t.artist, t.title)
-        .chars()
-        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
-        .collect();
-    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");
-    let dest = dir.join(format!("{}.{ext}", clean.trim()));
-    tokio::fs::copy(&src, &dest).await?;
-    Ok(dest)
+    stream::save_to_music(&t.video_id, &t.artist, &t.title).await
 }
 
 #[cfg(test)]
