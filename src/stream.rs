@@ -81,9 +81,23 @@ fn http() -> &'static reqwest::Client {
 }
 
 async fn download(video_id: &str, dir: &Path) -> Result<PathBuf> {
-    let audio = crate::innertube::audio(video_id).await?;
-    let path = dir.join(format!("{video_id}.{}", audio.ext));
-    save(&audio.url, audio.user_agent, audio.size, &path).await?;
+    // A client's link can be refused when downloading; then ask the next client.
+    let mut skip = Vec::new();
+    let mut why = Vec::new();
+    let (audio, path) = loop {
+        let audio = crate::innertube::audio_skipping(video_id, &skip).await.map_err(|e| {
+            why.push(e.to_string());
+            anyhow!(why.join("; "))
+        })?;
+        let path = dir.join(format!("{video_id}.{}", audio.ext));
+        match save(&audio.url, audio.user_agent, audio.size, &path).await {
+            Ok(()) => break (audio, path),
+            Err(e) => {
+                why.push(format!("{}: {e}", audio.client));
+                skip.push(audio.client.clone());
+            }
+        }
+    };
     // WebM files don't carry their length; keep the one YouTube reported next to the cache.
     if let Some(secs) = audio.seconds {
         let _ = std::fs::write(cache_dir().join(format!("{video_id}.secs")), secs.to_string());

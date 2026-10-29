@@ -21,6 +21,13 @@ const CLIENTS: &[Client] = &[
     Client {
         name: "ANDROID_VR",
         id: "28",
+        version: "1.62.27",
+        user_agent: "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+        extra: || json!({ "deviceMake": "Oculus", "deviceModel": "Quest 3", "androidSdkVersion": 32, "osName": "Android", "osVersion": "12L" }),
+    },
+    Client {
+        name: "ANDROID_VR",
+        id: "28",
         version: "1.65.10",
         user_agent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
         extra: || json!({ "deviceMake": "Oculus", "deviceModel": "Quest 3", "androidSdkVersion": 32, "osName": "Android", "osVersion": "12L" }),
@@ -46,6 +53,8 @@ pub struct Audio {
     pub seconds: Option<f32>,
     /// Sent with every request for the stream.
     pub user_agent: &'static str,
+    /// Which client gave it ("NAME version"), to skip it if the link doesn't work.
+    pub client: String,
 }
 
 fn http() -> &'static reqwest::Client {
@@ -55,8 +64,13 @@ fn http() -> &'static reqwest::Client {
 
 /// The best audio stream: Opus first (itag 251, 160 kbps), then AAC.
 pub async fn audio(video_id: &str) -> Result<Audio> {
+    audio_skipping(video_id, &[]).await
+}
+
+/// Like [`audio`], without asking the clients in `skip` (their links didn't work).
+pub async fn audio_skipping(video_id: &str, skip: &[String]) -> Result<Audio> {
     let mut why = Vec::new();
-    for c in CLIENTS {
+    for c in CLIENTS.iter().filter(|c| !skip.contains(&format!("{} {}", c.name, c.version))) {
         match player(c, video_id).await {
             Ok(a) => return Ok(a),
             Err(e) => why.push(format!("{}: {e}", c.name)),
@@ -66,7 +80,7 @@ pub async fn audio(video_id: &str) -> Result<Audio> {
 }
 
 async fn player(c: &Client, video_id: &str) -> Result<Audio> {
-    let mut client = json!({ "clientName": c.name, "clientVersion": c.version, "hl": "en", "gl": "US" });
+    let mut client = json!({ "clientName": c.name, "clientVersion": c.version, "userAgent": c.user_agent, "hl": "en", "gl": "US" });
     if let (Some(obj), Value::Object(more)) = (client.as_object_mut(), (c.extra)()) {
         obj.extend(more);
     }
@@ -82,7 +96,9 @@ async fn player(c: &Client, video_id: &str) -> Result<Audio> {
         .error_for_status()?
         .json()
         .await?;
-    pick(&v, c.user_agent)
+    let mut a = pick(&v, c.user_agent)?;
+    a.client = format!("{} {}", c.name, c.version);
+    Ok(a)
 }
 
 /// Chooses the stream from a player answer.
@@ -116,6 +132,7 @@ fn pick(v: &Value, user_agent: &'static str) -> Result<Audio> {
         size: num(best, "contentLength"),
         seconds: num(best, "approxDurationMs").map(|ms| ms as f32 / 1000.0),
         user_agent,
+        client: String::new(),
     })
 }
 

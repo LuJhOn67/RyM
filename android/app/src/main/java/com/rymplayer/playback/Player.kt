@@ -14,6 +14,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.common.Player as ExoListener
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -83,8 +84,15 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
+                    // The link didn't work after all: ask the next client before giving up.
+                    val t = current
+                    if (t != null && Streams.markBad(t.videoId)) {
+                        play(index)
+                        return
+                    }
                     loading = false
-                    message = "Can't play: ${error.message.orEmpty()}"
+                    val http = (error.cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                    message = "Can't play: ${error.errorCodeName}" + (http?.let { " (HTTP $it)" } ?: "")
                 }
             })
             ready.complete(c)

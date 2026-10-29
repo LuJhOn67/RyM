@@ -47,7 +47,7 @@ object Downloads {
     /** Downloads a song into Music/RymPlayer; returns the file name. */
     suspend fun save(ctx: Context, t: Track): String = withContext(Dispatchers.IO) {
         uriFor(ctx, t.videoId)?.let { return@withContext "already saved" }
-        val url = Streams.resolve(t.videoId) ?: error("no audio for this song")
+        val url = Streams.resolve(t.videoId)
         val link = Uri.parse(url)
         val mime = link.getQueryParameter("mime") ?: "audio/webm"
         val name = safeName("${t.artist} - ${t.title}") + if (mime.contains("mp4")) ".m4a" else ".webm"
