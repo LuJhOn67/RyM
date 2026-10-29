@@ -100,6 +100,8 @@ fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
 }
 
 struct App {
+    /// Songs in a row that couldn't be fetched; playback stops at 3.
+    failures: u32,
     tx: UnboundedSender<Event>,
     mode: Mode,
     focus: Focus,
@@ -145,6 +147,7 @@ struct App {
 impl App {
     fn new(tx: UnboundedSender<Event>) -> Self {
         App {
+            failures: 0,
             tx,
             mode: Mode::Login,
             focus: Focus::Tracks,
@@ -182,6 +185,7 @@ impl App {
     /// Opens the audio device and signs in with a saved session, if any.
     fn start(&mut self) {
         self.config = Config::load();
+        stream::use_source(self.config.source);
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(self.volume);
@@ -312,6 +316,7 @@ impl App {
                 self.loading = false;
                 match result {
                     Ok(path) => {
+                        self.failures = 0;
                         let known = parse_duration(&self.now_playing().map(|t| t.duration.clone()).unwrap_or_default())
                             .or_else(|| stream::cached_duration(&vid));
                         if let Some(a) = &mut self.audio {
@@ -323,8 +328,15 @@ impl App {
                         self.prefetch_next();
                     }
                     Err(e) => {
-                        self.status = format!("Skipped, download failed: {e}");
-                        self.next();
+                        self.failures += 1;
+                        if self.failures >= 3 {
+                            // Something is wrong for every song (YouTube, the connection, yt-dlp): stop and say why.
+                            self.failures = 0;
+                            self.status = format!("Stopped after 3 songs failed: {e}");
+                        } else {
+                            self.status = format!("Skipped, download failed: {e}");
+                            self.next();
+                        }
                     }
                 }
             }
@@ -656,6 +668,7 @@ impl App {
 
     fn change_setting(&mut self, i: usize, step: i32) {
         self.config.change(SETTINGS[i], step);
+        stream::use_source(self.config.source);
         self.config.save();
         if self.config.library == Side::Hidden {
             self.focus = Focus::Tracks;

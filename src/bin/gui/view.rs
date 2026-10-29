@@ -346,6 +346,18 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        let source = self.config.source;
+        let source_row = row![
+            column![
+                line("Audio source", 15, SEMI, p.text),
+                line("yt-dlp: works reliably, Premium gets 256 kbps (needs yt-dlp and Node.js). InnerTube: straight from YouTube, no extra programs.", 13, FONT, p.dim)
+            ]
+            .spacing(4)
+            .width(Fill),
+            button(line(source.label(), 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::ToggleSource),
+        ]
+        .align_y(Alignment::Center);
+
         let account: Element<'_, Message> = if self.logged_in() {
             button(line("Sign out", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
@@ -359,6 +371,7 @@ impl Gui {
             heading("Look", p),
             tint_row,
             gpu_row,
+            source_row,
             space().height(8),
             heading("Account", p),
             row![account],

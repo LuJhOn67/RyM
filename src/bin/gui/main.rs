@@ -140,6 +140,8 @@ pub enum Message {
     SetTheme(usize),
     ToggleTint,
     ToggleGpu,
+    /// Switch the audio source between yt-dlp and InnerTube.
+    ToggleSource,
 
     NewPlaylist(Option<Track>),
     NameChanged(String),
@@ -263,6 +265,8 @@ pub struct Gui {
     pub seeking: Option<f32>,
     pub volume: f32,
     pub radio_pending: bool,
+    /// Songs in a row that couldn't be fetched; playback stops at 3.
+    failures: u32,
 
     pub lyrics: Option<Lyrics>,
     pub lyrics_status: String,
@@ -335,6 +339,7 @@ impl Gui {
             seeking: None,
             volume: 0.8,
             radio_pending: false,
+            failures: 0,
             lyrics: None,
             lyrics_status: String::new(),
             now_playing_open: false,
@@ -362,6 +367,7 @@ impl Gui {
         let mut gui = Gui::empty();
         gui.signed_in_screen = false;
         gui.config = Config::load();
+        stream::use_source(gui.config.source);
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(gui.volume);
@@ -675,6 +681,7 @@ impl Gui {
                 self.loading = false;
                 match result {
                     Ok(path) => {
+                        self.failures = 0;
                         let known = self
                             .now_playing()
                             .and_then(|t| parse_duration(&t.duration))
@@ -687,6 +694,13 @@ impl Gui {
                         return self.prefetch_next();
                     }
                     Err(e) => {
+                        self.failures += 1;
+                        if self.failures >= 3 {
+                            // Something is wrong for every song (YouTube, the connection, yt-dlp): stop and say why.
+                            self.failures = 0;
+                            self.status = format!("Stopped after 3 songs failed: {e}");
+                            return Task::none();
+                        }
                         self.status = format!("Skipped, download failed: {e}");
                         return self.next();
                     }
@@ -807,6 +821,12 @@ impl Gui {
             Message::SetTheme(i) => {
                 self.config.gui_theme = i % style::PALETTES.len();
                 self.config.save();
+            }
+            Message::ToggleSource => {
+                self.config.source = self.config.source.next();
+                stream::use_source(self.config.source);
+                self.config.save();
+                self.status = format!("Songs now come through {}", self.config.source.label());
             }
             Message::ToggleGpu => {
                 self.config.gui_renderer = self.config.gui_renderer.next();
@@ -1241,6 +1261,20 @@ mod queue_tests {
         let _ = g.update(Message::DismissQueue);
         assert_eq!(ids(&g), ["b"]);
         assert_eq!(g.current, Some(0));
+    }
+
+    #[test]
+    fn stops_after_three_failed_songs() {
+        let mut g = Gui::empty();
+        g.queue = (0..6).map(|i| song(&format!("s{i}"))).collect();
+        g.current = Some(0);
+        for _ in 0..3 {
+            let vid = g.now_playing().unwrap().video_id.clone();
+            let _ = g.update(Message::Fetched(vid, Err("ERROR: refused".into())));
+        }
+        // Two skips, then it stays on the third song and says why instead of running on.
+        assert_eq!(g.now_playing().map(|t| t.video_id.as_str()), Some("s2"));
+        assert!(g.status.starts_with("Stopped after 3 songs failed"), "{}", g.status);
     }
 
     #[test]

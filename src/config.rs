@@ -44,6 +44,33 @@ pub struct Config {
     pub gui_icon: Option<String>,
     /// How the window app draws.
     pub gui_renderer: Renderer,
+    /// Where songs' audio comes from.
+    pub source: Source,
+}
+
+/// Where songs' audio comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Source {
+    /// yt-dlp with your account: keeps up with YouTube, Premium gets 256 kbps. Needs yt-dlp and Node.js.
+    YtDlp,
+    /// YouTube's player API straight from the app, without yt-dlp.
+    InnerTube,
+}
+
+impl Source {
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::YtDlp => "yt-dlp",
+            Source::InnerTube => "InnerTube",
+        }
+    }
+
+    pub fn next(self) -> Source {
+        match self {
+            Source::YtDlp => Source::InnerTube,
+            Source::InnerTube => Source::YtDlp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -89,6 +116,7 @@ impl Default for Config {
             gui_tint: true,
             gui_icon: None,
             gui_renderer: Renderer::Vulkan,
+            source: Source::YtDlp,
         }
     }
 }
@@ -203,10 +231,11 @@ pub enum Setting {
     LyricsAlign,
     Player,
     Help,
+    Source,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 9] = [
+pub const SETTINGS: [Setting; 10] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -215,6 +244,7 @@ pub const SETTINGS: [Setting; 9] = [
     Setting::LyricsAlign,
     Setting::Player,
     Setting::Help,
+    Setting::Source,
     Setting::Reset,
 ];
 
@@ -252,6 +282,7 @@ impl Config {
             Setting::LyricsAlign => "Lyrics text",
             Setting::Player => "Player bar",
             Setting::Help => "Key hints",
+            Setting::Source => "Audio source",
             Setting::Reset => "Reset layout",
         }
     }
@@ -266,6 +297,7 @@ impl Config {
             Setting::LyricsAlign => if self.lyrics_centered { "Centered" } else { "Left" }.to_string(),
             Setting::Player => format!("{:?}", self.player),
             Setting::Help => if self.help { "Shown" } else { "Hidden" }.to_string(),
+            Setting::Source => self.source.label().to_string(),
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -284,9 +316,10 @@ impl Config {
             Setting::LyricsAlign => self.lyrics_centered = !self.lyrics_centered,
             Setting::Player => self.player = cycle(&[BarPlace::Bottom, BarPlace::Top], self.player, step),
             Setting::Help => self.help = !self.help,
+            Setting::Source => self.source = self.source.next(),
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, ..Config::default() }
             }
         }
     }
