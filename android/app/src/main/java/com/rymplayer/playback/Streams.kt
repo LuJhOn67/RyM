@@ -70,9 +70,25 @@ object Streams {
     private val links = ConcurrentHashMap<String, Link>()
 
     /** What the player should open: the cached file if there is one, else the stream link. */
+    /** The signed-in cookie (set by the app), for yt-dlp when YouTube refuses the quick ways. */
+    @Volatile var cookie: String? = null
+
     suspend fun playable(ctx: Context, videoId: String): String {
         cachedFile(ctx, videoId)?.let { return Uri.fromFile(it).toString() }
-        return kotlinx.coroutines.withContext(Dispatchers.IO) { cachedLink(videoId).url }
+        return kotlinx.coroutines.withContext(Dispatchers.IO) {
+            runCatching { cachedLink(videoId).url }.getOrElse { refused ->
+                // Some songs YouTube won't give the visionOS app ("This video is not available"):
+                // yt-dlp with your account gets them, slower, into the cache.
+                android.util.Log.w("RyM", "quick ways refused $videoId (${refused.message}), trying yt-dlp")
+                val got = runCatching { com.rymplayer.data.YtDlp.download(ctx, videoId, cookie) }.getOrElse {
+                    throw IllegalStateException("${refused.message}; yt-dlp: ${it.message}")
+                }
+                val dest = File(dir(ctx), "$videoId.${got.extension}")
+                if (!got.renameTo(dest)) got.copyTo(dest, overwrite = true).also { got.delete() }
+                trim(ctx)
+                Uri.fromFile(dest).toString()
+            }
+        }
     }
 
     /** Looks up the next song's link while this one plays. */

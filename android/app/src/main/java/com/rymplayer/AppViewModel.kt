@@ -81,6 +81,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun start(cookie: String?) {
         prefs.edit().apply { if (cookie != null) putString("cookie", cookie) else remove("cookie") }.apply()
         api = YtMusic(cookie)
+        com.rymplayer.playback.Streams.cookie = cookie
         signedIn = cookie != null
         player.api = api
         loadHome()
