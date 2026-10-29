@@ -89,6 +89,9 @@ fun RymTheme(content: @Composable () -> Unit) {
             surface = Color(0xFF0B0B0D),
             surfaceVariant = Color(0xFF1C1C21),
             onSurfaceVariant = Dim,
+            // Pure white text on the dark pages (the default is a light grey).
+            onBackground = Color.White,
+            onSurface = Color.White,
         ),
         content = content,
     )
