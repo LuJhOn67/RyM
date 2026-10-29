@@ -11,6 +11,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -30,7 +32,6 @@ import java.util.concurrent.TimeUnit
  * is refused is skipped and the next one asked.
  */
 object Streams {
-    private const val PLAYER = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
     /** Bytes asked for per request: YouTube refuses or slows down open-ended requests. */
     private const val RANGE = 4L shl 20
     /** Songs kept in the cache (oldest are removed). */
@@ -143,37 +144,63 @@ object Streams {
         files.drop(KEEP).forEach { it.delete() }
     }
 
-    /** Asks InnerTube for the song; returns the audio link and its file type. */
-    private fun player(c: Client, videoId: String): Pair<String, String> {
-        val body = buildJsonObject {
-            putJsonObject("context") {
-                putJsonObject("client") {
-                    put("clientName", c.name)
-                    put("clientVersion", c.version)
-                    put("userAgent", c.userAgent)
-                    put("hl", "en")
-                    put("gl", "US")
-                    for ((k, v) in c.extra) {
-                        when (v) {
-                            is Number -> put(k, v)
-                            else -> put(k, v.toString())
-                        }
-                    }
+    /**
+     * Visitor id from InnerTube itself. App clients that come without one are often answered with
+     * "Sign in to confirm you're not a bot"; the well-known Android YouTube apps send one too.
+     */
+    @Volatile private var visitor: String? = null
+
+    private fun JsonObjectBuilder.client(c: Client, visitorData: String?) = putJsonObject("context") {
+        putJsonObject("client") {
+            put("clientName", c.name)
+            put("clientVersion", c.version)
+            put("userAgent", c.userAgent)
+            put("hl", "en")
+            put("gl", "US")
+            visitorData?.let { put("visitorData", it) }
+            for ((k, v) in c.extra) {
+                when (v) {
+                    is Number -> put(k, v)
+                    else -> put(k, v.toString())
                 }
             }
-            put("videoId", videoId)
-            put("contentCheckOk", true)
-            put("racyCheckOk", true)
         }
-        val request = Request.Builder().url(PLAYER)
+    }
+
+    private fun post(c: Client, endpoint: String, visitorData: String?, body: JsonObject): JsonElement {
+        val request = Request.Builder().url("https://www.youtube.com/youtubei/v1/$endpoint?prettyPrint=false")
             .header("User-Agent", c.userAgent)
             .header("X-YouTube-Client-Name", c.id)
             .header("X-YouTube-Client-Version", c.version)
+            .apply { visitorData?.let { header("X-Goog-Visitor-Id", it) } }
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val answer = api.newCall(request).execute().use { r ->
+        return api.newCall(request).execute().use { r ->
             check(r.isSuccessful) { "HTTP ${r.code}" }
             Json.parseToJsonElement(r.body!!.string())
+        }
+    }
+
+    private fun visitorId(c: Client): String? = visitor ?: runCatching {
+        post(c, "visitor_id", null, buildJsonObject { client(c, null) }).at("responseContext/visitorData").str
+    }.getOrNull()?.also { visitor = it }
+
+    /** Asks InnerTube for the song; returns the audio link and its file type. */
+    private fun player(c: Client, videoId: String): Pair<String, String> {
+        fun ask(visitorData: String?) = post(c, "player", visitorData, buildJsonObject {
+            client(c, visitorData)
+            put("videoId", videoId)
+            put("contentCheckOk", true)
+            put("racyCheckOk", true)
+        })
+        var answer = ask(visitorId(c))
+        // Taken for a bot: try once more with the visitor id YouTube just gave.
+        val reason = answer.at("playabilityStatus/reason").str.orEmpty()
+        if (answer.at("playabilityStatus/status").str != "OK" && reason.contains("bot", ignoreCase = true)) {
+            answer.at("responseContext/visitorData").str?.let { fresh ->
+                visitor = fresh
+                answer = ask(fresh)
+            }
         }
         val url = pick(answer)
         return url to (if (url.contains("mime=audio%2Fmp4")) "m4a" else "webm")
