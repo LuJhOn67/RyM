@@ -149,6 +149,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         homeLoading = true
         viewModelScope.launch {
             home = runCatching { api.home() }.onFailure { status = it.message.orEmpty() }.getOrDefault(emptyList())
+            // Songs at the top start right away when tapped.
+            com.rymplayer.playback.Streams.prefetchLinks(home.filter { it.link == null }.take(4).map { it.videoId })
             homeLoading = false
         }
     }
@@ -169,6 +171,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             r.onFailure { status = it.message.orEmpty() }
             pages[page] = r.getOrDefault(emptyList())
+            com.rymplayer.playback.Streams.prefetchLinks(pages[page].orEmpty().filter { it.link == null }.take(4).map { it.videoId })
         }
     }
 

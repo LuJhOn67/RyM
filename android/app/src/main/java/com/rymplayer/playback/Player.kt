@@ -155,7 +155,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             c.prepare()
             c.play()
             // The next song's link is looked up while this one plays.
-            queue.getOrNull(i + 1)?.let { Streams.prefetchLink(it.videoId) }
+            Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
         }
     }
 

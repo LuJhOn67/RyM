@@ -18,7 +18,7 @@ import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
-import org.schabi.newpipe.extractor.stream.StreamInfo
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -73,8 +73,16 @@ object Streams {
 
     /** Looks up the next song's link while this one plays. */
     fun prefetchLink(videoId: String) {
-        scope.async { runCatching { cachedLink(videoId) } }
+        scope.async { lookups.withPermit { runCatching { cachedLink(videoId) } } }
     }
+
+    /** Links for songs about to be tapped (the first ones of a page), a few at a time. */
+    fun prefetchLinks(videoIds: List<String>) {
+        videoIds.filter { it.isNotEmpty() && links[it] == null }.forEach(::prefetchLink)
+    }
+
+    /** At most two lookups run ahead at once, so they don't slow down the song being played. */
+    private val lookups = kotlinx.coroutines.sync.Semaphore(2)
 
     private fun cachedLink(videoId: String): Link {
         links[videoId]?.takeIf { it.until > System.currentTimeMillis() }?.let { return it }
@@ -143,8 +151,10 @@ object Streams {
                 ready = true
             }
         }
-        val info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=$videoId")
-        val best = info.audioStreams
+        // Only the audio is needed: the extractor alone skips the rest of the song page.
+        val extractor = ServiceList.YouTube.getStreamExtractor("https://www.youtube.com/watch?v=$videoId")
+        extractor.fetchPage()
+        val best = extractor.audioStreams
             .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
             .maxByOrNull { it.averageBitrate }
             ?: error("no playable audio for this song")
