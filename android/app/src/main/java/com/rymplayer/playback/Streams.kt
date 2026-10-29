@@ -236,10 +236,10 @@ object Streams {
     }
 
     /** Piece size, and how many pieces are fetched at once: YouTube limits each connection's speed. */
-    private const val PIECE = 1L shl 20
-    private const val PARALLEL = 4
+    private const val PIECE = 4L shl 20
+    private const val PARALLEL = 7
 
-    /** Writes the link to `file`: the first piece tells the size, the rest come over 4 connections at once. */
+    /** Writes the link to `file`: the first piece tells the size, the rest come over up to 7 connections at once. */
     internal fun save(url: String, userAgent: String, file: File) {
         java.io.RandomAccessFile(file, "rw").use { raf ->
             raf.setLength(0)
