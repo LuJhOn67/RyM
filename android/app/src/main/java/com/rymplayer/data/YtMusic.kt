@@ -39,8 +39,6 @@ class YtMusic(private val cookie: String?) {
         val page = http.newCall(req).execute().use { it.body?.string().orEmpty() }
         val v = page.substringAfter("INNERTUBE_CLIENT_VERSION\":\"", "").substringBefore('"').ifEmpty { FALLBACK_VERSION }
         clientVersion = v
-        // The visitor id from the same page; the audio link lookup sends it to look like a real visit.
-        page.substringAfter("VISITOR_DATA\":\"", "").substringBefore('"').takeIf { it.isNotEmpty() }?.let { com.rymplayer.playback.Streams.visitorData = it }
         return v
     }
 

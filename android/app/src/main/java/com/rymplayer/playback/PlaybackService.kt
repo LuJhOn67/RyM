@@ -7,8 +7,6 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
@@ -30,14 +28,9 @@ class PlaybackService : MediaSessionService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
-        // YouTube's links want the user agent of the app client they were made for.
-        // Files (downloaded songs) and web links both go through DefaultDataSource.
-        val any = DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory())
-        val withAgent = ResolvingDataSource.Factory(any) { spec ->
-            Streams.userAgentFor(spec.uri)?.let { spec.withAdditionalHeaders(mapOf("User-Agent" to it)) } ?: spec
-        }
+        // Songs play from files: the cache (see Streams) or Music/RymPlayer (downloads).
         val exo = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(withAgent))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this)))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .build()
