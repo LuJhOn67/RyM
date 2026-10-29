@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rymplayer.data.LIKED_ID
+import com.rymplayer.data.LocalMusic
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
 import com.rymplayer.data.Lyrics
@@ -27,7 +28,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, LocalMusic }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -119,6 +120,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (pages[page] == null) load(page)
     }
 
+    fun openLocalMusic() {
+        val page = Screen.Songs(Screen.Kind.LocalMusic, "device", "On this device")
+        pages.remove(page)
+        open(page)
+    }
+
     /** True when something was closed. */
     fun back(): Boolean = when {
         playerOpen -> { playerOpen = false; true }
@@ -160,10 +167,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.Artist -> api.artist(page.id)
                     Screen.Kind.History -> api.history()
                     Screen.Kind.Results -> api.search(page.id)
+                    Screen.Kind.LocalMusic -> LocalMusic.load(getApplication())
                 }
             }
             r.onFailure { status = it.message.orEmpty() }
-            pages[page] = r.getOrDefault(emptyList())
+            val tracks = r.getOrDefault(emptyList())
+            pages[page] = tracks
         }
     }
 
@@ -214,7 +223,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lyricsStatus = "Looking for lyrics..."
         lyricsJob = viewModelScope.launch {
             val found = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration))
-                ?: runCatching { api.lyrics(t.videoId) }.getOrNull()
+                ?: if (t.localUri == null) runCatching { api.lyrics(t.videoId) }.getOrNull() else null
             lyrics = found
             lyricsStatus = if (found == null) "No lyrics for this song" else ""
         }

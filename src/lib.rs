@@ -4,6 +4,7 @@
 pub mod api;
 pub mod audio;
 pub mod config;
+pub mod innertube;
 pub mod login;
 pub mod lyrics;
 pub mod stream;

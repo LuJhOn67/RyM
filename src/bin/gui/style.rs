@@ -58,9 +58,24 @@ const fn light(name: &'static str, accent: Color, bg: Color, selected: Color) ->
 }
 
 pub const PALETTES: [Palette; 6] = [
-    light("Sky", rgb(66, 133, 196), rgb(236, 242, 248), rgba(66, 133, 196, 0.13)),
-    light("Mint", rgb(56, 166, 117), rgb(236, 246, 240), rgba(56, 166, 117, 0.13)),
-    light("Sakura", rgb(222, 94, 140), rgb(250, 240, 244), rgba(222, 94, 140, 0.12)),
+    light(
+        "Sky",
+        rgb(66, 133, 196),
+        rgb(236, 242, 248),
+        rgba(66, 133, 196, 0.13),
+    ),
+    light(
+        "Mint",
+        rgb(56, 166, 117),
+        rgb(236, 246, 240),
+        rgba(56, 166, 117, 0.13),
+    ),
+    light(
+        "Sakura",
+        rgb(222, 94, 140),
+        rgb(250, 240, 244),
+        rgba(222, 94, 140, 0.12),
+    ),
     Palette {
         name: "Midnight",
         light: false,
@@ -136,7 +151,12 @@ pub fn theme(p: Palette) -> Theme {
 }
 
 pub fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
 }
 
 /// Background washed with the cover's color: soft, never loud. `strength` 0..1.
@@ -151,20 +171,34 @@ pub fn tinted(p: Palette, base: Color, tint: Option<Color>, strength: f32) -> Co
 /// in software on large screens, and every scroll repaints the content area.
 pub fn wash(p: Palette, tint: Option<Color>, strength: f32) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(tinted(p, p.surface, tint, strength * 0.7))),
-        border: Border { radius: p.panel_radius.into(), ..Default::default() },
+        background: Some(Background::Color(tinted(
+            p,
+            p.surface,
+            tint,
+            strength * 0.7,
+        ))),
+        border: Border {
+            radius: p.panel_radius.into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
 
 pub fn bg(color: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_| container::Style { background: Some(Background::Color(color)), ..Default::default() }
+    move |_| container::Style {
+        background: Some(Background::Color(color)),
+        ..Default::default()
+    }
 }
 
 pub fn card_bg(color: Color, radius: f32) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(color)),
-        border: Border { radius: radius.into(), ..Default::default() },
+        border: Border {
+            radius: radius.into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -180,7 +214,10 @@ pub fn ghost(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> but
         button::Style {
             background,
             text_color: p.text,
-            border: Border { radius: 8.0.into(), ..Default::default() },
+            border: Border {
+                radius: 8.0.into(),
+                ..Default::default()
+            },
             shadow: Shadow::default(),
             snap: true,
         }
@@ -198,7 +235,10 @@ pub fn rail(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> butt
         button::Style {
             background,
             text_color: p.text,
-            border: Border { radius: 10.0.into(), ..Default::default() },
+            border: Border {
+                radius: 10.0.into(),
+                ..Default::default()
+            },
             shadow: Shadow::default(),
             snap: true,
         }
@@ -215,7 +255,10 @@ pub fn pill(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: p.pill_text,
-            border: Border { radius: 999.0.into(), ..Default::default() },
+            border: Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
             shadow: Shadow::default(),
             snap: true,
         }
@@ -232,7 +275,10 @@ pub fn chip(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: p.text,
-            border: Border { radius: 999.0.into(), ..Default::default() },
+            border: Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
             shadow: Shadow::default(),
             snap: true,
         }
@@ -242,9 +288,13 @@ pub fn chip(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
 /// Round icon button.
 pub fn icon_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| button::Style {
-        background: matches!(status, button::Status::Hovered | button::Status::Pressed).then_some(Background::Color(p.hover)),
+        background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+            .then_some(Background::Color(p.hover)),
         text_color: p.text,
-        border: Border { radius: 999.0.into(), ..Default::default() },
+        border: Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
         shadow: Shadow::default(),
         snap: true,
     }
@@ -261,7 +311,10 @@ pub fn row(p: Palette, current: bool) -> impl Fn(&Theme, button::Status) -> butt
         button::Style {
             background,
             text_color: p.text,
-            border: Border { radius: 8.0.into(), ..Default::default() },
+            border: Border {
+                radius: 8.0.into(),
+                ..Default::default()
+            },
             shadow: Shadow::default(),
             snap: true,
         }
@@ -271,7 +324,8 @@ pub fn row(p: Palette, current: bool) -> impl Fn(&Theme, button::Status) -> butt
 /// Right-click menu row: square, lighter on hover.
 pub fn menu_item(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| button::Style {
-        background: matches!(status, button::Status::Hovered | button::Status::Pressed).then_some(Background::Color(p.hover)),
+        background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+            .then_some(Background::Color(p.hover)),
         text_color: p.text,
         border: Border::default(),
         shadow: Shadow::default(),
@@ -283,7 +337,10 @@ pub fn menu_item(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style
 pub fn search_box(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(p.input_bg)),
-        border: Border { radius: 8.0.into(), ..Default::default() },
+        border: Border {
+            radius: 8.0.into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -305,7 +362,11 @@ pub fn field(p: Palette) -> impl Fn(&Theme, text_input::Status) -> text_input::S
         border: Border {
             radius: 8.0.into(),
             width: 1.0,
-            color: if matches!(status, text_input::Status::Focused { .. }) { p.accent } else { Color::TRANSPARENT },
+            color: if matches!(status, text_input::Status::Focused { .. }) {
+                p.accent
+            } else {
+                Color::TRANSPARENT
+            },
         },
         icon: p.dim,
         placeholder: p.dim,
@@ -318,15 +379,24 @@ pub fn field(p: Palette) -> impl Fn(&Theme, text_input::Status) -> text_input::S
 pub fn seek(p: Palette) -> impl Fn(&Theme, slider::Status) -> slider::Style {
     move |_, status| {
         let active = matches!(status, slider::Status::Hovered | slider::Status::Dragged);
-        let rest = if p.light { rgba(0, 0, 0, 0.10) } else { rgba(255, 255, 255, 0.22) };
+        let rest = if p.light {
+            rgba(0, 0, 0, 0.10)
+        } else {
+            rgba(255, 255, 255, 0.22)
+        };
         slider::Style {
             rail: slider::Rail {
                 backgrounds: (Background::Color(p.accent), Background::Color(rest)),
                 width: if active { 5.0 } else { 3.0 },
-                border: Border { radius: 2.0.into(), ..Default::default() },
+                border: Border {
+                    radius: 2.0.into(),
+                    ..Default::default()
+                },
             },
             handle: slider::Handle {
-                shape: slider::HandleShape::Circle { radius: if active { 7.0 } else { 0.0 } },
+                shape: slider::HandleShape::Circle {
+                    radius: if active { 7.0 } else { 0.0 },
+                },
                 background: Background::Color(p.accent),
                 border_width: if p.light { 2.0 } else { 0.0 },
                 border_color: rgb(255, 255, 255),
@@ -339,12 +409,19 @@ pub fn seek(p: Palette) -> impl Fn(&Theme, slider::Status) -> slider::Style {
 pub fn scroll(p: Palette) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style {
     move |theme, status| {
         let mut s = scrollable::default(theme, status);
-        let thumb = if p.light { rgba(0, 0, 0, 0.16) } else { rgba(255, 255, 255, 0.18) };
+        let thumb = if p.light {
+            rgba(0, 0, 0, 0.16)
+        } else {
+            rgba(255, 255, 255, 0.18)
+        };
         for rail in [&mut s.vertical_rail, &mut s.horizontal_rail] {
             rail.background = None;
             rail.border = Border::default();
             rail.scroller.background = Background::Color(thumb);
-            rail.scroller.border = Border { radius: 4.0.into(), ..Default::default() };
+            rail.scroller.border = Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            };
         }
         s.container.background = None;
         s
@@ -353,7 +430,11 @@ pub fn scroll(p: Palette) -> impl Fn(&Theme, scrollable::Status) -> scrollable::
 
 pub fn shadow(p: Palette) -> Shadow {
     Shadow {
-        color: if p.light { rgba(30, 50, 80, 0.18) } else { rgba(0, 0, 0, 0.55) },
+        color: if p.light {
+            rgba(30, 50, 80, 0.18)
+        } else {
+            rgba(0, 0, 0, 0.55)
+        },
         offset: iced::Vector::new(0.0, 8.0),
         blur_radius: 24.0,
     }

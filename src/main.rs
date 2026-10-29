@@ -5,12 +5,16 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{
-    self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
 };
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use rymplayer::{api, audio, config, cookie_path, data_dir, fmt_time, login, lyrics, parse_duration, stream, ytdlp_cookie_path};
+use rymplayer::{
+    api, audio, config, cookie_path, data_dir, fmt_time, login, lyrics, parse_duration, stream,
+    ytdlp_cookie_path,
+};
 
 use api::{Api, Link, Playlist, Track};
 use audio::Audio;
@@ -84,7 +88,8 @@ enum Event {
     Radio(Result<Vec<Track>, String>),
     Playlists(Result<Vec<Playlist>, String>),
     Tracks(Page, Result<Vec<Track>, String>),
-    Fetched(String, Result<PathBuf, String>),
+    Fetched(String, Result<audio::PreparedAudio, String>),
+    WarmDone,
     Lyrics(String, Result<Option<Lyrics>, String>),
     Rated(String, bool, Result<(), String>),
     /// A playlist was made; the song to put in it, if it was made from the picker.
@@ -187,7 +192,10 @@ impl App {
             }
             Err(e) => self.status = format!("No audio device: {e}"),
         }
-        if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+        if let Some(cookie) = std::fs::read_to_string(cookie_path())
+            .ok()
+            .filter(|c| !c.trim().is_empty())
+        {
             self.busy = true;
             self.status = "Signing in...".into();
             self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(cookie).await)) });
@@ -201,7 +209,11 @@ impl App {
         });
     }
 
-    fn run(&mut self, terminal: &mut ratatui::DefaultTerminal, mut rx: UnboundedReceiver<Event>) -> anyhow::Result<()> {
+    fn run(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        mut rx: UnboundedReceiver<Event>,
+    ) -> anyhow::Result<()> {
         loop {
             terminal.draw(|f| ui::draw(f, self))?;
             while let Ok(ev) = rx.try_recv() {
@@ -220,7 +232,9 @@ impl App {
                     TermEvent::Paste(text) if self.input.is_some() => {
                         self.buffer.push_str(text.trim_end_matches(['\r', '\n']));
                     }
-                    TermEvent::Mouse(m) if self.mode == Mode::Main && self.input.is_none() => self.mouse(m),
+                    TermEvent::Mouse(m) if self.mode == Mode::Main && self.input.is_none() => {
+                        self.mouse(m)
+                    }
                     _ => {}
                 }
             }
@@ -301,9 +315,23 @@ impl App {
                         if page == Page::Playlist(api::LIKED_ID.into()) {
                             self.liked.extend(t.iter().map(|t| t.video_id.clone()));
                         }
+                        let warm_ids: Vec<_> = t
+                            .iter()
+                            .filter(|track| track.link.is_none() && !track.video_id.is_empty())
+                            .take(8)
+                            .map(|track| track.video_id.clone())
+                            .collect();
+                        let cookies = self.cookie_file();
                         self.status.clear();
                         self.track_state.select((!t.is_empty()).then_some(0));
                         self.tracks = t;
+                        for video_id in warm_ids {
+                            let cookies = cookies.clone();
+                            self.spawn(async move {
+                                stream::warm(video_id, cookies).await;
+                                Event::WarmDone
+                            });
+                        }
                         if self.play_when_loaded.take() == Some(page) {
                             self.play_from_list(0);
                         }
@@ -317,23 +345,25 @@ impl App {
                 }
                 self.loading = false;
                 match result {
-                    Ok(path) => {
-                        let known = parse_duration(&self.now_playing().map(|t| t.duration.clone()).unwrap_or_default())
-                            .or_else(|| stream::cached_duration(&vid));
+                    Ok(source) => {
+                        let known = parse_duration(
+                            &self
+                                .now_playing()
+                                .map(|t| t.duration.clone())
+                                .unwrap_or_default(),
+                        );
                         if let Some(a) = &mut self.audio {
-                            match a.play_file(&path, known) {
-                                Ok(()) => self.status.clear(),
-                                Err(e) => self.status = format!("Can't play: {e}"),
-                            }
+                            a.play_prepared(source, known);
+                            self.status.clear();
                         }
-                        self.prefetch_next();
                     }
                     Err(e) => {
-                        self.status = format!("Skipped, download failed: {e}");
+                        self.status = format!("Playback failed: {e}");
                         self.next();
                     }
                 }
             }
+            Event::WarmDone => {}
             Event::Lyrics(vid, result) => {
                 if self.now_playing().map(|t| &t.video_id) != Some(&vid) {
                     return;
@@ -367,7 +397,9 @@ impl App {
             }
             Event::Created(Err(e), _) => self.status = format!("Couldn't create the playlist: {e}"),
             Event::Added(title, Ok(())) => self.status = format!("Added to \"{title}\""),
-            Event::Added(title, Err(e)) => self.status = format!("Couldn't add to \"{title}\": {e}"),
+            Event::Added(title, Err(e)) => {
+                self.status = format!("Couldn't add to \"{title}\": {e}")
+            }
         }
     }
 
@@ -377,11 +409,19 @@ impl App {
         if self.logged_in() {
             nav.push(NavItem::History);
             nav.push(NavItem::NewPlaylist);
-            nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into(), thumb: None }));
+            nav.push(NavItem::Playlist(Playlist {
+                id: api::LIKED_ID.into(),
+                title: "Liked songs".into(),
+                thumb: None,
+            }));
         }
         nav.extend(playlists.into_iter().map(NavItem::Playlist));
         self.nav = nav;
-        let sel = self.nav_state.selected().unwrap_or(0).min(self.nav.len() - 1);
+        let sel = self
+            .nav_state
+            .selected()
+            .unwrap_or(0)
+            .min(self.nav.len() - 1);
         self.nav_state.select(Some(sel));
     }
 
@@ -437,7 +477,11 @@ impl App {
                 self.buffer.clear();
             }
             KeyCode::Tab | KeyCode::BackTab if self.config.library != Side::Hidden => {
-                self.focus = if self.focus == Focus::Nav { Focus::Tracks } else { Focus::Nav };
+                self.focus = if self.focus == Focus::Nav {
+                    Focus::Tracks
+                } else {
+                    Focus::Nav
+                };
             }
             KeyCode::Char(',') => self.settings = Some(0),
             KeyCode::Char('h') => self.open(Page::History, "History".into()),
@@ -555,7 +599,14 @@ impl App {
     fn activate(&mut self) {
         match self.focus {
             Focus::Nav => {
-                let Some(item) = self.nav_state.selected().and_then(|i| self.nav.get(i)).cloned() else { return };
+                let Some(item) = self
+                    .nav_state
+                    .selected()
+                    .and_then(|i| self.nav.get(i))
+                    .cloned()
+                else {
+                    return;
+                };
                 match item {
                     NavItem::ForYou => self.open(Page::ForYou, "For you".into()),
                     NavItem::History => self.open(Page::History, "History".into()),
@@ -568,8 +619,12 @@ impl App {
                 self.focus = Focus::Tracks;
             }
             Focus::Tracks => {
-                let Some(i) = self.track_state.selected() else { return };
-                let Some(t) = self.tracks.get(i).cloned() else { return };
+                let Some(i) = self.track_state.selected() else {
+                    return;
+                };
+                let Some(t) = self.tracks.get(i).cloned() else {
+                    return;
+                };
                 match t.link {
                     Some(Link::Playlist(id)) => self.open(Page::Playlist(id), t.title),
                     Some(Link::Album(id)) => self.open(Page::Album(id), t.title),
@@ -582,8 +637,15 @@ impl App {
 
     /// Plays row `i` of the visible list; the queue is the list's songs (links skipped).
     fn play_from_list(&mut self, i: usize) {
-        let Some(vid) = self.tracks.get(i).map(|t| t.video_id.clone()) else { return };
-        self.queue = self.tracks.iter().filter(|t| t.link.is_none()).cloned().collect();
+        let Some(vid) = self.tracks.get(i).map(|t| t.video_id.clone()) else {
+            return;
+        };
+        self.queue = self
+            .tracks
+            .iter()
+            .filter(|t| t.link.is_none())
+            .cloned()
+            .collect();
         if let Some(q) = self.queue.iter().position(|t| t.video_id == vid) {
             self.play(q);
         }
@@ -616,7 +678,9 @@ impl App {
             .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))
             .flatten()
             .filter(|t| t.link.is_none());
-        let Some(seed) = selected.or(self.now_playing()).cloned() else { return };
+        let Some(seed) = selected.or(self.now_playing()).cloned() else {
+            return;
+        };
         let page = Page::Radio(seed.video_id);
         self.play_when_loaded = Some(page.clone());
         self.open(page, format!("Radio: {}", seed.title));
@@ -624,7 +688,12 @@ impl App {
 
     /// Queue ran out: keep going with YouTube Music's radio for the last song.
     fn continue_with_radio(&mut self) {
-        let (Some(api), Some(vid)) = (self.api.clone(), self.now_playing().map(|t| t.video_id.clone())) else { return };
+        let (Some(api), Some(vid)) = (
+            self.api.clone(),
+            self.now_playing().map(|t| t.video_id.clone()),
+        ) else {
+            return;
+        };
         if self.radio_pending {
             return;
         }
@@ -677,7 +746,9 @@ impl App {
             .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))
             .flatten()
             .filter(|t| t.link.is_none());
-        let Some(song) = selected.or(self.now_playing()).cloned() else { return };
+        let Some(song) = selected.or(self.now_playing()).cloned() else {
+            return;
+        };
         self.pick_song = Some(song);
         self.picker = Some(0);
     }
@@ -695,7 +766,9 @@ impl App {
 
     fn pick(&mut self, i: usize) {
         self.picker = None;
-        let Some(song) = self.pick_song.clone() else { return };
+        let Some(song) = self.pick_song.clone() else {
+            return;
+        };
         if i == 0 {
             self.new_playlist(Some(song));
         } else if let Some(p) = self.playlists.get(i - 1).cloned() {
@@ -717,7 +790,9 @@ impl App {
     fn add_to(&mut self, p: Playlist, video_id: String) {
         let Some(api) = self.api.clone() else { return };
         self.status = format!("Adding to \"{}\"...", p.title);
-        self.spawn(async move { Event::Added(p.title, s(api.add_to_playlist(p.id, video_id).await)) });
+        self.spawn(
+            async move { Event::Added(p.title, s(api.add_to_playlist(p.id, video_id).await)) },
+        );
     }
 
     fn button(&mut self, click: ui::Click) {
@@ -728,7 +803,13 @@ impl App {
                 self.input = Some(Input::Search);
                 self.buffer.clear();
             }
-            ui::Click::Settings => self.settings = if self.settings.is_some() { None } else { Some(0) },
+            ui::Click::Settings => {
+                self.settings = if self.settings.is_some() {
+                    None
+                } else {
+                    Some(0)
+                }
+            }
             ui::Click::Setting(i) => {
                 self.settings = Some(i);
                 self.change_setting(i, 1);
@@ -761,7 +842,11 @@ impl App {
         }
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                let delta = if m.kind == MouseEventKind::ScrollUp { -3 } else { 3 };
+                let delta = if m.kind == MouseEventKind::ScrollUp {
+                    -3
+                } else {
+                    3
+                };
                 if a.nav.width > 0 && inside(a.nav) {
                     self.focus = Focus::Nav;
                 } else if inside(a.tracks) {
@@ -813,7 +898,9 @@ impl App {
     // ------------------------------------------------------------ playback
 
     fn play(&mut self, i: usize) {
-        let Some(track) = self.queue.get(i).cloned() else { return };
+        let Some(track) = self.queue.get(i).cloned() else {
+            return;
+        };
         self.current = Some(i);
         self.pos = 0.0;
         self.lyrics = None;
@@ -826,7 +913,9 @@ impl App {
         let vid = track.video_id.clone();
         let cookies = self.cookie_file();
         let v = vid.clone();
-        self.spawn(async move { Event::Fetched(v.clone(), s(stream::fetch(v, cookies).await)) });
+        self.spawn(async move {
+            Event::Fetched(v.clone(), s(audio::prepare_playback(v, cookies).await))
+        });
 
         let v = vid.clone();
         let dur = parse_duration(&track.duration);
@@ -845,15 +934,6 @@ impl App {
         if let Some(api) = self.api.clone() {
             // Fire and forget: keeps YouTube Music history in sync.
             tokio::spawn(api.report_play(vid));
-        }
-    }
-
-    fn prefetch_next(&self) {
-        let next = self.current.and_then(|i| self.queue.get(i + 1));
-        if let Some(t) = next
-            && stream::cached(&t.video_id).is_none()
-        {
-            tokio::spawn(stream::fetch(t.video_id.clone(), self.cookie_file()));
         }
     }
 
@@ -902,7 +982,9 @@ impl App {
     }
 
     fn toggle_like(&mut self) {
-        let (Some(t), Some(api)) = (self.now_playing(), self.api.clone()) else { return };
+        let (Some(t), Some(api)) = (self.now_playing(), self.api.clone()) else {
+            return;
+        };
         let vid = t.video_id.clone();
         let like = !self.liked.contains(&vid);
         if like {
@@ -929,7 +1011,9 @@ impl App {
 
     fn duration(&self) -> f32 {
         let from_audio = self.audio.as_ref().and_then(Audio::duration);
-        from_audio.or_else(|| self.now_playing().and_then(|t| parse_duration(&t.duration))).unwrap_or(0.0)
+        from_audio
+            .or_else(|| self.now_playing().and_then(|t| parse_duration(&t.duration)))
+            .unwrap_or(0.0)
     }
 }
 
@@ -942,19 +1026,33 @@ mod live_tests {
     #[ignore]
     async fn search_fetch_decode_lyrics() {
         let api = Api::guest().await.expect("guest api");
-        let tracks = api.search("Rick Astley Never Gonna Give You Up".into()).await.expect("search");
+        let tracks = api
+            .search("Rick Astley Never Gonna Give You Up".into())
+            .await
+            .expect("search");
         let t = tracks.first().expect("results").clone();
-        println!("first hit: {} - {} [{}] {}", t.title, t.artist, t.album, t.duration);
+        println!(
+            "first hit: {} - {} [{}] {}",
+            t.title, t.artist, t.album, t.duration
+        );
 
-        let path = stream::fetch(t.video_id.clone(), None).await.expect("fetch");
+        let path = stream::fetch(t.video_id.clone(), None)
+            .await
+            .expect("fetch");
         println!("audio: {}", path.display());
         let secs = audio::decode_seconds(&path).expect("decode");
         println!("decoded {secs:.1}s of audio");
         assert!(secs > 60.0);
 
-        let l = lyrics::lrclib(t.title, t.artist, t.album, parse_duration(&t.duration)).await.expect("lyrics");
+        let l = lyrics::lrclib(t.title, t.artist, t.album, parse_duration(&t.duration))
+            .await
+            .expect("lyrics");
         let l = l.expect("lyrics found");
-        println!("lyrics: {} synced lines, first: {:?}", l.synced.len(), l.synced.first());
+        println!(
+            "lyrics: {} synced lines, first: {:?}",
+            l.synced.len(),
+            l.synced.first()
+        );
         assert!(!l.synced.is_empty());
     }
 
@@ -966,10 +1064,18 @@ mod live_tests {
         let api = Api::with_cookie(cookie).await.expect("login");
         let playlists = api.clone().library_playlists().await.expect("playlists");
         println!("playlists: {}", playlists.len());
-        let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
+        let liked = api
+            .clone()
+            .playlist_tracks(api::LIKED_ID.into())
+            .await
+            .expect("liked");
         println!("liked: {} tracks", liked.len());
         if let Some(p) = playlists.first() {
-            let t = api.clone().playlist_tracks(p.id.clone()).await.expect("playlist");
+            let t = api
+                .clone()
+                .playlist_tracks(p.id.clone())
+                .await
+                .expect("playlist");
             println!("first playlist: {} tracks", t.len());
         }
     }
@@ -985,10 +1091,20 @@ mod lyrics_probe {
     async fn liked_lyrics_coverage() {
         let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
         let api = Api::with_cookie(cookie).await.expect("login");
-        let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
+        let liked = api
+            .clone()
+            .playlist_tracks(api::LIKED_ID.into())
+            .await
+            .expect("liked");
         println!("liked: {}", liked.len());
         for t in liked.into_iter().take(15) {
-            let r = lyrics::lrclib(t.title.clone(), t.artist.clone(), t.album.clone(), parse_duration(&t.duration)).await;
+            let r = lyrics::lrclib(
+                t.title.clone(),
+                t.artist.clone(),
+                t.album.clone(),
+                parse_duration(&t.duration),
+            )
+            .await;
             let res = match r {
                 Ok(Some(l)) => format!("LRCLIB synced={} plain={}", l.synced.len(), l.plain.len()),
                 Ok(None) => match api.clone().lyrics(t.video_id.clone()).await {
@@ -1027,7 +1143,8 @@ mod history_probe {
         let api = Api::with_cookie(cookie).await.expect("login");
         match api.history().await {
             Ok(h) => {
-                let periods: std::collections::BTreeSet<_> = h.iter().map(|t| t.album.clone()).collect();
+                let periods: std::collections::BTreeSet<_> =
+                    h.iter().map(|t| t.album.clone()).collect();
                 println!("history: {} songs, periods {:?}", h.len(), periods);
             }
             Err(e) => println!("history ERR: {e}"),

@@ -80,7 +80,10 @@ private fun SignInWeb(onDone: (String) -> Unit) {
                     override fun onPageFinished(view: WebView, url: String) {
                         if (!url.startsWith(YtMusic.ORIGIN)) return
                         val cookie = CookieManager.getInstance().getCookie(YtMusic.ORIGIN) ?: return
-                        if ("SAPISID=" in cookie && "LOGIN_INFO=" in cookie) onDone(cookie)
+                        if (cookie.split(';').any { it.trim().startsWith("SAPISID=") || it.trim().startsWith("__Secure-3PAPISID=") }) {
+                            CookieManager.getInstance().flush()
+                            onDone(cookie)
+                        }
                     }
                 }
                 loadUrl(SIGN_IN)

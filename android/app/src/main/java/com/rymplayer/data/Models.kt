@@ -12,6 +12,8 @@ data class Track(
     val albumId: String? = null,
     val artistId: String? = null,
     val link: Link? = null,
+    /** A content URI for on-device audio. Null means this is an online track. */
+    val localUri: String? = null,
 )
 
 sealed interface Link {
