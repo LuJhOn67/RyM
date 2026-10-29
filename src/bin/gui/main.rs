@@ -30,6 +30,8 @@ fn main() -> iced::Result {
         .theme(Gui::theme)
         .default_font(view::FONT)
         .window(window::Settings {
+            // The pear on the title bar and the taskbar too (the .exe carries it for Explorer).
+            icon: window::icon::from_file_data(include_bytes!("../../../assets/icons/rym-gui.png"), None).ok(),
             size: Size::new(1280.0, 800.0),
             min_size: Some(Size::new(960.0, 620.0)),
             ..window::Settings::default()

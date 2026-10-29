@@ -3,6 +3,7 @@ name = "rymplayer"
 version = "0.7.0"
 edition = "2024"
 autobins = false
+build = "build.rs"
 
 [dependencies]
 # Software rendering only (tiny-skia): no GPU driver memory, keeps the window app light.
@@ -39,6 +40,10 @@ path = "src/main.rs"
 [[bin]]
 name = "RymPlayer-GUI"
 path = "src/bin/gui/main.rs"
+
+[build-dependencies]
+# Puts each program's icon inside its .exe (Windows).
+embed-resource = "3"
 
 [dev-dependencies]
 iced_test = "0.14.0"
