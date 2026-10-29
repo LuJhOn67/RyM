@@ -358,6 +358,18 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        let best = self.config.download_best;
+        let download_row = row![
+            column![
+                line("Download quality", 15, SEMI, p.text),
+                line("Best: yt-dlp with your account, 256 kbps for Premium, a few seconds more. Fast: the playback file, about 160 kbps.", 13, FONT, p.dim)
+            ]
+            .spacing(4)
+            .width(Fill),
+            button(line(if best { "Best" } else { "Fast" }, 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::ToggleDownload),
+        ]
+        .align_y(Alignment::Center);
+
         let account: Element<'_, Message> = if self.logged_in() {
             button(line("Sign out", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
@@ -372,6 +384,7 @@ impl Gui {
             tint_row,
             gpu_row,
             source_row,
+            download_row,
             space().height(8),
             heading("Account", p),
             row![account],

@@ -46,6 +46,9 @@ pub struct Config {
     pub gui_renderer: Renderer,
     /// Where songs' audio comes from.
     pub source: Source,
+    /// Downloads in the best quality (yt-dlp with your account, 256 kbps for Premium, slower)
+    /// instead of the playback file (about 160 kbps, in seconds).
+    pub download_best: bool,
 }
 
 /// Where songs' audio comes from.
@@ -121,6 +124,7 @@ impl Default for Config {
             gui_icon: None,
             gui_renderer: Renderer::Vulkan,
             source: Source::Auto,
+            download_best: true,
         }
     }
 }
@@ -236,10 +240,11 @@ pub enum Setting {
     Player,
     Help,
     Source,
+    Download,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 10] = [
+pub const SETTINGS: [Setting; 11] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -249,6 +254,7 @@ pub const SETTINGS: [Setting; 10] = [
     Setting::Player,
     Setting::Help,
     Setting::Source,
+    Setting::Download,
     Setting::Reset,
 ];
 
@@ -287,6 +293,7 @@ impl Config {
             Setting::Player => "Player bar",
             Setting::Help => "Key hints",
             Setting::Source => "Audio source",
+            Setting::Download => "Download quality",
             Setting::Reset => "Reset layout",
         }
     }
@@ -302,6 +309,7 @@ impl Config {
             Setting::Player => format!("{:?}", self.player),
             Setting::Help => if self.help { "Shown" } else { "Hidden" }.to_string(),
             Setting::Source => self.source.label().to_string(),
+            Setting::Download => if self.download_best { "Best (yt-dlp, slower)" } else { "Fast (~160 kbps)" }.to_string(),
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -321,9 +329,10 @@ impl Config {
             Setting::Player => self.player = cycle(&[BarPlace::Bottom, BarPlace::Top], self.player, step),
             Setting::Help => self.help = !self.help,
             Setting::Source => self.source = self.source.next(),
+            Setting::Download => self.download_best = !self.download_best,
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, ..Config::default() }
             }
         }
     }

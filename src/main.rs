@@ -186,6 +186,7 @@ impl App {
     fn start(&mut self) {
         self.config = Config::load();
         stream::use_source(self.config.source);
+        stream::download_best(self.config.download_best);
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(self.volume);
@@ -669,6 +670,7 @@ impl App {
     fn change_setting(&mut self, i: usize, step: i32) {
         self.config.change(SETTINGS[i], step);
         stream::use_source(self.config.source);
+        stream::download_best(self.config.download_best);
         self.config.save();
         if self.config.library == Side::Hidden {
             self.focus = Focus::Tracks;

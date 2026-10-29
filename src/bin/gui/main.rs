@@ -142,6 +142,8 @@ pub enum Message {
     ToggleGpu,
     /// Switch the audio source between yt-dlp and InnerTube.
     ToggleSource,
+    /// Download quality: best (yt-dlp) or fast (the playback file).
+    ToggleDownload,
 
     NewPlaylist(Option<Track>),
     NameChanged(String),
@@ -368,6 +370,7 @@ impl Gui {
         gui.signed_in_screen = false;
         gui.config = Config::load();
         stream::use_source(gui.config.source);
+        stream::download_best(gui.config.download_best);
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(gui.volume);
@@ -820,6 +823,11 @@ impl Gui {
             }
             Message::SetTheme(i) => {
                 self.config.gui_theme = i % style::PALETTES.len();
+                self.config.save();
+            }
+            Message::ToggleDownload => {
+                self.config.download_best = !self.config.download_best;
+                stream::download_best(self.config.download_best);
                 self.config.save();
             }
             Message::ToggleSource => {

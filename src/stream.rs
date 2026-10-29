@@ -14,6 +14,13 @@ const RANGE: u64 = 4 << 20;
 /// Set from the "Audio source" setting (see [`crate::config::Source`]).
 static SOURCE: AtomicU8 = AtomicU8::new(0);
 
+/// Downloads in the best quality through yt-dlp (else the playback file); set from the settings.
+static DOWNLOAD_BEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn download_best(best: bool) {
+    DOWNLOAD_BEST.store(best, Ordering::Relaxed);
+}
+
 /// Which way songs are fetched; the apps call this with their setting.
 pub fn use_source(source: crate::config::Source) {
     use crate::config::Source;
@@ -67,7 +74,16 @@ pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<
         .unwrap_or_else(|| PathBuf::from("."));
     let dir = music.join("RymPlayer");
     tokio::fs::create_dir_all(&dir).await?;
-    let (_, path) = ytdlp(video_id, &dir.join(format!("{}.%(ext)s", file_name(artist, title)))).await?;
+    let name = file_name(artist, title);
+    if !DOWNLOAD_BEST.load(Ordering::Relaxed) {
+        // Fast: the same file playback uses (in seconds, about 160 kbps).
+        let src = fetch(video_id.to_string()).await?;
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");
+        let dest = dir.join(format!("{name}.{ext}"));
+        tokio::fs::copy(&src, &dest).await?;
+        return Ok(dest);
+    }
+    let (_, path) = ytdlp(video_id, &dir.join(format!("{name}.%(ext)s"))).await?;
     Ok(path)
 }
 

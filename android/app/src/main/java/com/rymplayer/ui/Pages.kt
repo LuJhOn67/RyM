@@ -139,6 +139,14 @@ fun LibraryPage(vm: AppViewModel) {
     LazyColumn(contentPadding = pagePadding) {
         item { Title("Library") }
         item {
+            LibraryRow(
+                "Download quality: " + if (vm.downloadBest) "Best" else "Fast",
+                if (vm.downloadBest) "yt-dlp with your account, 256 kbps for Premium, slower" else "About 160 kbps, in seconds · tap to change",
+                Brush.linearGradient(listOf(Color(0xFF8E44FF), Color(0xFF2878D0))),
+                Icons.Default.Download,
+            ) { vm.toggleDownloadQuality() }
+        }
+        item {
             LibraryRow("Downloads", "Saved on this phone, play without internet", Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
                 vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", "Downloads"))
             }

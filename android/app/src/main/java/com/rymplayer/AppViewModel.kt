@@ -197,10 +197,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Downloads in the best quality (yt-dlp, slow on a phone) instead of the playback file. */
+    var downloadBest by mutableStateOf(prefs.getBoolean("download_best", false))
+        private set
+
+    fun toggleDownloadQuality() {
+        downloadBest = !downloadBest
+        prefs.edit().putBoolean("download_best", downloadBest).apply()
+    }
+
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
     fun download(t: Track) = viewModelScope.launch {
         status = "Downloading \"${t.title}\"..."
-        status = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null)) }.fold({ "Saved to Music/RymPlayer" }, {
+        status = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }.fold({ "Saved to Music/RymPlayer" }, {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
             "Download failed: ${it.message ?: it.javaClass.simpleName}"
         })
