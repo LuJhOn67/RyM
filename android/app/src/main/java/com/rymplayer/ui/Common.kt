@@ -173,12 +173,12 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         SaveToPlaylist(vm, t) { pick = false; onDismiss() }
         return
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppColorsSheet) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppColorsSheet, contentColor = Color.White) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Cover(t.thumb, 48.dp, 120, 6.dp)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, color = Color.White)
                 Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
             }
         }
@@ -190,7 +190,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             ) {
                 Icon(icon, null, tint = Dim)
                 Spacer(Modifier.width(20.dp))
-                Text(label, fontSize = 15.sp)
+                Text(label, fontSize = 15.sp, color = Color.White)
             }
         }
         item("Start radio", Icons.Default.Radio) { vm.playRadio(t) }()
@@ -206,7 +206,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             ) {
                 Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, tint = Dim)
                 Spacer(Modifier.width(20.dp))
-                Text("Save to playlist", fontSize = 15.sp)
+                Text("Save to playlist", fontSize = 15.sp, color = Color.White)
             }
         }
         t.albumId?.let { id -> item("Go to album", Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
