@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rymplayer.data.Downloads
+import com.rymplayer.data.FeedMemory
 import com.rymplayer.data.LIKED_ID
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
@@ -137,6 +138,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openLink(t: Track) {
+        FeedMemory.opened(getApplication(), t)
         when (val l = t.link) {
             is Link.Playlist -> open(Screen.Songs(Screen.Kind.Playlist, l.id, t.title))
             is Link.Album -> open(Screen.Songs(Screen.Kind.Album, l.id, t.title))
@@ -150,10 +152,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (q.isNotEmpty()) open(Screen.Songs(Screen.Kind.Results, q, "Results for \"$q\""))
     }
 
+    /** When the feed was last fetched; coming back after half an hour fetches a fresh one. */
+    var homeLoadedAt = 0L
+        private set
+
+    fun refreshHomeIfOld() {
+        if (!homeLoading && System.currentTimeMillis() - homeLoadedAt > 30 * 60 * 1000L) loadHome()
+    }
+
     fun loadHome() {
         homeLoading = true
         viewModelScope.launch {
             home = runCatching { api.home() }.onFailure { status = it.message.orEmpty() }.getOrDefault(emptyList())
+                .let { FeedMemory.arrange(getApplication(), it) }
+            homeLoadedAt = System.currentTimeMillis()
             // Songs at the top start right away when tapped.
             com.rymplayer.playback.Streams.prefetchLinks(home.filter { it.link == null }.take(8).map { it.videoId })
             homeLoading = false
@@ -191,6 +203,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** One song, and YouTube Music's radio after it. */
     fun playRadio(t: Track) {
+        FeedMemory.opened(getApplication(), t)
         player.setQueue(listOf(t), 0)
         viewModelScope.launch {
             runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> player.append(radio.filter { it.videoId != t.videoId }) }

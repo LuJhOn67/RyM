@@ -83,6 +83,7 @@ fun Modifier.appear(key: Any, delayMs: Int = 0): Modifier {
     return graphicsLayer { alpha = k; translationY = (1 - k) * 40f }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun HomePage(vm: AppViewModel) {
     if (vm.home.isEmpty()) {
@@ -92,6 +93,9 @@ fun HomePage(vm: AppViewModel) {
         return
     }
     val sections = remember(vm.home) { vm.home.groupBy { it.album }.toList() }
+    LaunchedEffect(Unit) { vm.refreshHomeIfOld() }
+    // Pull down for a fresh feed.
+    androidx.compose.material3.pulltorefresh.PullToRefreshBox(isRefreshing = vm.homeLoading, onRefresh = vm::loadHome) {
     LazyColumn(contentPadding = pagePadding) {
         item { Title("For you", Modifier.padding(top = 8.dp)) }
         itemsIndexed(sections, key = { _, s -> s.first }) { i, (name, items) ->
@@ -102,6 +106,7 @@ fun HomePage(vm: AppViewModel) {
                 }
             }
         }
+    }
     }
 }
 

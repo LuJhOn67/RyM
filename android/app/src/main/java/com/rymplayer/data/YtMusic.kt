@@ -89,7 +89,8 @@ class YtMusic(private val cookie: String?) {
     suspend fun home(): List<Track> {
         val out = mutableListOf<Track>()
         var page = browse("FEmusic_home")
-        repeat(3) {
+        // More pages than one screen needs, so the feed can rotate (see FeedMemory).
+        repeat(6) {
             val list = page.at("contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer")
                 ?: page.at("continuationContents/sectionListContinuation") ?: return out
             for (shelf in list.at("contents").arr) {
