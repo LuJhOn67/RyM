@@ -350,7 +350,7 @@ impl Gui {
         let source_row = row![
             column![
                 line("Audio source", 15, SEMI, p.text),
-                line("yt-dlp: works reliably, Premium gets 256 kbps (needs yt-dlp and Node.js). InnerTube: straight from YouTube, no extra programs.", 13, FONT, p.dim)
+                line("InnerTube + yt-dlp: fast, and yt-dlp takes over when YouTube refuses. yt-dlp: slower start, Premium gets 256 kbps (needs yt-dlp and Node.js). InnerTube: straight from YouTube only.", 13, FONT, p.dim)
             ]
             .spacing(4)
             .width(Fill),

@@ -2,7 +2,7 @@
 //! gives ([`crate::innertube`]). No outside programs are needed.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -11,12 +11,13 @@ use tokio::io::AsyncWriteExt;
 /// Bytes asked for per request: YouTube slows down single requests for whole songs.
 const RANGE: u64 = 4 << 20;
 
-/// Set from the "Audio source" setting: InnerTube when true, yt-dlp otherwise.
-static INNERTUBE: AtomicBool = AtomicBool::new(false);
+/// Set from the "Audio source" setting (see [`crate::config::Source`]).
+static SOURCE: AtomicU8 = AtomicU8::new(0);
 
 /// Which way songs are fetched; the apps call this with their setting.
 pub fn use_source(source: crate::config::Source) {
-    INNERTUBE.store(source == crate::config::Source::InnerTube, Ordering::Relaxed);
+    use crate::config::Source;
+    SOURCE.store(match source { Source::Auto => 0, Source::YtDlp => 1, Source::InnerTube => 2 }, Ordering::Relaxed);
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -128,11 +129,17 @@ fn file_name(artist: &str, title: &str) -> String {
 }
 
 async fn download(video_id: &str, dir: &Path) -> Result<PathBuf> {
-    let (secs, path) = if INNERTUBE.load(Ordering::Relaxed) {
-        innertube(video_id, dir).await?
-    } else {
-        // yt-dlp with your account keeps up with YouTube (Premium: 256 kbps Opus).
-        ytdlp(video_id, &dir.join("%(id)s.%(ext)s")).await?
+    let out = dir.join("%(id)s.%(ext)s");
+    let (secs, path) = match SOURCE.load(Ordering::Relaxed) {
+        // yt-dlp with your account keeps up with YouTube (Premium: 256 kbps Opus), but takes
+        // 6-7 s per song to get the link.
+        1 => ytdlp(video_id, &out).await?,
+        2 => innertube(video_id, dir).await?,
+        // InnerTube first (about half a second), yt-dlp when YouTube refuses it.
+        _ => match innertube(video_id, dir).await {
+            Ok(found) => found,
+            Err(e) => ytdlp(video_id, &out).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?,
+        },
     };
     // WebM files don't carry their length; keep the one YouTube reported next to the cache.
     if let Some(secs) = secs {

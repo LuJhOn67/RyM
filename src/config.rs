@@ -51,6 +51,8 @@ pub struct Config {
 /// Where songs' audio comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Source {
+    /// InnerTube first (fast), yt-dlp when YouTube refuses it.
+    Auto,
     /// yt-dlp with your account: keeps up with YouTube, Premium gets 256 kbps. Needs yt-dlp and Node.js.
     YtDlp,
     /// YouTube's player API straight from the app, without yt-dlp.
@@ -60,6 +62,7 @@ pub enum Source {
 impl Source {
     pub fn label(self) -> &'static str {
         match self {
+            Source::Auto => "InnerTube + yt-dlp",
             Source::YtDlp => "yt-dlp",
             Source::InnerTube => "InnerTube",
         }
@@ -67,8 +70,9 @@ impl Source {
 
     pub fn next(self) -> Source {
         match self {
+            Source::Auto => Source::YtDlp,
             Source::YtDlp => Source::InnerTube,
-            Source::InnerTube => Source::YtDlp,
+            Source::InnerTube => Source::Auto,
         }
     }
 }
@@ -116,7 +120,7 @@ impl Default for Config {
             gui_tint: true,
             gui_icon: None,
             gui_renderer: Renderer::Vulkan,
-            source: Source::YtDlp,
+            source: Source::Auto,
         }
     }
 }

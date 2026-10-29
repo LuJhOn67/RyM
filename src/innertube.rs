@@ -41,6 +41,79 @@ const CLIENTS: &[Client] = &[
     },
 ];
 
+/// The visionOS app (Apple Vision Pro). YouTube currently answers it with direct links without
+/// the extra token the other app clients now need; NewPipe uses it for the same reason. Each song
+/// gets a fresh visitor id: reusing one for several songs got "Sign in to confirm you're not a bot".
+mod visionos {
+    pub const NAME: &str = "VISIONOS";
+    pub const VERSION: &str = "1.02";
+    pub const USER_AGENT: &str = "com.google.visionos.youtube/1.02(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; US)";
+    /// The phone version streams these links with a browser's user agent, which works.
+    pub const STREAM_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0";
+}
+
+fn visionos_context(visitor: Option<&str>) -> Value {
+    let mut client = json!({
+        "clientName": visionos::NAME,
+        "clientVersion": visionos::VERSION,
+        "clientScreen": "WATCH",
+        "platform": "MOBILE",
+        "deviceMake": "Apple",
+        "deviceModel": "RealityDevice14,1",
+        "osName": "visionOS",
+        "osVersion": "25.6.0.23O471",
+        "hl": "en",
+        "gl": "US",
+        "utcOffsetMinutes": 0
+    });
+    if let Some(v) = visitor {
+        client["visitorData"] = json!(v);
+    }
+    json!({ "client": client, "request": { "internalExperimentFlags": [], "useSsl": true }, "user": { "lockedSafetyMode": false } })
+}
+
+async fn visionos_post(url: &str, body: &Value) -> Result<Value> {
+    Ok(http()
+        .post(url)
+        .header("User-Agent", visionos::USER_AGENT)
+        .header("X-Goog-Api-Format-Version", "2")
+        .json(body)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?)
+}
+
+/// Random letters from YouTube's alphabet, for the playback nonce (`cpn`) and the `t` parameter.
+fn nonce(len: usize) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEED: AtomicU64 = AtomicU64::new(0);
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+    let mut x = now ^ SEED.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed) | 1;
+    (0..len)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            ALPHABET[(x % 64) as usize] as char
+        })
+        .collect()
+}
+
+async fn visionos_audio(video_id: &str) -> Result<Audio> {
+    let visitor_answer = visionos_post("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false", &json!({ "context": visionos_context(None) })).await?;
+    let visitor = visitor_answer["responseContext"]["visitorData"].as_str().ok_or_else(|| anyhow!("no visitor id"))?.to_string();
+    let cpn = nonce(16);
+    let body = json!({ "context": visionos_context(Some(&visitor)), "videoId": video_id, "cpn": cpn, "contentCheckOk": true, "racyCheckOk": true });
+    let url = format!("https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false&t={}&id={video_id}", nonce(12));
+    let mut a = pick(&visionos_post(&url, &body).await?, visionos::STREAM_AGENT)?;
+    a.url.push_str(&format!("&cpn={cpn}"));
+    a.client = format!("{} {}", visionos::NAME, visionos::VERSION);
+    Ok(a)
+}
+
 /// One audio-only stream of a song.
 #[derive(Debug, Clone)]
 pub struct Audio {
@@ -70,6 +143,12 @@ pub async fn audio(video_id: &str) -> Result<Audio> {
 /// Like [`audio`], without asking the clients in `skip` (their links didn't work).
 pub async fn audio_skipping(video_id: &str, skip: &[String]) -> Result<Audio> {
     let mut why = Vec::new();
+    if !skip.contains(&format!("{} {}", visionos::NAME, visionos::VERSION)) {
+        match visionos_audio(video_id).await {
+            Ok(a) => return Ok(a),
+            Err(e) => why.push(format!("{}: {e}", visionos::NAME)),
+        }
+    }
     for c in CLIENTS.iter().filter(|c| !skip.contains(&format!("{} {}", c.name, c.version))) {
         match player(c, video_id).await {
             Ok(a) => return Ok(a),
@@ -168,5 +247,26 @@ mod tests {
         println!("itag {} {} {} kbps, {:?} bytes, {:?} s", a.itag, a.ext, a.bitrate / 1000, a.size, a.seconds);
         let r = http().get(&a.url).header("User-Agent", a.user_agent).header("Range", "bytes=0-65535").send().await.unwrap();
         println!("first range: HTTP {}, {} bytes", r.status(), r.bytes().await.unwrap().len());
+    }
+}
+
+#[cfg(test)]
+mod visionos_tests {
+    use super::*;
+
+    #[test]
+    fn nonces_use_youtubes_alphabet() {
+        let (a, b) = (nonce(16), nonce(16));
+        assert_eq!((a.len(), nonce(12).len()), (16, 12));
+        assert_ne!(a, b, "two nonces in a row differ");
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'), "{a}");
+    }
+
+    #[test]
+    fn context_carries_the_visitor_id() {
+        let c = visionos_context(Some("VISITOR"));
+        assert_eq!(c["client"]["clientName"], "VISIONOS");
+        assert_eq!(c["client"]["visitorData"], "VISITOR");
+        assert!(visionos_context(None)["client"].get("visitorData").is_none());
     }
 }
