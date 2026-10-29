@@ -3,6 +3,7 @@
 
 mod cover;
 mod icons;
+mod lyrics_view;
 mod right_click;
 mod style;
 mod view;
@@ -148,6 +149,8 @@ pub enum Message {
     Next,
     Prev,
     Seek(f32),
+    /// Jump straight to a time (a clicked lyrics line).
+    SeekTo(f32),
     SeekDone,
     Volume(f32),
     Tick,
@@ -288,6 +291,8 @@ pub struct Gui {
     pub loading: bool,
     pub audio: Option<Audio>,
     pub pos: f32,
+    /// When `pos` was read, so the lyrics can move on by themselves until the next read.
+    pub pos_at: Instant,
     pub seeking: Option<f32>,
     pub volume: f32,
     pub radio_pending: bool,
@@ -364,6 +369,7 @@ impl Gui {
             loading: false,
             audio: None,
             pos: 0.0,
+            pos_at: Instant::now(),
             seeking: None,
             volume: 0.8,
             radio_pending: false,
@@ -538,8 +544,8 @@ impl Gui {
             .and_then(|l| lyrics::current_line(&l.synced, self.pos));
         if line != self.lyric_line {
             self.lyric_line = line;
+            // The lyrics widget animates itself; nothing else needs whole-window frames here.
             self.lyric_changed = Instant::now();
-            self.animate(450);
         }
     }
 
@@ -839,12 +845,17 @@ impl Gui {
                 }
             }
             Message::Seek(v) => self.seeking = Some(v),
+            Message::SeekTo(v) => {
+                self.seeking = Some(v);
+                return self.update(Message::SeekDone);
+            }
             Message::SeekDone => {
                 if let (Some(v), Some(a)) = (self.seeking.take(), &self.audio)
                     && a.is_loaded()
                 {
                     a.seek(v.min(self.duration() - 0.5).max(0.0));
                     self.pos = v;
+                    self.pos_at = Instant::now();
                 }
             }
             Message::Volume(v) => {
@@ -858,6 +869,7 @@ impl Gui {
                     return Task::none();
                 };
                 self.pos = a.position();
+                self.pos_at = Instant::now();
                 if !self.loading && a.finished() {
                     a.stop();
                     return self.next();
@@ -1028,6 +1040,7 @@ impl Gui {
             Message::Frame(now) => {
                 if let Some(a) = &self.audio {
                     self.pos = a.position();
+                self.pos_at = Instant::now();
                 }
                 self.track_lyrics();
                 if let Some(task) = self.bench_frame(now) {
@@ -1454,6 +1467,42 @@ mod shots {
                 gui.images.insert(url, t);
             }
         }
+    }
+
+    /// The lyrics page without network: `cargo test --bin RymPlayer-GUI lyrics_page -- --ignored`.
+    #[test]
+    #[ignore]
+    fn lyrics_page() {
+        let mut gui = Gui::empty();
+        gui.queue = vec![Track {
+            video_id: "x".into(),
+            title: "Night Drive".into(),
+            artist: "Some Artist".into(),
+            album: String::new(),
+            duration: "3:30".into(),
+            thumb: None,
+            album_id: None,
+            artist_id: None,
+            link: None,
+        }];
+        gui.current = Some(0);
+        gui.pos = 71.0;
+        gui.now_playing_open = true;
+        gui.tab = Tab::Lyrics;
+        gui.lyrics = Some(Lyrics {
+            synced: lyrics::parse_lrc(
+                "[00:52.00]\n[00:58.00]Under the neon, under the rain\n[01:04.00]Every street sings it again\n[01:10.00]I hear the city calling my name, a much longer line that has to wrap\n[01:16.00]يا ليل يا عين، قلبي معاك\n[01:22.00]Nothing ever feels the same\n[01:28.00]Hold on, hold on tonight\n[01:34.00]Hold on",
+            ),
+            plain: Vec::new(),
+            source: "LRCLIB".into(),
+        });
+        for theme in [3, 0] {
+            gui.config.gui_theme = theme;
+            shot(&gui, &format!("lyrics-glow-{theme}"));
+        }
+        gui.pos = 77.0;
+        gui.config.gui_theme = 3;
+        shot(&gui, "lyrics-glow-arabic");
     }
 
     /// Uses the signed-in session and real data; only counts are printed.

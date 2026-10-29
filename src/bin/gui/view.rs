@@ -7,7 +7,7 @@ use iced::widget::{
     slider, space, stack, text, text_input, tooltip,
 };
 use iced::{
-    Alignment, Background, Border, Color, Element, Fill, FillPortion, Font, Length, Shadow, font,
+    Alignment, Background, Border, Color, Element, Fill, FillPortion, Font, Length, font,
 };
 
 use rymplayer::api::{self, Link, Track};
@@ -873,74 +873,30 @@ impl Gui {
                 .style(style::scroll(p))
                 .into();
         }
-        // A window around the sung line keeps it in view without scrolling state. When the line
-        // changes, the window moves down one line and starts one line lower, then slides up.
-        let cur = lyrics::current_line(&l.synced, self.pos);
-        let k = ease(self.lyric_changed, 420.0);
-        let start = cur.unwrap_or(0).saturating_sub(3);
-        let slide = if cur.is_some_and(|c| c >= 3) {
-            (1.0 - k) * LYRIC_STEP
-        } else {
-            0.0
+        let (tint, _) = self.tint();
+        // The halo takes the cover's color when there is one.
+        let glow = match tint {
+            Some(t) if !p.light => mix(t, Color::WHITE, 0.25),
+            _ => p.accent,
         };
-        let mut col = Column::new().spacing(14).padding(iced::Padding {
-            top: 28.0 + slide,
-            right: 8.0,
-            bottom: 24.0,
-            left: 8.0,
-        });
-        let lit = if p.light { p.accent } else { p.text };
-        let faded = Color { a: 0.4, ..p.dim };
-        for (i, (_, s)) in l.synced.iter().enumerate().skip(start).take(16) {
-            let s = if s.is_empty() { "♪" } else { s.as_str() };
-            // The sung line grows, brightens and gets a soft accent glow; the previous line fades.
-            let (size, font, color) = match cur {
-                Some(c) if c == i => (19.0 + 5.0 * k, BOLD, mix(p.dim, lit, k)),
-                Some(c) if i + 1 == c => (24.0 - 5.0 * k, SEMI, mix(lit, faded, k)),
-                Some(c) if i < c => (19.0, SEMI, faded),
-                _ => (19.0, SEMI, p.dim),
-            };
-            let lyric = text(s)
-                .size(size)
-                .font(font)
-                .color(color)
-                .center()
-                .width(Fill);
-            let line: Element<'_, Message> = if cur == Some(i) {
-                container(lyric)
-                    .width(Fill)
-                    .padding([7, 14])
-                    .style(move |_| container::Style {
-                        background: Some(Background::Color(Color {
-                            a: 0.035 + 0.08 * k,
-                            ..p.accent
-                        })),
-                        border: Border {
-                            color: Color {
-                                a: 0.12 + 0.20 * k,
-                                ..p.accent
-                            },
-                            width: 1.0,
-                            radius: 14.0.into(),
-                        },
-                        shadow: Shadow {
-                            color: Color {
-                                a: 0.36 * k,
-                                ..p.accent
-                            },
-                            offset: iced::Vector::new(0.0, 0.0),
-                            blur_radius: 20.0 * k,
-                        },
-                        ..Default::default()
-                    })
-                    .into()
-            } else {
-                lyric.into()
-            };
-            col = col.push(line);
-        }
+        let colors = crate::lyrics_view::Colors {
+            lit: if p.light { p.accent } else { p.text },
+            dim: p.dim,
+            glow,
+            shine: if p.light { mix(p.accent, Color::WHITE, 0.6) } else { Color::WHITE },
+        };
+        let view = crate::lyrics_view::lyrics_view(
+            &l.synced,
+            self.pos,
+            self.pos_at,
+            self.is_playing(),
+            colors,
+            23.0,
+            BOLD,
+            Message::SeekTo,
+        );
         column![
-            container(col).height(Fill).clip(true),
+            container(view).height(Fill).padding([8, 0]),
             container(source).center_x(Fill)
         ]
         .into()
@@ -1214,8 +1170,6 @@ impl Gui {
     }
 }
 
-/// Height of one lyrics line plus the gap, for the slide.
-const LYRIC_STEP: f32 = 40.0;
 
 /// The song menu's rows. Only what RymPlayer can do is listed.
 fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {
