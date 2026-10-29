@@ -21,7 +21,8 @@ symphonia-adapter-libopus = "0.3"
 tao = "0.37.2"
 tokio = { version = "1.54.1", features = ["full"] }
 wry = "0.57.1"
-ytmapi-rs = "0.3.3"
+# The YouTube Music API library (its crates.io name is ytmapi-rs).
+music_api = { package = "ytmapi-rs", version = "0.3.3" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [profile.release]

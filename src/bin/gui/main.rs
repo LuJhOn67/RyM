@@ -1230,7 +1230,7 @@ mod shots {
         }
         gui.signed_in_screen = false;
         gui.config.gui_theme = 0;
-        shot(&gui, "ytm-login");
+        shot(&gui, "login");
     }
 }
 

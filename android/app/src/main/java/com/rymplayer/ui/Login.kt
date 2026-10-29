@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.rymplayer.AppViewModel
-import com.rymplayer.data.YtMusic
+import com.rymplayer.data.MusicApi
 
 private const val SIGN_IN = "https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue=https%3A%2F%2Fmusic.youtube.com%2F"
 
@@ -78,8 +78,8 @@ private fun SignInWeb(onDone: (String) -> Unit) {
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
-                        if (!url.startsWith(YtMusic.ORIGIN)) return
-                        val cookie = CookieManager.getInstance().getCookie(YtMusic.ORIGIN) ?: return
+                        if (!url.startsWith(MusicApi.ORIGIN)) return
+                        val cookie = CookieManager.getInstance().getCookie(MusicApi.ORIGIN) ?: return
                         if ("SAPISID=" in cookie && "LOGIN_INFO=" in cookie) onDone(cookie)
                     }
                 }

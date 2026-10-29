@@ -19,7 +19,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.rymplayer.data.Downloads
 import com.rymplayer.data.Track
-import com.rymplayer.data.YtMusic
+import com.rymplayer.data.MusicApi
 import com.rymplayer.data.parseDuration
 import com.rymplayer.data.thumbSized
 import kotlinx.coroutines.CompletableDeferred
@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
  * background and shows the media notification); this drives it through a [MediaController].
  */
 class Player(private val context: Context, private val scope: CoroutineScope) {
-    lateinit var api: YtMusic
+    lateinit var api: MusicApi
     var onTrackChanged: (Track?) -> Unit = {}
 
     val queue = mutableStateListOf<Track>()

@@ -12,7 +12,7 @@ class LiveApiTest {
     @Test
     fun browseAndLyrics() = runBlocking {
         assumeTrue(System.getenv("RYM_LIVE") != null && cookieFile.exists())
-        val api = YtMusic(cookieFile.readText().trim())
+        val api = MusicApi(cookieFile.readText().trim())
         val home = api.home()
         println("home: ${home.size} items, sections ${home.map { it.album }.distinct().size}, songs ${home.count { it.link == null }}")
         println("playlists: ${api.libraryPlaylists().size}")
@@ -27,6 +27,6 @@ class LiveApiTest {
         first.artistId?.let { println("artist: ${api.artist(it).size}") }
         val synced = Lrclib.find(first.title, first.artist, first.album, parseDuration(first.duration))
         println("lrclib: ${synced?.synced?.size} synced lines")
-        println("ytm lyrics: ${api.lyrics(first.videoId)?.plain?.size} lines")
+        println("YouTube Music lyrics: ${api.lyrics(first.videoId)?.plain?.size} lines")
     }
 }

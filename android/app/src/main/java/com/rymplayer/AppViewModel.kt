@@ -17,7 +17,7 @@ import com.rymplayer.data.Lyrics
 import com.rymplayer.data.Playlist
 import com.rymplayer.data.SignedOutException
 import com.rymplayer.data.Track
-import com.rymplayer.data.YtMusic
+import com.rymplayer.data.MusicApi
 import com.rymplayer.data.parseDuration
 import com.rymplayer.playback.Player
 import kotlinx.coroutines.Job
@@ -40,7 +40,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     var signedIn by mutableStateOf<Boolean?>(null)
         private set
-    var api: YtMusic = YtMusic(null)
+    var api: MusicApi = MusicApi(null)
         private set
     var status by mutableStateOf("")
 
@@ -80,7 +80,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun start(cookie: String?) {
         prefs.edit().apply { if (cookie != null) putString("cookie", cookie) else remove("cookie") }.apply()
-        api = YtMusic(cookie)
+        api = MusicApi(cookie)
         com.rymplayer.playback.Streams.cookie = cookie
         signedIn = cookie != null
         player.api = api
@@ -108,7 +108,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // Forget the sign-in page's Google session too, so the next sign-in can pick another account.
         android.webkit.CookieManager.getInstance().removeAllCookies(null)
         player.stop()
-        api = YtMusic(null)
+        api = MusicApi(null)
         signedIn = false
         playlists = emptyList()
         liked.clear()
@@ -233,7 +233,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val like = t.videoId !in liked
         if (like) liked += t.videoId else liked -= t.videoId
         viewModelScope.launch {
-            runCatching { api.rate(t.videoId, if (like) YtMusic.Rating.Like else YtMusic.Rating.None) }.onFailure {
+            runCatching { api.rate(t.videoId, if (like) MusicApi.Rating.Like else MusicApi.Rating.None) }.onFailure {
                 if (like) liked -= t.videoId else liked += t.videoId
                 status = "Couldn't save the like"
             }

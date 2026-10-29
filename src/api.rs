@@ -1,18 +1,18 @@
-//! Thin wrapper over ytmapi-rs that hides the auth type and flattens results.
+//! Thin wrapper over the YouTube Music API library (music_api) that hides the auth type and flattens results.
 
 use std::fmt;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use ytmapi_rs::YtMusic;
-use ytmapi_rs::auth::BrowserToken;
-use ytmapi_rs::auth::noauth::NoAuthToken;
+use music_api::YtMusic as Client;
+use music_api::auth::BrowserToken;
+use music_api::auth::noauth::NoAuthToken;
 use serde_json::Value;
-use ytmapi_rs::auth::AuthToken;
-use ytmapi_rs::common::{AlbumID, ArtistChannelID, LikeStatus, PlaylistID, Thumbnail, VideoID, YoutubeID};
-use ytmapi_rs::parse::{HistoryItem, ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
-use ytmapi_rs::query::playlist::{CreatePlaylistQuery, PrivacyStatus};
-use ytmapi_rs::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMethod, PostQuery, Query};
+use music_api::auth::AuthToken;
+use music_api::common::{AlbumID, ArtistChannelID, LikeStatus, PlaylistID, Thumbnail, VideoID, YoutubeID};
+use music_api::parse::{HistoryItem, ParseFrom, PlaylistItem, ProcessedResult, WatchPlaylistTrack};
+use music_api::query::playlist::{CreatePlaylistQuery, PrivacyStatus};
+use music_api::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMethod, PostQuery, Query};
 
 /// Liked Music is a regular playlist with a fixed id.
 pub const LIKED_ID: &str = "LM";
@@ -50,8 +50,8 @@ pub struct Playlist {
 
 #[derive(Clone)]
 pub enum Api {
-    Guest(Arc<YtMusic<NoAuthToken>>),
-    User(Arc<YtMusic<BrowserToken>>),
+    Guest(Arc<Client<NoAuthToken>>),
+    User(Arc<Client<BrowserToken>>),
 }
 
 impl fmt::Debug for Api {
@@ -66,11 +66,11 @@ fn err(e: impl fmt::Debug) -> anyhow::Error {
 
 impl Api {
     pub async fn guest() -> Result<Api> {
-        Ok(Api::Guest(Arc::new(YtMusic::new_unauthenticated().await.map_err(err)?)))
+        Ok(Api::Guest(Arc::new(Client::new_unauthenticated().await.map_err(err)?)))
     }
 
     pub async fn with_cookie(cookie: String) -> Result<Api> {
-        Ok(Api::User(Arc::new(YtMusic::from_cookie(cookie.trim()).await.map_err(err)?)))
+        Ok(Api::User(Arc::new(Client::from_cookie(cookie.trim()).await.map_err(err)?)))
     }
 
     pub fn logged_in(&self) -> bool {
@@ -99,7 +99,7 @@ impl Api {
             .collect())
     }
 
-    /// Parsed by hand: ytmapi-rs fails the whole list when one playlist lacks a subtitle field.
+    /// Parsed by hand: the library fails the whole list when one playlist lacks a subtitle field.
     pub async fn library_playlists(self) -> Result<Vec<Playlist>> {
         let Api::User(y) = &self else { return Ok(Vec::new()) };
         let raw = y.raw_json_query(GetLibraryPlaylistsQuery).await.map_err(err)?;
@@ -131,7 +131,7 @@ impl Api {
     }
 
     pub async fn playlist_tracks(self, id: String) -> Result<Vec<Track>> {
-        // ytmapi-rs sends the id as the browseId, which needs the "VL" prefix.
+        // The library sends the id as the browseId, which needs the "VL" prefix.
         let id = if id.starts_with("VL") { id } else { format!("VL{id}") };
         let pid = PlaylistID::from_raw(id);
         let items = match &self {
@@ -324,7 +324,7 @@ impl Api {
             Api::Guest(y) => y.get_lyrics(id).await,
             Api::User(y) => y.get_lyrics(id).await,
         };
-        Ok(l.ok().and_then(|l| crate::lyrics::from_ytm(&l.lyrics, &l.source)))
+        Ok(l.ok().and_then(|l| crate::lyrics::from_youtube_music(&l.lyrics, &l.source)))
     }
 
     /// An artist's top songs.
@@ -475,7 +475,7 @@ fn home_item(item: &Value, section: &str) -> Option<Track> {
     })
 }
 
-/// The YouTube Music home feed ("Quick picks", mixes...). Not in ytmapi-rs, so it's a custom
+/// The YouTube Music home feed ("Quick picks", mixes...). Not in the library, so it's a custom
 /// query read with `raw_json_query`; the parsed output is unused.
 #[derive(Debug)]
 struct HomeQuery {
@@ -486,7 +486,7 @@ struct HomeQuery {
 struct Unparsed;
 
 impl ParseFrom<HomeQuery> for Unparsed {
-    fn parse_from(_: ProcessedResult<HomeQuery>) -> ytmapi_rs::Result<Self> {
+    fn parse_from(_: ProcessedResult<HomeQuery>) -> music_api::Result<Self> {
         Ok(Unparsed)
     }
 }

@@ -14,7 +14,7 @@ use wry::{PageLoadEvent, WebContext, WebViewBuilder};
 
 const SIGN_IN: &str = "https://accounts.google.com/ServiceLogin?service=youtube&passive=true\
 &continue=https%3A%2F%2Fmusic.youtube.com%2F";
-const YTM: &str = "https://music.youtube.com/";
+const MUSIC: &str = "https://music.youtube.com/";
 
 /// WebView2 normally takes part in Google's device-bound sessions: the cookies only live a few
 /// minutes and only this window could renew them, so a copied session dies right after sign-in.
@@ -67,7 +67,7 @@ pub fn run() -> ! {
                 if !loaded.get().is_some_and(|t| t.elapsed() >= SETTLE) {
                     return;
                 }
-                let Ok(cookies) = webview.cookies_for_url(YTM) else { return };
+                let Ok(cookies) = webview.cookies_for_url(MUSIC) else { return };
                 let names: Vec<&str> = cookies.iter().map(|c| c.name()).collect();
                 if !signed_in(&names) {
                     return;

@@ -1024,15 +1024,15 @@ mod lyrics_probe {
 }
 
 #[cfg(test)]
-mod ytm_lyrics_probe {
+mod music_lyrics_probe {
     use super::*;
 
     #[tokio::test]
     #[ignore]
-    async fn ytm_lyrics_fallback() {
+    async fn music_lyrics_fallback() {
         let api = Api::guest().await.unwrap();
         let l = api.lyrics("lYBUbBu4W08".into()).await.unwrap();
-        println!("ytm lyrics: {:?}", l.map(|l| (l.source, l.plain.len())));
+        println!("YouTube Music lyrics: {:?}", l.map(|l| (l.source, l.plain.len())));
     }
 }
 

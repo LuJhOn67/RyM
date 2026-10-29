@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  * YouTube Music's web API, signed in with the user's own browser session (the same requests the
  * music.youtube.com website makes). Without a cookie it works as a guest.
  */
-class YtMusic(private val cookie: String?) {
+class MusicApi(private val cookie: String?) {
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
     private val json = Json { ignoreUnknownKeys = true }
     @Volatile private var clientVersion: String? = null

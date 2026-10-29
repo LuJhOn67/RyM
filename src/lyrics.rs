@@ -138,7 +138,7 @@ fn best_hit(hits: Vec<LrcLibEntry>, duration: Option<f32>) -> Option<Lyrics> {
 }
 
 /// Lyrics YouTube Music shows itself (plain text, no timing).
-pub fn from_ytm(text: &str, source: &str) -> Option<Lyrics> {
+pub fn from_youtube_music(text: &str, source: &str) -> Option<Lyrics> {
     let plain: Vec<String> = text.lines().map(String::from).collect();
     let source = if source.is_empty() { "YouTube Music".to_string() } else { source.replace("Source: ", "") };
     let l = Lyrics { synced: Vec::new(), plain, source };
