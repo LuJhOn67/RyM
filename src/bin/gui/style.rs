@@ -25,6 +25,8 @@ pub struct Palette {
     pub input_bg: Color,
     pub divider: Color,
     pub menu: Color,
+    /// Glow around the sung lyrics line; the cover's color when unset.
+    pub glow: Option<Color>,
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
@@ -54,6 +56,7 @@ const fn light(name: &'static str, accent: Color, bg: Color, selected: Color) ->
         input_bg: rgba(0, 20, 60, 0.06),
         divider: rgba(0, 0, 0, 0.07),
         menu: rgb(255, 255, 255),
+        glow: None,
     }
 }
 
@@ -93,6 +96,7 @@ pub const PALETTES: [Palette; 6] = [
         input_bg: rgba(255, 255, 255, 0.07),
         divider: rgba(255, 255, 255, 0.07),
         menu: rgb(30, 38, 50),
+        glow: None,
     },
     Palette {
         name: "YouTube Music",
@@ -111,6 +115,7 @@ pub const PALETTES: [Palette; 6] = [
         input_bg: rgba(255, 255, 255, 0.10),
         divider: rgba(255, 255, 255, 0.10),
         menu: rgb(58, 52, 49),
+        glow: None,
     },
     Palette {
         name: "Spotify",
@@ -129,12 +134,43 @@ pub const PALETTES: [Palette; 6] = [
         input_bg: rgb(36, 36, 36),
         divider: rgb(40, 40, 40),
         menu: rgb(40, 40, 40),
+        glow: None,
     },
 ];
 
-pub fn palette(i: usize) -> Palette {
-    PALETTES[i % PALETTES.len()]
+/// A theme from a CSS file: its variables over the built-in light or dark theme.
+pub fn from_css(t: &rymplayer::theme_css::CssTheme) -> Palette {
+    let light = t.is_light().unwrap_or(false);
+    let mut p = if light { PALETTES[0] } else { PALETTES[3] };
+    // Names live as long as the app; themes are loaded a handful of times at most.
+    p.name = Box::leak(t.name.clone().into_boxed_str());
+    p.light = light;
+    let c = |k: &str| t.color(k).map(|[r, g, b, a]| Color { r, g, b, a });
+    for (key, field) in [
+        ("--bg", &mut p.bg),
+        ("--surface", &mut p.surface),
+        ("--bar", &mut p.bar),
+        ("--hover", &mut p.hover),
+        ("--selected", &mut p.selected),
+        ("--text", &mut p.text),
+        ("--dim", &mut p.dim),
+        ("--accent", &mut p.accent),
+        ("--input-bg", &mut p.input_bg),
+        ("--divider", &mut p.divider),
+        ("--menu", &mut p.menu),
+    ] {
+        if let Some(v) = c(key) {
+            *field = v;
+        }
+    }
+    // Big buttons follow the accent unless set.
+    p.pill_bg = c("--pill-bg").unwrap_or(p.accent);
+    p.pill_text = c("--pill-text").unwrap_or(if light { Color::WHITE } else { p.bg });
+    p.panel_radius = t.number("--radius").unwrap_or(p.panel_radius);
+    p.glow = c("--lyrics-glow");
+    p
 }
+
 
 pub fn theme(p: Palette) -> Theme {
     Theme::custom(

@@ -166,6 +166,9 @@ pub enum Message {
     /// Open the player page on its lyrics (or close it if it's already showing them).
     ShowLyrics,
     SetTheme(usize),
+    /// Read the CSS theme files again.
+    ReloadThemes,
+    OpenThemes,
     ToggleTint,
     ToggleGpu,
 
@@ -278,6 +281,8 @@ pub struct Gui {
     pub status: String,
     pub api: Option<Api>,
     pub config: Config,
+    /// Themes from CSS files, after the built-in ones.
+    pub custom_themes: Vec<style::Palette>,
 
     pub page: Page,
     pub page_title: String,
@@ -358,6 +363,7 @@ impl Gui {
             status: String::new(),
             api: None,
             config: Config::default(),
+            custom_themes: Vec::new(),
             page: Page::Home,
             page_title: "For you".into(),
             tracks: Vec::new(),
@@ -405,6 +411,7 @@ impl Gui {
         let mut gui = Gui::empty();
         gui.signed_in_screen = false;
         gui.config = Config::load();
+        gui.custom_themes = rymplayer::theme_css::load_all().iter().map(style::from_css).collect();
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(gui.volume);
@@ -433,8 +440,14 @@ impl Gui {
         }
     }
 
+    /// Built-in themes, then the ones from CSS files.
+    pub fn themes(&self) -> Vec<style::Palette> {
+        style::PALETTES.iter().copied().chain(self.custom_themes.iter().copied()).collect()
+    }
+
     pub fn palette(&self) -> style::Palette {
-        style::palette(self.config.gui_theme)
+        let all = self.themes();
+        all[self.config.gui_theme % all.len()]
     }
 
     fn theme(&self) -> Theme {
@@ -961,8 +974,19 @@ impl Gui {
                 self.animate(400);
             }
             Message::SetTheme(i) => {
-                self.config.gui_theme = i % style::PALETTES.len();
+                self.config.gui_theme = i % self.themes().len();
                 self.config.save();
+            }
+            Message::ReloadThemes => {
+                self.custom_themes = rymplayer::theme_css::load_all().iter().map(style::from_css).collect();
+                self.status = format!("{} themes from CSS files", self.custom_themes.len());
+            }
+            Message::OpenThemes => {
+                rymplayer::theme_css::ensure_example();
+                let dir = rymplayer::theme_css::themes_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
+                let _ = std::process::Command::new(opener).arg(dir).spawn();
             }
             Message::ToggleGpu => {
                 self.config.gui_renderer = self.config.gui_renderer.next();
@@ -1950,5 +1974,21 @@ mod ram_parts {
         step("first frame drawn");
         sim.snapshot(&gui.theme()).unwrap();
         step("second frame");
+    }
+}
+
+#[cfg(test)]
+mod css_theme_tests {
+    use super::*;
+
+    #[test]
+    fn css_theme_shows_up_and_applies() {
+        let css = rymplayer::theme_css::parse(":root { --name: Test; --accent: #ff0000; --bg: #ffffff; }", "x");
+        let mut g = Gui::empty();
+        g.custom_themes = vec![style::from_css(&css)];
+        assert_eq!(g.themes().len(), style::PALETTES.len() + 1);
+        g.config.gui_theme = style::PALETTES.len();
+        let p = g.palette();
+        assert_eq!((p.name, p.light, p.accent, p.pill_bg), ("Test", true, Color::from_rgb(1.0, 0.0, 0.0), Color::from_rgb(1.0, 0.0, 0.0)));
     }
 }

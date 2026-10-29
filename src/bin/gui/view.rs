@@ -499,11 +499,13 @@ impl Gui {
                 .height(34)
                 .style(style::card_bg(c, 6.0))
         };
-        let themes: Vec<Element<'_, Message>> = style::PALETTES
-            .iter()
+        let all = self.themes();
+        let count = all.len();
+        let themes: Vec<Element<'_, Message>> = all
+            .into_iter()
             .enumerate()
             .map(|(i, t)| {
-                let active = i == self.config.gui_theme % style::PALETTES.len();
+                let active = i == self.config.gui_theme % count;
                 let preview = row![swatch(t.bg), swatch(t.surface), swatch(t.accent)].spacing(6);
                 let label =
                     row![line(t.name, 14, SEMI, p.text), space().width(Fill)].push(if active {
@@ -597,6 +599,13 @@ impl Gui {
         let col = column![
             heading("Theme", p),
             self.grid(themes),
+            row![
+                button(line("Open themes folder", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::OpenThemes),
+                button(line("Reload themes", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::ReloadThemes),
+                line("Themes are CSS files: copy rose-night.css, change its colors, then Reload.", 13, FONT, p.dim),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
             space().height(8),
             heading("Look", p),
             tint_row,
@@ -875,8 +884,9 @@ impl Gui {
         }
         let (tint, _) = self.tint();
         // The halo takes the cover's color when there is one.
-        let glow = match tint {
-            Some(t) if !p.light => mix(t, Color::WHITE, 0.25),
+        let glow = match (p.glow, tint) {
+            (Some(g), _) => g,
+            (None, Some(t)) if !p.light => mix(t, Color::WHITE, 0.25),
             _ => p.accent,
         };
         let colors = crate::lyrics_view::Colors {

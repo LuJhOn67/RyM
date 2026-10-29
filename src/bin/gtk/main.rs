@@ -14,6 +14,7 @@ use gtk::{
 use rymplayer::api::{Api, Link, Track};
 use rymplayer::audio::{self, Audio, PreparedAudio};
 use rymplayer::lyrics::Lyrics;
+use rymplayer::theme_css::CssTheme;
 use rymplayer::{cookie_path, login, parse_duration, stream, ytdlp_cookie_path};
 
 const APP_ID: &str = "com.rymplayer.GtkPlayer";
@@ -37,7 +38,7 @@ button { color: #e8f2ec; background: #252d29; border: 1px solid #35423b; border-
 button:hover { background: #303b35; border-color: #607267; }
 button.accent { color: #101312; background: @ACCENT@; border-color: @ACCENT@; font-weight: 800; }
 button.accent:hover { background: @ACCENT_HOVER@; }
-button.track-row { text-align: left; background: #191f1c; border-color: transparent; padding: 10px 12px; }
+button.track-row { background: #191f1c; border-color: transparent; padding: 10px 12px; }
 button.track-row:hover { background: #242d28; }
 button.track-row.selected { background: @STATUS@; border-color: @ACCENT@; }
 .track-title { color: #f1f6f2; font-size: 14px; font-weight: 700; }
@@ -183,7 +184,56 @@ fn configure_gtk_runtime() {
     }
 }
 
-fn theme_style(index: usize) -> String {
+/// Built-in themes come first in the picker, then the CSS files from the themes folder.
+fn theme_style(index: usize, custom: &[CssTheme]) -> String {
+    match index.checked_sub(THEMES.len()).and_then(|i| custom.get(i)) {
+        Some(theme) => css_file_style(theme),
+        None => builtin_style(index),
+    }
+}
+
+/// A CSS file's variables painted over the default look, then the file's own GTK rules.
+fn css_file_style(t: &CssTheme) -> String {
+    use rymplayer::theme_css::to_css;
+    let get = |k: &str, or: &str| t.color(k).map(to_css).unwrap_or_else(|| or.to_string());
+    let accent = get("--accent", THEMES[0].accent);
+    let lighter = t
+        .color("--accent")
+        .map(|[r, g, b, a]| to_css([r + (1.0 - r) * 0.3, g + (1.0 - g) * 0.3, b + (1.0 - b) * 0.3, a]))
+        .unwrap_or_else(|| THEMES[0].accent_hover.to_string());
+    let bg = get("--bg", "#101312");
+    let surface = get("--surface", "#171c1a");
+    let text = get("--text", "#edf4f0");
+    let dim = get("--dim", "#9daaa3");
+    let input = get("--input-bg", "#202724");
+    let divider = get("--divider", "#29332e");
+    let hover = get("--hover", "#242d28");
+    let selected = get("--selected", "#24382c");
+    let pill_text = get("--pill-text", "#101312");
+    let radius = t.number("--radius").map(|r| format!("border-radius: {r}px;")).unwrap_or_default();
+    let base = STYLE
+        .replace("@ACCENT@", &accent)
+        .replace("@ACCENT_HOVER@", &lighter)
+        .replace("@STATUS@", &selected)
+        .replace("@ACCENT_DARK@", &divider);
+    format!(
+        "{base}
+window, .rym-shell, .rym-titlebar {{ background: {bg}; color: {text}; }}
+.topbar, .card {{ background: {surface}; border-color: {divider}; {radius} }}
+.brand, .section-title, .track-title, .current-title {{ color: {text}; }}
+.muted, .track-subtitle, .current-artist, .lyric-line {{ color: {dim}; }}
+entry, .theme-picker {{ background: {input}; color: {text}; border-color: {divider}; }}
+button {{ color: {text}; background: {input}; border-color: {divider}; }}
+button:hover, button.track-row:hover {{ background: {hover}; }}
+button.track-row {{ background: {surface}; }}
+button.accent {{ color: {pill_text}; }}
+.lyric-current {{ color: {text}; }}
+{}",
+        t.rules
+    )
+}
+
+fn builtin_style(index: usize) -> String {
     let theme = THEMES[index.min(THEMES.len() - 1)];
     STYLE
         .replace("@ACCENT@", theme.accent)
@@ -194,7 +244,7 @@ fn theme_style(index: usize) -> String {
 
 fn install_style() -> CssProvider {
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(&theme_style(0));
+    provider.load_from_data(&builtin_style(0));
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
@@ -314,6 +364,10 @@ fn build_window(app: &Application) {
     for theme in THEMES {
         theme_picker.append_text(theme.name);
     }
+    let custom_themes = rymplayer::theme_css::load_all();
+    for theme in &custom_themes {
+        theme_picker.append_text(&theme.name);
+    }
     theme_picker.set_active(Some(0));
     let topbar = gtk::Box::new(Orientation::Horizontal, 12);
     topbar.add_css_class("topbar");
@@ -431,7 +485,7 @@ fn build_window(app: &Application) {
         theme_picker.connect_changed(move |picker| {
             let index = picker.active().unwrap_or(0) as usize;
             if let Ok(state) = ui.try_borrow_mut() {
-                state.provider.load_from_data(&theme_style(index));
+                state.provider.load_from_data(&theme_style(index, &custom_themes));
             }
         });
     }
@@ -1027,4 +1081,27 @@ fn child_at(container: &gtk::Box, index: usize) -> Option<gtk::Widget> {
 fn fmt_time(secs: f32) -> String {
     let total = secs.max(0.0) as u32;
     format!("{}:{:02}", total / 60, total % 60)
+}
+
+#[cfg(test)]
+mod css_tests {
+    use super::*;
+
+    /// GTK parses every built-in theme and a CSS-file theme without complaints (no window opens).
+    #[test]
+    fn styles_parse() {
+        gtk::init().expect("gtk");
+        let file = rymplayer::theme_css::parse(
+            ":root { --accent: #ff7aa8; --bg: #120d10; --hover: rgba(255, 255, 255, 0.06); --radius: 4; } button.accent { border-radius: 999px; }",
+            "test",
+        );
+        let errors = Rc::new(RefCell::new(Vec::new()));
+        for css in (0..THEMES.len()).map(builtin_style).chain([css_file_style(&file)]) {
+            let provider = CssProvider::new();
+            let e = errors.clone();
+            provider.connect_parsing_error(move |_, section, err| e.borrow_mut().push(format!("{err} at {section}")));
+            provider.load_from_data(&css);
+        }
+        assert!(errors.borrow().is_empty(), "{:?}", errors.borrow());
+    }
 }

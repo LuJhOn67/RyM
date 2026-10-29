@@ -8,6 +8,7 @@ pub mod innertube;
 pub mod login;
 pub mod lyrics;
 pub mod stream;
+pub mod theme_css;
 
 use std::path::PathBuf;
 
