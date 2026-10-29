@@ -19,6 +19,7 @@ import com.rymplayer.data.Track
 import com.rymplayer.data.YtMusic
 import com.rymplayer.data.parseDuration
 import com.rymplayer.playback.Player
+import com.rymplayer.ui.AppColors
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -65,6 +66,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lyricsJob: Job? = null
 
     init {
+        prefs.getString("theme_css", null)?.let { AppColors.apply(it, prefs.getString("theme_name", null) ?: "Custom") }
         val cookie = prefs.getString("cookie", null)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
@@ -95,6 +97,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun guest() = start(null).also { signedIn = true }
+
+    /** A theme file the user picked (the same CSS files the PC version uses). */
+    fun importTheme(css: String, fileName: String) {
+        val name = fileName.substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
+        if (AppColors.apply(css, name)) {
+            prefs.edit().putString("theme_css", css).putString("theme_name", name).apply()
+            status = "Theme: ${AppColors.name}"
+        } else {
+            status = "No colors found in that file"
+        }
+    }
+
+    fun resetTheme() {
+        AppColors.reset()
+        prefs.edit().remove("theme_css").remove("theme_name").apply()
+    }
 
     fun signOut() {
         prefs.edit().remove("cookie").apply()

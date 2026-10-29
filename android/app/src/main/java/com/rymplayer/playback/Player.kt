@@ -59,6 +59,8 @@ class Player(context: Context, private val scope: CoroutineScope) {
     private var loadJob: Job? = null
 
     init {
+        QueueBridge.next = { next() }
+        QueueBridge.prev = { prev() }
         controllerFuture.addListener({
             runCatching { controllerFuture.get() }
                 .onSuccess { c ->
@@ -209,6 +211,8 @@ class Player(context: Context, private val scope: CoroutineScope) {
 
     /** Unbind the UI controller while letting the media service keep playing in the background. */
     fun release() {
+        QueueBridge.next = null
+        QueueBridge.prev = null
         loadJob?.cancel()
         ticker?.cancel()
         MediaController.releaseFuture(controllerFuture)

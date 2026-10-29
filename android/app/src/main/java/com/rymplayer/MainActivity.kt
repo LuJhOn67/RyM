@@ -103,11 +103,11 @@ private fun Main(vm: AppViewModel) {
     val tint = coverColor(vm.player.current?.thumb)
     Box(Modifier.fillMaxSize()) {
         Scaffold(
-            containerColor = Color(0xFF0B0B0D),
+            containerColor = com.rymplayer.ui.AppColors.bg,
             bottomBar = {
                 Column {
                     MiniPlayer(vm, tint)
-                    NavigationBar(containerColor = Color(0xFF111114)) {
+                    NavigationBar(containerColor = com.rymplayer.ui.AppColors.bar) {
                         val tabs = listOf(Triple(Screen.Home, "Home", Icons.Default.Home), Triple(Screen.Search, "Search", Icons.Default.Search), Triple(Screen.Library, "Library", Icons.Default.LibraryMusic))
                         for ((screen, label, icon) in tabs) {
                             NavigationBarItem(vm.tab == screen && vm.stack.isEmpty(), { vm.selectTab(screen) }, { Icon(icon, label) }, label = { Text(label) })

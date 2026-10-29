@@ -1,5 +1,9 @@
 package com.rymplayer.ui
 
+import androidx.compose.foundation.combinedClickable
+
+import androidx.compose.material.icons.filled.Palette
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -152,8 +156,24 @@ fun LibraryPage(vm: AppViewModel) {
     val audioPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.openLocalMusic() else vm.status = "Allow audio access to show music on this device"
     }
+    val themeFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val css = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }.getOrNull()
+            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "Custom"
+            if (css != null) vm.importTheme(css, name) else vm.status = "Couldn't read that file"
+        }
+    }
     LazyColumn(contentPadding = pagePadding) {
         item { Title("Library") }
+        item {
+            LibraryRow(
+                "Theme",
+                AppColors.name?.let { "$it · tap to pick another, hold for the default" } ?: "Pick a .css theme file",
+                Brush.linearGradient(listOf(Accent, AppColors.raised)),
+                Icons.Default.Palette,
+                onLongClick = vm::resetTheme,
+            ) { themeFile.launch(arrayOf("text/css", "text/plain", "application/octet-stream", "*/*")) }
+        }
         item {
             LibraryRow("On this device", "Music saved on your phone", Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.LibraryMusic) {
                 if (LocalMusic.hasPermission(context)) vm.openLocalMusic()
@@ -194,9 +214,17 @@ fun LibraryPage(vm: AppViewModel) {
     if (naming) NewPlaylist({ naming = false }) { vm.createPlaylist(it, null); naming = false }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun LibraryRow(title: String, sub: String, brush: Brush, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun LibraryRow(
+    title: String,
+    sub: String,
+    brush: Brush,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(brush), contentAlignment = Alignment.Center) {
             Icon(icon, null, tint = Color.White)
         }
@@ -228,7 +256,7 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
                         Spacer(Modifier.width(6.dp))
                         Text("Play")
                     }
-                    OutlinedButton({ vm.playFrom(songs.shuffled(), 0) }, enabled = songs.isNotEmpty(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) {
+                    OutlinedButton({ vm.playFrom(songs.shuffled(), 0) }, enabled = songs.isNotEmpty(), colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.text)) {
                         Icon(Icons.Default.Shuffle, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Shuffle")
