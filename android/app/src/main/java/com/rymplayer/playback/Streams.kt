@@ -235,31 +235,84 @@ object Streams {
         else -> OkDownloader.UA
     }
 
-    /** Writes the link to `file` in ranges, like the PC version. */
+    /** Piece size, and how many pieces are fetched at once: YouTube limits each connection's speed. */
+    private const val PIECE = 1L shl 20
+    private const val PARALLEL = 4
+
+    /** Writes the link to `file`: the first piece tells the size, the rest come over 4 connections at once. */
     internal fun save(url: String, userAgent: String, file: File) {
-        file.outputStream().use { out ->
-            var pos = 0L
-            var total = Long.MAX_VALUE
-            while (pos < total) {
-                val req = Request.Builder().url(url)
-                    .header("User-Agent", userAgent)
-                    .header("Range", "bytes=$pos-${pos + RANGE - 1}")
-                    .build()
-                media.newCall(req).execute().use { r ->
-                    check(r.code == 200 || r.code == 206) { "link refused (HTTP ${r.code})" }
-                    val body = checkNotNull(r.body) { "empty answer" }
-                    if (r.code == 200) {
-                        // The server sent the whole song at once.
-                        body.byteStream().copyTo(out)
-                        return
+        java.io.RandomAccessFile(file, "rw").use { raf ->
+            raf.setLength(0)
+            val channel = raf.channel
+            val total = piece(url, userAgent, 0, PIECE, channel) ?: return
+            if (total <= PIECE) {
+                raf.setLength(total)
+                return
+            }
+            val next = java.util.concurrent.atomic.AtomicLong(PIECE)
+            val failed = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+            val workers = (1..PARALLEL).map {
+                Thread {
+                    try {
+                        while (failed.get() == null) {
+                            val start = next.getAndAdd(PIECE)
+                            if (start >= total) break
+                            piece(url, userAgent, start, minOf(PIECE, total - start), channel)
+                        }
+                    } catch (e: Throwable) {
+                        failed.compareAndSet(null, e)
                     }
-                    total = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: total
-                    val n = body.byteStream().copyTo(out)
-                    check(n > 0) { "download stopped at $pos bytes" }
-                    pos += n
+                }.apply { start() }
+            }
+            workers.forEach { it.join() }
+            failed.get()?.let { throw it }
+            raf.setLength(total)
+        }
+    }
+
+    /**
+     * Writes bytes [start, start + length) of the link at their place in the file, asking again
+     * from where an answer stopped early. Returns the song's size, or null when the server sent
+     * the whole song at once (then it's all written).
+     */
+    private fun piece(url: String, userAgent: String, start: Long, length: Long, out: java.nio.channels.FileChannel): Long? {
+        var pos = start
+        val end = start + length
+        var total = -1L
+        val buf = ByteArray(64 * 1024)
+        while (pos < end) {
+            val req = Request.Builder().url(url)
+                .header("User-Agent", userAgent)
+                .header("Range", "bytes=$pos-${end - 1}")
+                .build()
+            media.newCall(req).execute().use { r ->
+                check(r.code == 200 || r.code == 206) { "link refused (HTTP ${r.code})" }
+                val input = checkNotNull(r.body) { "empty answer" }.byteStream()
+                if (r.code == 200) {
+                    // The server ignored the range and sent the whole song.
+                    var p = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(java.nio.ByteBuffer.wrap(buf, 0, n), p)
+                        p += n
+                    }
+                    return null
                 }
+                total = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: total
+                var got = 0L
+                while (pos < end) {
+                    val n = input.read(buf, 0, minOf(buf.size.toLong(), end - pos).toInt())
+                    if (n < 0) break
+                    out.write(java.nio.ByteBuffer.wrap(buf, 0, n), pos)
+                    pos += n
+                    got += n
+                }
+                check(got > 0) { "download stopped at $pos bytes" }
             }
         }
+        check(total > 0) { "the server didn't say the song's size" }
+        return total
     }
 
     private fun trim(ctx: Context) {

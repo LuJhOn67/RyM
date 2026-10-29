@@ -58,15 +58,45 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
     private var asked = 0L
     private var rangeStart = 0L
 
+    /** The next range, asked for while this one is read, so there's no wait between ranges. */
+    private class Ahead(val start: Long, val call: okhttp3.Call, val result: java.util.concurrent.Future<Response>)
+    private var ahead: Ahead? = null
+
+    private fun request(at: Long): Request = Request.Builder().url(url)
+        .header("User-Agent", agent)
+        .header("Range", "bytes=$at-${at + Streams.RANGE - 1}")
+        .build()
+
+    private fun askAhead() {
+        if (total <= 0 || end >= total) return
+        val call = http.newCall(request(end))
+        ahead = Ahead(end, call, pool.submit<Response> { call.execute() })
+    }
+
+    private fun dropAhead() {
+        ahead?.let { a ->
+            a.call.cancel()
+            if (a.result.isDone) runCatching { a.result.get().close() }
+        }
+        ahead = null
+    }
+
     private fun openRange() {
         closeRange()
         asked = System.currentTimeMillis()
         rangeStart = pos
-        val req = Request.Builder().url(url)
-            .header("User-Agent", agent)
-            .header("Range", "bytes=$pos-${pos + Streams.RANGE - 1}")
-            .build()
-        val r = http.newCall(req).execute()
+        val waiting = ahead?.takeIf { it.start == pos }
+        val r = if (waiting != null) {
+            ahead = null
+            try {
+                waiting.result.get()
+            } catch (e: java.util.concurrent.ExecutionException) {
+                throw (e.cause as? IOException) ?: IOException(e.cause)
+            }
+        } else {
+            dropAhead()
+            http.newCall(request(pos)).execute()
+        }
         android.util.Log.w("RyM", "timing: range at $pos answered in ${System.currentTimeMillis() - asked} ms (HTTP ${r.code})")
         if (r.code != 200 && r.code != 206) {
             r.close()
@@ -84,6 +114,7 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
         }
         response = r
         body = r.body?.byteStream()
+        if (r.code == 206) askAhead()
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -121,6 +152,7 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
     }
 
     override fun close() {
+        dropAhead()
         closeRange()
         if (spec != null) {
             spec = null
@@ -131,6 +163,7 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
 
     companion object {
         private val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+        private val pool = java.util.concurrent.Executors.newCachedThreadPool()
 
         /**
          * Opens the connection to a song's server ahead of time (one byte), so tapping the song
