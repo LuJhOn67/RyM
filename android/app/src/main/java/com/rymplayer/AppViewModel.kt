@@ -22,6 +22,9 @@ import com.rymplayer.playback.Player
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
+/** The song a menu is open for, and its place in the queue when opened from "Up next". */
+data class MenuFor(val track: Track, val queueIndex: Int? = null)
+
 sealed interface Screen {
     data object Home : Screen
     data object Search : Screen
@@ -62,6 +65,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var lyricsStatus by mutableStateOf("")
         private set
     var playerOpen by mutableStateOf(false)
+    /** Song menu (bottom sheet), shown over everything; null when closed. */
+    var menu by mutableStateOf<MenuFor?>(null)
     private var lyricsJob: Job? = null
 
     init {
@@ -195,7 +200,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
     fun download(t: Track) = viewModelScope.launch {
         status = "Downloading \"${t.title}\"..."
-        status = runCatching { Downloads.save(getApplication(), t) }.fold({ "Saved to Music/RymPlayer" }, { "Download failed: ${it.message}" })
+        status = runCatching { Downloads.save(getApplication(), t) }.fold({ "Saved to Music/RymPlayer" }, {
+            android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
+            "Download failed: ${it.message ?: it.javaClass.simpleName}"
+        })
     }
 
     fun toggleLike(t: Track) {

@@ -1,5 +1,9 @@
 package com.rymplayer.ui
 
+import androidx.compose.material3.ExperimentalMaterial3Api
+
+import androidx.compose.material3.ModalBottomSheet
+
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -67,6 +72,7 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.rymplayer.AppViewModel
+import com.rymplayer.MenuFor
 import com.rymplayer.Screen
 import com.rymplayer.data.Track
 import com.rymplayer.data.thumbSized
@@ -128,10 +134,9 @@ fun coverColor(url: String?): Color {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null) {
-    var menu by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = { menu = true })
+            .combinedClickable(onClick = onClick, onLongClick = { vm.menu = MenuFor(t, queueIndex) })
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -146,20 +151,45 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
             Text(sub, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
         }
         if (t.videoId in vm.liked) Icon(Icons.Default.Favorite, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-        Box {
-            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More", tint = Dim) }
-            SongMenu(vm, t, menu, { menu = false }, queueIndex)
-        }
+        IconButton(onClick = { vm.menu = MenuFor(t, queueIndex) }) { Icon(Icons.Default.MoreVert, "More", tint = Dim) }
     }
 }
 
-/** Long-press / ⋮ menu for a song. */
+/**
+ * The song menu: one sheet from the bottom of the screen for the whole app (rows open it with ⋮ or
+ * a long-press, the player with its ⋮). A single shared sheet can't get stuck the way a small
+ * menu attached to each row of a scrolling list did.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SongMenu(vm: AppViewModel, t: Track, open: Boolean, onDismiss: () -> Unit, queueIndex: Int? = null) {
-    var pick by remember { mutableStateOf(false) }
-    DropdownMenu(open, onDismiss) {
-        fun item(label: String, icon: ImageVector, action: () -> Unit) =
-            @Composable { DropdownMenuItem({ Text(label) }, { onDismiss(); action() }, leadingIcon = { Icon(icon, null) }) }
+fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
+    val t = m.track
+    val queueIndex = m.queueIndex
+    var pick by remember(t.videoId) { mutableStateOf(false) }
+    if (pick) {
+        SaveToPlaylist(vm, t) { pick = false; onDismiss() }
+        return
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppColorsSheet) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Cover(t.thumb, 48.dp, 120, 6.dp)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        fun item(label: String, icon: ImageVector, action: () -> Unit) = @Composable {
+            Row(
+                Modifier.fillMaxWidth().clickable { onDismiss(); action() }.padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(icon, null, tint = Dim)
+                Spacer(Modifier.width(20.dp))
+                Text(label, fontSize = 15.sp)
+            }
+        }
         item("Start radio", Icons.Default.Radio) { vm.playRadio(t) }()
         item("Play next", Icons.Default.SkipNext) { vm.player.playNext(t) }()
         item("Add to queue", Icons.AutoMirrored.Filled.QueueMusic) { vm.player.append(listOf(t)) }()
@@ -167,16 +197,26 @@ fun SongMenu(vm: AppViewModel, t: Track, open: Boolean, onDismiss: () -> Unit, q
         if (vm.api.signedIn) {
             val liked = t.videoId in vm.liked
             item(if (liked) "Remove from liked songs" else "Add to liked songs", if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder) { vm.toggleLike(t) }()
-            item("Save to playlist", Icons.AutoMirrored.Filled.PlaylistAdd) { pick = true }()
+            Row(
+                Modifier.fillMaxWidth().clickable { pick = true }.padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, tint = Dim)
+                Spacer(Modifier.width(20.dp))
+                Text("Save to playlist", fontSize = 15.sp)
+            }
         }
         t.albumId?.let { id -> item("Go to album", Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
         t.artistId?.let { id -> item("Go to artist", Icons.Default.Person) { vm.open(Screen.Songs(Screen.Kind.Artist, id, t.artist.substringBefore(", "))) }() }
         if (queueIndex != null && queueIndex != vm.player.index) {
             item("Remove from queue", Icons.Default.MoreVert) { vm.player.remove(queueIndex) }()
         }
+        Spacer(Modifier.height(24.dp))
     }
-    if (pick) SaveToPlaylist(vm, t) { pick = false }
 }
+
+/** A sheet a little lighter than the page, so it stands out. */
+private val AppColorsSheet: Color get() = androidx.compose.ui.graphics.lerp(Color(0xFF0B0B0D), Color.White, 0.08f)
 
 @Composable
 fun SaveToPlaylist(vm: AppViewModel, t: Track, onDismiss: () -> Unit) {

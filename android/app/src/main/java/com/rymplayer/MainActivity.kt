@@ -129,5 +129,6 @@ private fun Main(vm: AppViewModel) {
         AnimatedVisibility(vm.playerOpen, enter = slideInVertically(tween(350)) { it }, exit = slideOutVertically(tween(300)) { it }) {
             FullPlayer(vm, tint)
         }
+        vm.menu?.let { m -> com.rymplayer.ui.SongSheet(vm, m) { vm.menu = null } }
     }
 }

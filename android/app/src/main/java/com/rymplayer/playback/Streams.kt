@@ -17,6 +17,10 @@ import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
+import org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager
+import org.schabi.newpipe.extractor.services.youtube.YoutubeStreamHelper
+import org.schabi.newpipe.extractor.localization.ContentCountry
+import com.grack.nanojson.JsonObject
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
@@ -73,7 +77,7 @@ object Streams {
 
     /** Looks up the next song's link while this one plays. */
     fun prefetchLink(videoId: String) {
-        scope.async { lookups.withPermit { runCatching { cachedLink(videoId) } } }
+        scope.async { lookups.withPermit { runCatching { RangedHttpDataSource.warm(cachedLink(videoId).url) } } }
     }
 
     /** Links for songs about to be tapped (the first ones of a page), a few at a time. */
@@ -84,13 +88,26 @@ object Streams {
     /** At most two lookups run ahead at once, so they don't slow down the song being played. */
     private val lookups = kotlinx.coroutines.sync.Semaphore(2)
 
+    /** One lookup per song at a time: a play waits for a running prefetch of it instead of starting another. */
+    private val pending = ConcurrentHashMap<String, Any>()
+
     private fun cachedLink(videoId: String): Link {
-        links[videoId]?.takeIf { it.until > System.currentTimeMillis() }?.let { return it }
-        val (url, ext) = runCatching { link(videoId) }.getOrElse {
-            android.util.Log.w("RyM", "no audio link for $videoId", it)
-            throw IllegalStateException(it.message ?: it.javaClass.simpleName)
+        fun fresh() = links[videoId]?.takeIf { it.until > System.currentTimeMillis() }
+        fresh()?.let { return it }
+        synchronized(pending.computeIfAbsent(videoId) { Any() }) {
+            fresh()?.let { return it }
+            val started = System.currentTimeMillis()
+            val fast = runCatching { fastLink(videoId) }
+                .onFailure { android.util.Log.w("RyM", "quick lookup failed for $videoId: ${it.message}") }
+                .getOrNull()
+            val (url, ext) = fast ?: runCatching { link(videoId) }.getOrElse {
+                android.util.Log.w("RyM", "no audio link for $videoId", it)
+                throw IllegalStateException(it.message ?: it.javaClass.simpleName)
+            }
+            val how = if (fast != null) "quick" else "full NewPipe"
+            android.util.Log.w("RyM", "timing: link $videoId took ${System.currentTimeMillis() - started} ms ($how, $ext)")
+            return Link(url, ext, System.currentTimeMillis() + 60 * 60 * 1000L).also { links[videoId] = it }
         }
-        return Link(url, ext, System.currentTimeMillis() + 60 * 60 * 1000L).also { links[videoId] = it }
     }
 
     /** The link stopped working: look it up again next time. */
@@ -144,13 +161,47 @@ object Streams {
     }
 
     /** The best audio-only link (Opus or AAC) and its file type. */
-    private fun link(videoId: String): Pair<String, String> {
+    private fun initNewPipe() {
         if (!ready) synchronized(this) {
             if (!ready) {
                 NewPipe.init(OkDownloader, Localization("en", "US"))
                 ready = true
             }
         }
+    }
+
+    private val english = Localization("en", "US")
+    private val country = ContentCountry("US")
+
+    /**
+     * The quick way: InnerTube's player with the visionOS app client (the one NewPipe itself
+     * uses and YouTube accepts), through NewPipe's request for it, and NewPipe only to work out
+     * the link's "n" parameter, whose code it keeps after the first song. Skips the rest of a
+     * full NewPipe lookup, which also fetches the song page's details (about 0.85 s against 2.3 s).
+     */
+    private fun fastLink(videoId: String): Pair<String, String> {
+        initNewPipe()
+        val cpn = YoutubeParsingHelper.generateContentPlaybackNonce()
+        // NewPipe's own visionOS request asks for a fresh visitor id each time. Reusing one for
+        // several songs got "Sign in to confirm you're not a bot" from the second song on.
+        val answer: JsonObject = YoutubeStreamHelper.getVisionOsPlayerResponse(country, english, videoId, cpn)
+        val status = answer.getObject("playabilityStatus")
+        check(status.getString("status") == "OK") { status.getString("reason") ?: status.getString("status") ?: "not playable" }
+        val formats = answer.getObject("streamingData").getArray("adaptiveFormats")
+        val rank = mapOf(251 to 4, 140 to 3, 250 to 2, 249 to 1)
+        val best = (0 until formats.size).map { formats.getObject(it) }
+            .filter { it.getString("mimeType", "").startsWith("audio/") && it.getString("url") != null }
+            .maxWithOrNull(compareBy({ rank[it.getInt("itag")] ?: 0 }, { it.getInt("bitrate") }))
+            ?: error("no direct audio link")
+        var url = best.getString("url") + "&cpn=" + cpn
+        if (Uri.parse(url).getQueryParameter("n") != null) {
+            url = YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(videoId, url)
+        }
+        return url to (if (best.getString("mimeType", "").contains("mp4")) "m4a" else "webm")
+    }
+
+    private fun link(videoId: String): Pair<String, String> {
+        initNewPipe()
         // Only the audio is needed: the extractor alone skips the rest of the song page.
         val extractor = ServiceList.YouTube.getStreamExtractor("https://www.youtube.com/watch?v=$videoId")
         extractor.fetchPage()

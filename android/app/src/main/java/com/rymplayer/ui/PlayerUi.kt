@@ -36,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -128,7 +129,9 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ vm.playerOpen = false }) { Icon(Icons.Default.KeyboardArrowDown, "Close", tint = Color.White, modifier = Modifier.size(30.dp)) }
             Text("Now playing", Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.8f))
-            Spacer(Modifier.width(48.dp))
+            IconButton({ vm.player.current?.let { vm.menu = com.rymplayer.MenuFor(it, vm.player.index) } }) {
+                Icon(Icons.Default.MoreVert, "More", tint = Color.White)
+            }
         }
         AnimatedContent(panel, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(200)) }, modifier = Modifier.weight(1f), label = "panel") { shown ->
             when (shown) {

@@ -78,6 +78,10 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
+                    if (state == ExoListener.STATE_READY && tapped > 0) {
+                        android.util.Log.w("RyM", "timing: ${current?.title} started ${System.currentTimeMillis() - tapped} ms after the tap")
+                        tapped = 0
+                    }
                     loading = state == ExoListener.STATE_BUFFERING
                     if (state == ExoListener.STATE_ENDED) next()
                 }
@@ -121,8 +125,13 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         if (index < 0) setQueue(listOf(t), 0) else queue.add(index + 1, t)
     }
 
+    /** When a song was asked for, for the timing log. */
+    private var tapped = 0L
+
     fun play(i: Int) {
         val t = queue.getOrNull(i) ?: return
+        tapped = System.currentTimeMillis()
+        android.util.Log.w("RyM", "timing: play ${t.title} (${t.videoId})")
         index = i
         position = 0f
         controller?.stop()

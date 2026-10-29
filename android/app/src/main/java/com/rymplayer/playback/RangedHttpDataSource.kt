@@ -54,13 +54,20 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
         return remaining
     }
 
+    /** For the timing log: when the open range was asked for, its first byte, and bytes read from it. */
+    private var asked = 0L
+    private var rangeStart = 0L
+
     private fun openRange() {
         closeRange()
+        asked = System.currentTimeMillis()
+        rangeStart = pos
         val req = Request.Builder().url(url)
             .header("User-Agent", agent)
             .header("Range", "bytes=$pos-${pos + Streams.RANGE - 1}")
             .build()
         val r = http.newCall(req).execute()
+        android.util.Log.w("RyM", "timing: range at $pos answered in ${System.currentTimeMillis() - asked} ms (HTTP ${r.code})")
         if (r.code != 200 && r.code != 206) {
             r.close()
             throw IOException("link refused (HTTP ${r.code})")
@@ -102,6 +109,11 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
     override fun getUri(): Uri? = uri
 
     private fun closeRange() {
+        val got = pos - rangeStart
+        if (response != null && got > 0) {
+            val ms = (System.currentTimeMillis() - asked).coerceAtLeast(1)
+            android.util.Log.w("RyM", "timing: range read ${got / 1024} KB in $ms ms (${got / ms} KB/s)")
+        }
         runCatching { body?.close() }
         runCatching { response?.close() }
         body = null
@@ -117,7 +129,17 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
         uri = null
     }
 
-    private companion object {
-        val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+    companion object {
+        private val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+
+        /**
+         * Opens the connection to a song's server ahead of time (one byte), so tapping the song
+         * doesn't wait for a new connection: each song can live on a different server.
+         */
+        fun warm(url: String) {
+            runCatching {
+                client.newCall(Request.Builder().url(url).header("User-Agent", Streams.userAgentFor(url)).header("Range", "bytes=0-0").build()).execute().close()
+            }
+        }
     }
 }

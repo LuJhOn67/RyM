@@ -42,19 +42,26 @@ object Downloads {
         // The same file playback uses; downloading it is the same as playing it.
         val audio = Streams.audioFile(ctx, t.videoId)
         val mp4 = audio.extension == "m4a"
-        val mime = if (mp4) "audio/mp4" else "audio/webm"
-        val name = safeName("${t.artist} - ${t.title}") + if (mp4) ".m4a" else ".webm"
-        val values = ContentValues().apply {
-            put(MediaStore.Audio.Media.DISPLAY_NAME, name)
-            put(MediaStore.Audio.Media.MIME_TYPE, mime)
-            put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/RymPlayer")
-            put(MediaStore.Audio.Media.TITLE, t.title)
-            put(MediaStore.Audio.Media.ARTIST, t.artist)
-            put(MediaStore.Audio.Media.IS_PENDING, 1)
-        }
+        val base = safeName("${t.artist} - ${t.title}")
+        // Some phones refuse ".webm" in Music (they take it for video); Matroska is the same container.
+        val kinds = if (mp4) listOf("m4a" to "audio/mp4") else listOf("webm" to "audio/webm", "mka" to "audio/x-matroska")
         val resolver = ctx.contentResolver
-        val item = resolver.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
-            ?: error("can't create the file")
+        var name = ""
+        var refused: Exception? = null
+        val item = kinds.firstNotNullOfOrNull { (ext, mime) ->
+            name = "$base.$ext"
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, name)
+                put(MediaStore.Audio.Media.MIME_TYPE, mime)
+                put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/RymPlayer")
+                put(MediaStore.Audio.Media.TITLE, t.title)
+                put(MediaStore.Audio.Media.ARTIST, t.artist)
+                put(MediaStore.Audio.Media.IS_PENDING, 1)
+            }
+            runCatching { resolver.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values) }
+                .onFailure { refused = it as? Exception; android.util.Log.w("RyM", "Music folder refused $name", it) }
+                .getOrNull()
+        } ?: error("can't create the file in Music${refused?.message?.let { ": $it" } ?: ""}")
         try {
             resolver.openOutputStream(item)!!.use { out -> audio.inputStream().use { it.copyTo(out) } }
             resolver.update(item, ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }, null, null)
