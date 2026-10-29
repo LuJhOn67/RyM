@@ -22,6 +22,11 @@ tokio = { version = "1.54.1", features = ["full"] }
 wry = "0.57.1"
 ytmapi-rs = "0.3.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Optional GTK4 window app (needs GTK 4 installed to build): `cargo build --features gtk-ui --bin RymPlayer-GTK`.
+gtk = { package = "gtk4", version = "0.11.5", optional = true }
+
+[features]
+gtk-ui = ["dep:gtk"]
 
 [profile.release]
 lto = "thin"
@@ -39,6 +44,11 @@ path = "src/main.rs"
 [[bin]]
 name = "RymPlayer-GUI"
 path = "src/bin/gui/main.rs"
+
+[[bin]]
+name = "RymPlayer-GTK"
+path = "src/bin/gtk/main.rs"
+required-features = ["gtk-ui"]
 
 [dev-dependencies]
 iced_test = "0.14.0"
