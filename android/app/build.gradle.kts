@@ -13,9 +13,21 @@ android {
         applicationId = "com.rymplayer"
         minSdk = 29 // Android 10
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.6.11"
+        versionCode = 18
+        versionName = "0.6.12"
     }
+    // yt-dlp brings Python for each processor type: one APK per type keeps each small.
+    // arm64-v8a is nearly every phone from the last years; x86_64 is the emulator.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = false
+        }
+    }
+    // youtubedl-android unpacks Python and yt-dlp from its native libraries at run time.
+    packaging { jniLibs { useLegacyPackaging = true } }
 
     buildTypes {
         release {
@@ -57,6 +69,8 @@ dependencies {
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
     // Its JSON library, used directly by the quick link lookup (same version it brings).
     implementation("com.github.TeamNewPipe:nanojson:e9d656ddb49a412a5a0a5d5ef20ca7ef09549996")
+    // Downloads with yt-dlp (Python, yt-dlp and QuickJS bundled).
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     testImplementation("junit:junit:4.13.2")
 }

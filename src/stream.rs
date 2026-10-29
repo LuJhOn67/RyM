@@ -53,16 +53,53 @@ pub async fn fetch(video_id: String) -> Result<PathBuf> {
 
 /// Saves a song as a file in the Music folder: `Music\RymPlayer\Artist - Title.ext`.
 pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<PathBuf> {
-    let src = fetch(video_id.to_string()).await?;
     let music = directories::UserDirs::new()
         .and_then(|d| d.audio_dir().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
     let dir = music.join("RymPlayer");
     tokio::fs::create_dir_all(&dir).await?;
-    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");
-    let dest = dir.join(format!("{}.{ext}", file_name(artist, title)));
-    tokio::fs::copy(&src, &dest).await?;
-    Ok(dest)
+    // Downloads go through yt-dlp with your account: Premium gets YouTube Music's 256 kbps Opus
+    // (format 774), others the best they can (251, then AAC 141/140).
+    let out = dir.join(format!("{}.%(ext)s", file_name(artist, title)));
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.args(["--js-runtimes", "node", "-f", "774/251/141/140/bestaudio", "--no-playlist", "--no-progress", "--no-part"])
+        .args(["--print", "after_move:filepath", "-o"])
+        .arg(&out);
+    if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
+        && !cookie.trim().is_empty()
+    {
+        let file = crate::data_dir().join("cookies-ytdlp.txt");
+        write_cookie_file(&cookie, &file)?;
+        cmd.arg("--cookies").arg(file);
+    }
+    cmd.arg(format!("https://music.youtube.com/watch?v={video_id}"));
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let output = cmd.output().await.map_err(|e| anyhow!("yt-dlp not found (pip install -U yt-dlp yt-dlp-ejs): {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let last = err.lines().rev().find(|l| l.contains("ERROR")).unwrap_or("yt-dlp failed");
+        return Err(anyhow!("{last}"));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .last()
+        .map(|l| PathBuf::from(l.trim()))
+        .filter(|p| p.exists())
+        .ok_or_else(|| anyhow!("download finished but the file is missing"))
+}
+
+/// yt-dlp wants a Netscape cookie file; this converts the browser's `Cookie:` header.
+fn write_cookie_file(header: &str, path: &Path) -> Result<()> {
+    let mut out = String::from("# Netscape HTTP Cookie File
+");
+    for pair in header.split(';') {
+        let Some((name, value)) = pair.trim().split_once('=') else { continue };
+        out.push_str(&format!(".youtube.com	TRUE	/	TRUE	2147483647	{name}	{value}
+"));
+    }
+    std::fs::write(path, out)?;
+    Ok(())
 }
 
 /// "Artist - Title" with the characters Windows refuses in file names replaced.
@@ -169,6 +206,19 @@ mod tests {
             }
         });
         format!("http://{addr}/audio")
+    }
+
+    #[test]
+    fn cookie_file_for_ytdlp() {
+        let path = std::env::temp_dir().join(format!("rym-cookie-test-{}.txt", std::process::id()));
+        write_cookie_file("SAPISID=abc; HSID=x=y", &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(text.starts_with("# Netscape HTTP Cookie File
+"));
+        assert!(text.contains("	SAPISID	abc
+") && text.contains("	HSID	x=y
+"), "{text}");
     }
 
     #[test]

@@ -37,10 +37,12 @@ object Downloads {
     }
 
     /** Downloads a song into Music/RymPlayer; returns the file name. */
-    suspend fun save(ctx: Context, t: Track): String = withContext(Dispatchers.IO) {
+    suspend fun save(ctx: Context, t: Track, cookie: String?): String = withContext(Dispatchers.IO) {
         uriFor(ctx, t.videoId)?.let { return@withContext "already saved" }
-        // The same file playback uses; downloading it is the same as playing it.
-        val audio = Streams.audioFile(ctx, t.videoId)
+        // yt-dlp with the account first (256 kbps for Premium); if it fails, the file playback uses.
+        val audio = runCatching { YtDlp.download(ctx, t.videoId, cookie) }
+            .onFailure { android.util.Log.w("RyM", "yt-dlp download of ${t.videoId} failed, using the player's file", it) }
+            .getOrElse { Streams.audioFile(ctx, t.videoId) }
         val mp4 = audio.extension == "m4a"
         val base = safeName("${t.artist} - ${t.title}")
         // Some phones refuse ".webm" in Music (they take it for video); Matroska is the same container.

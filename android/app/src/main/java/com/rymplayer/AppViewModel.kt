@@ -200,7 +200,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
     fun download(t: Track) = viewModelScope.launch {
         status = "Downloading \"${t.title}\"..."
-        status = runCatching { Downloads.save(getApplication(), t) }.fold({ "Saved to Music/RymPlayer" }, {
+        status = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null)) }.fold({ "Saved to Music/RymPlayer" }, {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
             "Download failed: ${it.message ?: it.javaClass.simpleName}"
         })
