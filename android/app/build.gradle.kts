@@ -13,8 +13,8 @@ android {
         applicationId = "com.rymplayer"
         minSdk = 29 // Android 10
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {

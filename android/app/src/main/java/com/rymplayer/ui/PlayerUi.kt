@@ -246,7 +246,6 @@ private fun QueueView(vm: AppViewModel) {
     val state = rememberLazyListState(initialFirstVisibleItemIndex = p.index.coerceAtLeast(0))
     LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
         itemsIndexed(p.queue) { i, t ->
-            WarmTrack(t)
             SongRow(vm, t, i == p.index, { p.play(i) }, queueIndex = i)
         }
     }

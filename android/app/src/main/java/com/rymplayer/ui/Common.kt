@@ -42,7 +42,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -71,18 +70,21 @@ import com.rymplayer.Screen
 import com.rymplayer.data.Track
 import com.rymplayer.data.thumbSized
 
-val Accent: Color get() = AppColors.accent
-val Dim: Color get() = AppColors.dim
+val Accent = Color(0xFFFF2D55)
+val Dim = Color(0xFFAAAAAA)
 
 @Composable
 fun RymTheme(content: @Composable () -> Unit) {
-    val c = AppColors
-    val scheme = if (c.light) {
-        lightColorScheme(primary = c.accent, background = c.bg, surface = c.bg, surfaceVariant = c.raised, onSurfaceVariant = c.dim, onBackground = c.text, onSurface = c.text)
-    } else {
-        darkColorScheme(primary = c.accent, background = c.bg, surface = c.bg, surfaceVariant = c.raised, onSurfaceVariant = c.dim, onBackground = c.text, onSurface = c.text)
-    }
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = Accent,
+            background = Color(0xFF0B0B0D),
+            surface = Color(0xFF0B0B0D),
+            surfaceVariant = Color(0xFF1C1C21),
+            onSurfaceVariant = Dim,
+        ),
+        content = content,
+    )
 }
 
 /** Cover art with a rounded corner and a note placeholder while it loads. */
@@ -137,7 +139,7 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
         Column(Modifier.weight(1f)) {
             Text(
                 t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
-                color = if (current) MaterialTheme.colorScheme.primary else AppColors.text,
+                color = if (current) MaterialTheme.colorScheme.primary else Color.White,
             )
             val sub = listOf(t.artist, t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
             Text(sub, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)

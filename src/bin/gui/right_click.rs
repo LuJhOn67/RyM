@@ -15,14 +15,10 @@ pub fn tracker<'a, Message, Theme, Renderer>(
     content: impl Into<Element<'a, Message, Theme, Renderer>>,
     on_right: fn(Point) -> Message,
 ) -> RightClickTracker<'a, Message, Theme, Renderer> {
-    RightClickTracker {
-        content: content.into(),
-        on_right,
-    }
+    RightClickTracker { content: content.into(), on_right }
 }
 
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
-    for RightClickTracker<'_, Message, Theme, Renderer>
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for RightClickTracker<'_, Message, Theme, Renderer>
 where
     Renderer: renderer::Renderer,
 {
@@ -38,27 +34,12 @@ where
         self.content.as_widget().size()
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        self.content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+        self.content.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
     }
 
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        renderer: &Renderer,
-        operation: &mut dyn Operation,
-    ) {
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+    fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
+        self.content.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
     }
 
     fn update(
@@ -79,16 +60,7 @@ where
         {
             shell.publish((self.on_right)(position));
         }
-        self.content.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
+        self.content.as_widget_mut().update(&mut tree.children[0], event, layout, cursor, renderer, clipboard, shell, viewport);
     }
 
     fn mouse_interaction(
@@ -99,13 +71,7 @@ where
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
     fn draw(
@@ -118,15 +84,7 @@ where
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
+        self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
     }
 
     fn overlay<'b>(
@@ -137,18 +95,11 @@ where
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        self.content.as_widget_mut().overlay(
-            &mut tree.children[0],
-            layout,
-            renderer,
-            viewport,
-            translation,
-        )
+        self.content.as_widget_mut().overlay(&mut tree.children[0], layout, renderer, viewport, translation)
     }
 }
 
-impl<'a, Message: 'a, Theme: 'a, Renderer: renderer::Renderer + 'a>
-    From<RightClickTracker<'a, Message, Theme, Renderer>>
+impl<'a, Message: 'a, Theme: 'a, Renderer: renderer::Renderer + 'a> From<RightClickTracker<'a, Message, Theme, Renderer>>
     for Element<'a, Message, Theme, Renderer>
 {
     fn from(t: RightClickTracker<'a, Message, Theme, Renderer>) -> Self {

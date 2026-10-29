@@ -28,11 +28,7 @@ const SETTLE: Duration = Duration::from_secs(4);
 
 /// Cookies YouTube Music needs to treat a request as signed in.
 fn signed_in(names: &[&str]) -> bool {
-    // Google may expose only the secure partitioned SAPISID equivalent in a WebView.
-    // LOGIN_INFO is also inconsistent, so it is not part of this readiness check.
-    names
-        .iter()
-        .any(|name| matches!(*name, "SAPISID" | "__Secure-3PAPISID" | "__Secure-1PAPISID"))
+    names.contains(&"SAPISID") && names.contains(&"LOGIN_INFO")
 }
 
 pub fn run() -> ! {
@@ -54,8 +50,7 @@ pub fn run() -> ! {
     let webview = builder
         .with_url(SIGN_IN)
         .with_on_page_load_handler(move |ev, url| {
-            if matches!(ev, PageLoadEvent::Finished) && url.starts_with("https://music.youtube.com")
-            {
+            if matches!(ev, PageLoadEvent::Finished) && url.starts_with("https://music.youtube.com") {
                 on_load.set(Some(Instant::now()));
             }
         })
@@ -67,17 +62,12 @@ pub fn run() -> ! {
         match event {
             // Exit through the event loop (not process::exit) so WebView2 shuts down cleanly
             // and saves the signed-in profile to disk.
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => *flow = ControlFlow::ExitWithCode(1),
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => *flow = ControlFlow::ExitWithCode(1),
             Event::NewEvents(_) => {
                 if !loaded.get().is_some_and(|t| t.elapsed() >= SETTLE) {
                     return;
                 }
-                let Ok(cookies) = webview.cookies_for_url(YTM) else {
-                    return;
-                };
+                let Ok(cookies) = webview.cookies_for_url(YTM) else { return };
                 let names: Vec<&str> = cookies.iter().map(|c| c.name()).collect();
                 if !signed_in(&names) {
                     return;
@@ -88,9 +78,7 @@ pub fn run() -> ! {
                     .collect::<Vec<_>>()
                     .join("; ");
                 let _ = std::fs::create_dir_all(crate::data_dir());
-                let ok = std::fs::write(crate::cookie_path(), &header).is_ok()
-                    && crate::stream::write_cookie_file(&header, &crate::ytdlp_cookie_path())
-                        .is_ok();
+                let ok = std::fs::write(crate::cookie_path(), &header).is_ok();
                 *flow = ControlFlow::ExitWithCode(if ok { 0 } else { 1 });
             }
             _ => {}

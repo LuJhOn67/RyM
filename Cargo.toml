@@ -1,6 +1,6 @@
 [package]
 name = "rymplayer"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2024"
 autobins = false
 
@@ -11,21 +11,17 @@ anyhow = "1.0.104"
 crossterm = "0.29.0"
 directories = "6.0.0"
 ratatui = "0.30.2"
-reqwest = { version = "0.13.5", features = ["json", "blocking"] }
+reqwest = { version = "0.13.5", features = ["json"] }
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-symphonia = { version = "0.6.1", default-features = false, features = ["mkv", "ogg", "isomp4", "aac", "mp3", "flac", "wav", "opt-simd"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mkv", "ogg", "isomp4", "aac", "opt-simd"] }
 symphonia-adapter-libopus = "0.3"
 tao = "0.37.2"
 tokio = { version = "1.54.1", features = ["full"] }
 wry = "0.57.1"
 ytmapi-rs = "0.3.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-gtk = { package = "gtk4", version = "0.11.5", optional = true }
-
-[features]
-gtk-ui = ["dep:gtk"]
 
 [profile.release]
 lto = "thin"
@@ -43,11 +39,6 @@ path = "src/main.rs"
 [[bin]]
 name = "RymPlayer-GUI"
 path = "src/bin/gui/main.rs"
-
-[[bin]]
-name = "RymPlayer-GTK"
-path = "src/bin/gtk/main.rs"
-required-features = ["gtk-ui"]
 
 [dev-dependencies]
 iced_test = "0.14.0"

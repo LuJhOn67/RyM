@@ -263,12 +263,7 @@ impl Config {
             Setting::LibraryWidth => format!("{} columns", self.library_width),
             Setting::Lyrics => format!("{:?}", self.lyrics),
             Setting::LyricsSize => format!("{}%", self.lyrics_size),
-            Setting::LyricsAlign => if self.lyrics_centered {
-                "Centered"
-            } else {
-                "Left"
-            }
-            .to_string(),
+            Setting::LyricsAlign => if self.lyrics_centered { "Centered" } else { "Left" }.to_string(),
             Setting::Player => format!("{:?}", self.player),
             Setting::Help => if self.help { "Shown" } else { "Hidden" }.to_string(),
             Setting::Reset => "Enter".to_string(),
@@ -278,40 +273,20 @@ impl Config {
     /// Moves a setting to its next (`step` 1) or previous (-1) value.
     pub fn change(&mut self, s: Setting, step: i32) {
         match s {
-            Setting::Theme => {
-                self.theme = (self.theme as i32 + step).rem_euclid(THEMES.len() as i32) as usize
-            }
-            Setting::Library => {
-                self.library = cycle(&[Side::Left, Side::Right, Side::Hidden], self.library, step)
-            }
-            Setting::LibraryWidth => {
-                self.library_width = (self.library_width as i32 + 2 * step).clamp(18, 44) as u16
-            }
+            Setting::Theme => self.theme = (self.theme as i32 + step).rem_euclid(THEMES.len() as i32) as usize,
+            Setting::Library => self.library = cycle(&[Side::Left, Side::Right, Side::Hidden], self.library, step),
+            Setting::LibraryWidth => self.library_width = (self.library_width as i32 + 2 * step).clamp(18, 44) as u16,
             Setting::Lyrics => {
-                let all = [
-                    LyricsPlace::Right,
-                    LyricsPlace::Left,
-                    LyricsPlace::Bottom,
-                    LyricsPlace::Hidden,
-                ];
+                let all = [LyricsPlace::Right, LyricsPlace::Left, LyricsPlace::Bottom, LyricsPlace::Hidden];
                 self.lyrics = cycle(&all, self.lyrics, step);
             }
-            Setting::LyricsSize => {
-                self.lyrics_size = (self.lyrics_size as i32 + 5 * step).clamp(20, 60) as u16
-            }
+            Setting::LyricsSize => self.lyrics_size = (self.lyrics_size as i32 + 5 * step).clamp(20, 60) as u16,
             Setting::LyricsAlign => self.lyrics_centered = !self.lyrics_centered,
-            Setting::Player => {
-                self.player = cycle(&[BarPlace::Bottom, BarPlace::Top], self.player, step)
-            }
+            Setting::Player => self.player = cycle(&[BarPlace::Bottom, BarPlace::Top], self.player, step),
             Setting::Help => self.help = !self.help,
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config {
-                    theme: self.theme,
-                    gui_theme: self.gui_theme,
-                    gui_icon: self.gui_icon.take(),
-                    ..Config::default()
-                }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), ..Config::default() }
             }
         }
     }

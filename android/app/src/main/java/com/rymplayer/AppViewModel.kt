@@ -9,7 +9,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rymplayer.data.LIKED_ID
-import com.rymplayer.data.LocalMusic
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
 import com.rymplayer.data.Lyrics
@@ -19,7 +18,6 @@ import com.rymplayer.data.Track
 import com.rymplayer.data.YtMusic
 import com.rymplayer.data.parseDuration
 import com.rymplayer.playback.Player
-import com.rymplayer.ui.AppColors
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -29,7 +27,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, LocalMusic }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -66,7 +64,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lyricsJob: Job? = null
 
     init {
-        prefs.getString("theme_css", null)?.let { AppColors.apply(it, prefs.getString("theme_name", null) ?: "Custom") }
         val cookie = prefs.getString("cookie", null)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
@@ -98,22 +95,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun guest() = start(null).also { signedIn = true }
 
-    /** A theme file the user picked (the same CSS files the PC version uses). */
-    fun importTheme(css: String, fileName: String) {
-        val name = fileName.substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
-        if (AppColors.apply(css, name)) {
-            prefs.edit().putString("theme_css", css).putString("theme_name", name).apply()
-            status = "Theme: ${AppColors.name}"
-        } else {
-            status = "No colors found in that file"
-        }
-    }
-
-    fun resetTheme() {
-        AppColors.reset()
-        prefs.edit().remove("theme_css").remove("theme_name").apply()
-    }
-
     fun signOut() {
         prefs.edit().remove("cookie").apply()
         player.stop()
@@ -136,12 +117,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         stack += page
         playerOpen = false
         if (pages[page] == null) load(page)
-    }
-
-    fun openLocalMusic() {
-        val page = Screen.Songs(Screen.Kind.LocalMusic, "device", "On this device")
-        pages.remove(page)
-        open(page)
     }
 
     /** True when something was closed. */
@@ -185,12 +160,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.Artist -> api.artist(page.id)
                     Screen.Kind.History -> api.history()
                     Screen.Kind.Results -> api.search(page.id)
-                    Screen.Kind.LocalMusic -> LocalMusic.load(getApplication())
                 }
             }
             r.onFailure { status = it.message.orEmpty() }
-            val tracks = r.getOrDefault(emptyList())
-            pages[page] = tracks
+            pages[page] = r.getOrDefault(emptyList())
         }
     }
 
@@ -241,7 +214,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lyricsStatus = "Looking for lyrics..."
         lyricsJob = viewModelScope.launch {
             val found = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration))
-                ?: if (t.localUri == null) runCatching { api.lyrics(t.videoId) }.getOrNull() else null
+                ?: runCatching { api.lyrics(t.videoId) }.getOrNull()
             lyrics = found
             lyricsStatus = if (found == null) "No lyrics for this song" else ""
         }

@@ -1,15 +1,10 @@
 package com.rymplayer
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -35,13 +30,10 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rymplayer.ui.FullPlayer
 import com.rymplayer.ui.HomePage
@@ -80,34 +72,15 @@ fun RymApp(vm: AppViewModel) {
 
 @Composable
 private fun Main(vm: AppViewModel) {
-    val context = LocalContext.current
-    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    SideEffect {
-        vm.player.onPlaybackRequested = {
-            if (Build.VERSION.SDK_INT >= 33 &&
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                val prefs = context.getSharedPreferences("rym", android.content.Context.MODE_PRIVATE)
-                if (!prefs.getBoolean("notification_prompted", false)) {
-                    prefs.edit().putBoolean("notification_prompted", true).apply()
-                    Toast.makeText(context, "Allow notifications to see playback controls when RyM is in the background", Toast.LENGTH_LONG).show()
-                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
-        }
-    }
-    DisposableEffect(vm) {
-        onDispose { vm.player.onPlaybackRequested = {} }
-    }
     BackHandler(vm.playerOpen || vm.stack.isNotEmpty() || vm.tab != Screen.Home) { vm.back() }
     val tint = coverColor(vm.player.current?.thumb)
     Box(Modifier.fillMaxSize()) {
         Scaffold(
-            containerColor = com.rymplayer.ui.AppColors.bg,
+            containerColor = Color(0xFF0B0B0D),
             bottomBar = {
                 Column {
                     MiniPlayer(vm, tint)
-                    NavigationBar(containerColor = com.rymplayer.ui.AppColors.bar) {
+                    NavigationBar(containerColor = Color(0xFF111114)) {
                         val tabs = listOf(Triple(Screen.Home, "Home", Icons.Default.Home), Triple(Screen.Search, "Search", Icons.Default.Search), Triple(Screen.Library, "Library", Icons.Default.LibraryMusic))
                         for ((screen, label, icon) in tabs) {
                             NavigationBarItem(vm.tab == screen && vm.stack.isEmpty(), { vm.selectTab(screen) }, { Icon(icon, label) }, label = { Text(label) })

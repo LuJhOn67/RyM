@@ -1,11 +1,5 @@
 package com.rymplayer.ui
 
-import androidx.compose.foundation.combinedClickable
-
-import androidx.compose.material.icons.filled.Palette
-
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -33,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
@@ -58,7 +51,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,9 +59,7 @@ import androidx.compose.ui.unit.sp
 import com.rymplayer.AppViewModel
 import com.rymplayer.Screen
 import com.rymplayer.data.LIKED_ID
-import com.rymplayer.data.LocalMusic
 import com.rymplayer.data.Track
-import com.rymplayer.playback.Streams
 
 private val pagePadding = PaddingValues(bottom = 24.dp)
 
@@ -114,20 +104,11 @@ fun HomePage(vm: AppViewModel) {
 
 @Composable
 private fun HomeCard(vm: AppViewModel, t: Track) {
-    WarmTrack(t)
     Column(Modifier.width(150.dp).clip(RoundedCornerShape(10.dp)).clickable { vm.openLink(t) }) {
         Cover(t.thumb, 150.dp, 360, 10.dp)
         Spacer(Modifier.height(8.dp))
         Text(t.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
         Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 12.sp)
-    }
-}
-
-/** Resolve streams as soon as their rows/cards are visible, so row four is ready too. */
-@Composable
-fun WarmTrack(t: Track) {
-    if (t.link == null && t.localUri == null) {
-        LaunchedEffect(t.videoId) { Streams.warm(t.videoId) }
     }
 }
 
@@ -152,34 +133,8 @@ fun SearchPage(vm: AppViewModel) {
 @Composable
 fun LibraryPage(vm: AppViewModel) {
     var naming by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val audioPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) vm.openLocalMusic() else vm.status = "Allow audio access to show music on this device"
-    }
-    val themeFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            val css = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }.getOrNull()
-            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "Custom"
-            if (css != null) vm.importTheme(css, name) else vm.status = "Couldn't read that file"
-        }
-    }
     LazyColumn(contentPadding = pagePadding) {
         item { Title("Library") }
-        item {
-            LibraryRow(
-                "Theme",
-                AppColors.name?.let { "$it · tap to pick another, hold for the default" } ?: "Pick a .css theme file",
-                Brush.linearGradient(listOf(Accent, AppColors.raised)),
-                Icons.Default.Palette,
-                onLongClick = vm::resetTheme,
-            ) { themeFile.launch(arrayOf("text/css", "text/plain", "application/octet-stream", "*/*")) }
-        }
-        item {
-            LibraryRow("On this device", "Music saved on your phone", Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.LibraryMusic) {
-                if (LocalMusic.hasPermission(context)) vm.openLocalMusic()
-                else audioPermission.launch(LocalMusic.permission())
-            }
-        }
         if (vm.api.signedIn) {
             item {
                 LibraryRow("Liked Music", "Auto playlist", Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.Default.Favorite) {
@@ -214,17 +169,9 @@ fun LibraryPage(vm: AppViewModel) {
     if (naming) NewPlaylist({ naming = false }) { vm.createPlaylist(it, null); naming = false }
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun LibraryRow(
-    title: String,
-    sub: String,
-    brush: Brush,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onLongClick: (() -> Unit)? = null,
-    onClick: () -> Unit,
-) {
-    Row(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun LibraryRow(title: String, sub: String, brush: Brush, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(brush), contentAlignment = Alignment.Center) {
             Icon(icon, null, tint = Color.White)
         }
@@ -256,7 +203,7 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
                         Spacer(Modifier.width(6.dp))
                         Text("Play")
                     }
-                    OutlinedButton({ vm.playFrom(songs.shuffled(), 0) }, enabled = songs.isNotEmpty(), colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.text)) {
+                    OutlinedButton({ vm.playFrom(songs.shuffled(), 0) }, enabled = songs.isNotEmpty(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) {
                         Icon(Icons.Default.Shuffle, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Shuffle")
@@ -266,7 +213,6 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
         }
         if (tracks.isEmpty()) item { Text(vm.status.ifEmpty { "Nothing here" }, color = Dim, modifier = Modifier.padding(16.dp)) }
         itemsIndexed(tracks) { i, t ->
-            WarmTrack(t)
             val onClick = { if (t.link != null) vm.openLink(t) else vm.playFrom(tracks, i) }
             SongRow(vm, t, current == t.videoId && t.videoId.isNotEmpty(), onClick)
         }
