@@ -84,8 +84,11 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
 
                 override fun onPlayerError(error: PlaybackException) {
                     loading = false
-                    // A cached file the player can't read is thrown away, so the next try downloads it again.
-                    current?.let { Streams.forget(context, it.videoId) }
+                    // A cached file or link the player can't use is dropped, so the next try fetches it again.
+                    current?.let {
+                        Streams.forget(context, it.videoId)
+                        Streams.forgetLink(it.videoId)
+                    }
                     message = "Can't play: ${error.errorCodeName}"
                 }
             })
@@ -127,9 +130,9 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         loading = true
         loadJob?.cancel()
         loadJob = scope.launch {
-            // A downloaded song plays from Music/RymPlayer; others are fetched into the cache first.
+            // A downloaded song plays from Music/RymPlayer; others stream (or play from the cache).
             val url = Downloads.uriFor(context, t.videoId)?.toString()
-                ?: runCatching { Uri.fromFile(Streams.audioFile(context, t.videoId)).toString() }
+                ?: runCatching { Streams.playable(context, t.videoId) }
                     .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "Can't play: ${it.message}" }
                     .getOrNull()
             if (url == null) {
@@ -151,8 +154,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             c.setMediaItem(MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).build())
             c.prepare()
             c.play()
-            // The next song downloads while this one plays.
-            queue.getOrNull(i + 1)?.let { Streams.prefetch(context, it.videoId) }
+            // The next song's link is looked up while this one plays.
+            queue.getOrNull(i + 1)?.let { Streams.prefetchLink(it.videoId) }
         }
     }
 

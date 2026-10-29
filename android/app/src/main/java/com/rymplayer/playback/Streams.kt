@@ -1,75 +1,101 @@
 package com.rymplayer.playback
 
 import android.content.Context
-import com.rymplayer.data.arr
-import com.rymplayer.data.at
-import com.rymplayer.data.str
+import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonObjectBuilder
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.schabi.newpipe.extractor.MediaFormat
+import org.schabi.newpipe.extractor.NewPipe
+import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.downloader.Downloader
+import org.schabi.newpipe.extractor.downloader.Response
+import org.schabi.newpipe.extractor.localization.Localization
+import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
+import org.schabi.newpipe.extractor.stream.DeliveryMethod
+import org.schabi.newpipe.extractor.stream.StreamInfo
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import org.schabi.newpipe.extractor.downloader.Request as PipeRequest
+
+/** OkHttp behind the extractor library. */
+private object OkDownloader : Downloader() {
+    const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
+    private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
+
+    override fun execute(request: PipeRequest): Response {
+        val body = request.dataToSend()?.toRequestBody()
+        val builder = okhttp3.Request.Builder().url(request.url()).method(request.httpMethod(), body).header("User-Agent", UA)
+        request.headers().forEach { (k, values) ->
+            builder.removeHeader(k)
+            values.forEach { builder.addHeader(k, it) }
+        }
+        http.newCall(builder.build()).execute().use { r ->
+            return Response(r.code, r.message, r.headers.toMultimap(), r.body?.string(), r.request.url.toString())
+        }
+    }
+}
 
 /**
- * Song audio, fetched the same way as the PC version (which plays everything): the link comes
- * from YouTube's player API (InnerTube), the audio is downloaded in 4 MB ranges with the app
- * client's user agent into the app's cache, and the player plays that file. A client whose link
- * is refused is skipped and the next one asked.
+ * Song audio. The link comes from NewPipe's extractor, which keeps up with YouTube's protection;
+ * the audio is downloaded in 4 MB ranges into the app's cache (like the PC version) and the
+ * player plays that file.
  */
 object Streams {
     /** Bytes asked for per request: YouTube refuses or slows down open-ended requests. */
-    private const val RANGE = 4L shl 20
+    const val RANGE = 4L shl 20
     /** Songs kept in the cache (oldest are removed). */
     private const val KEEP = 40
 
-    private class Client(val name: String, val id: String, val version: String, val userAgent: String, val extra: Map<String, Any>) {
-        val key get() = "$name $version"
-    }
-
-    private fun vr(version: String) = Client(
-        "ANDROID_VR", "28", version,
-        "com.google.android.apps.youtube.vr.oculus/$version (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-        mapOf("deviceMake" to "Oculus", "deviceModel" to "Quest 3", "androidSdkVersion" to 32, "osName" to "Android", "osVersion" to "12L"),
-    )
-
-    private val clients = listOf(
-        vr("1.62.27"),
-        vr("1.65.10"),
-        Client(
-            "IOS", "5", "20.10.4",
-            "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
-            mapOf("deviceMake" to "Apple", "deviceModel" to "iPhone16,2", "osName" to "iPhone", "osVersion" to "18.3.2.22D82"),
-        ),
-    )
-
-    private val api = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
     private val media = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     /** A play and a prefetch of the same song share one download. */
     private val inFlight = ConcurrentHashMap<String, Deferred<File>>()
 
+    @Volatile private var ready = false
+
+    /** Links stay valid for hours; each is kept for one so replays and the next song start at once. */
+    private class Link(val url: String, val ext: String, val until: Long)
+    private val links = ConcurrentHashMap<String, Link>()
+
+    /** What the player should open: the cached file if there is one, else the stream link. */
+    suspend fun playable(ctx: Context, videoId: String): String {
+        cachedFile(ctx, videoId)?.let { return Uri.fromFile(it).toString() }
+        return kotlinx.coroutines.withContext(Dispatchers.IO) { cachedLink(videoId).url }
+    }
+
+    /** Looks up the next song's link while this one plays. */
+    fun prefetchLink(videoId: String) {
+        scope.async { runCatching { cachedLink(videoId) } }
+    }
+
+    private fun cachedLink(videoId: String): Link {
+        links[videoId]?.takeIf { it.until > System.currentTimeMillis() }?.let { return it }
+        val (url, ext) = runCatching { link(videoId) }.getOrElse {
+            android.util.Log.w("RyM", "no audio link for $videoId", it)
+            throw IllegalStateException(it.message ?: it.javaClass.simpleName)
+        }
+        return Link(url, ext, System.currentTimeMillis() + 60 * 60 * 1000L).also { links[videoId] = it }
+    }
+
+    /** The link stopped working: look it up again next time. */
+    fun forgetLink(videoId: String) {
+        links.remove(videoId)
+    }
+
     private fun dir(ctx: Context) = File(ctx.cacheDir, "audio").apply { mkdirs() }
 
     private fun cachedFile(ctx: Context, videoId: String): File? =
         listOf("webm", "m4a").map { File(dir(ctx), "$videoId.$it") }.firstOrNull { it.exists() && it.length() > 0 }
 
-    /** The song's audio file, downloading it first if needed. Throws the reasons when no client works. */
+    /** The song's audio file, downloading it first if needed. */
     suspend fun audioFile(ctx: Context, videoId: String): File {
         cachedFile(ctx, videoId)?.let { return it.apply { setLastModified(System.currentTimeMillis()) } }
         val job = inFlight.computeIfAbsent(videoId) { scope.async { download(ctx.applicationContext, videoId) } }
@@ -92,24 +118,44 @@ object Streams {
     }
 
     private fun download(ctx: Context, videoId: String): File {
-        val why = mutableListOf<String>()
-        for (c in clients) {
-            val asked = runCatching { player(c, videoId) }
-            if (asked.isFailure) {
-                why += "${c.name}: ${asked.exceptionOrNull()?.message}"
-                continue
-            }
-            val (url, ext) = asked.getOrThrow()
-            val part = File(dir(ctx), "$videoId.part")
-            val done = File(dir(ctx), "$videoId.$ext")
-            val ok = runCatching { save(url, c.userAgent, part) }.onFailure { why += "${c.name}: ${it.message}" }.isSuccess
-            if (ok && part.renameTo(done)) {
-                trim(ctx)
-                return done
-            }
+        val found = cachedLink(videoId)
+        val (url, ext) = found.url to found.ext
+        val part = File(dir(ctx), "$videoId.part")
+        val done = File(dir(ctx), "$videoId.$ext")
+        try {
+            // The stream wants the user agent of the client that made the link; a browser's otherwise.
+            runCatching { save(url, userAgentFor(url), part) }.getOrElse { save(url, OkDownloader.UA, part) }
+        } catch (e: Exception) {
             part.delete()
+            android.util.Log.w("RyM", "download failed for $videoId", e)
+            throw e
         }
-        error(why.joinToString("; ").ifEmpty { "YouTube gave no audio" })
+        check(part.renameTo(done)) { "can't keep the downloaded song" }
+        trim(ctx)
+        return done
+    }
+
+    /** The best audio-only link (Opus or AAC) and its file type. */
+    private fun link(videoId: String): Pair<String, String> {
+        if (!ready) synchronized(this) {
+            if (!ready) {
+                NewPipe.init(OkDownloader, Localization("en", "US"))
+                ready = true
+            }
+        }
+        val info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=$videoId")
+        val best = info.audioStreams
+            .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+            .maxByOrNull { it.averageBitrate }
+            ?: error("no playable audio for this song")
+        val ext = if (best.format == MediaFormat.M4A) "m4a" else "webm"
+        return best.content to ext
+    }
+
+    internal fun userAgentFor(url: String): String = when (Uri.parse(url).getQueryParameter("c")?.uppercase()) {
+        "IOS" -> YoutubeParsingHelper.getIosUserAgent(null)
+        "ANDROID", "ANDROID_MUSIC", "ANDROID_VR" -> YoutubeParsingHelper.getAndroidUserAgent(null)
+        else -> OkDownloader.UA
     }
 
     /** Writes the link to `file` in ranges, like the PC version. */
@@ -142,79 +188,5 @@ object Streams {
     private fun trim(ctx: Context) {
         val files = dir(ctx).listFiles { f -> !f.name.endsWith(".part") }?.sortedByDescending { it.lastModified() } ?: return
         files.drop(KEEP).forEach { it.delete() }
-    }
-
-    /**
-     * Visitor id from InnerTube itself. App clients that come without one are often answered with
-     * "Sign in to confirm you're not a bot"; the well-known Android YouTube apps send one too.
-     */
-    @Volatile private var visitor: String? = null
-
-    private fun JsonObjectBuilder.client(c: Client, visitorData: String?) = putJsonObject("context") {
-        putJsonObject("client") {
-            put("clientName", c.name)
-            put("clientVersion", c.version)
-            put("userAgent", c.userAgent)
-            put("hl", "en")
-            put("gl", "US")
-            visitorData?.let { put("visitorData", it) }
-            for ((k, v) in c.extra) {
-                when (v) {
-                    is Number -> put(k, v)
-                    else -> put(k, v.toString())
-                }
-            }
-        }
-    }
-
-    private fun post(c: Client, endpoint: String, visitorData: String?, body: JsonObject): JsonElement {
-        val request = Request.Builder().url("https://www.youtube.com/youtubei/v1/$endpoint?prettyPrint=false")
-            .header("User-Agent", c.userAgent)
-            .header("X-YouTube-Client-Name", c.id)
-            .header("X-YouTube-Client-Version", c.version)
-            .apply { visitorData?.let { header("X-Goog-Visitor-Id", it) } }
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        return api.newCall(request).execute().use { r ->
-            check(r.isSuccessful) { "HTTP ${r.code}" }
-            Json.parseToJsonElement(r.body!!.string())
-        }
-    }
-
-    private fun visitorId(c: Client): String? = visitor ?: runCatching {
-        post(c, "visitor_id", null, buildJsonObject { client(c, null) }).at("responseContext/visitorData").str
-    }.getOrNull()?.also { visitor = it }
-
-    /** Asks InnerTube for the song; returns the audio link and its file type. */
-    private fun player(c: Client, videoId: String): Pair<String, String> {
-        fun ask(visitorData: String?) = post(c, "player", visitorData, buildJsonObject {
-            client(c, visitorData)
-            put("videoId", videoId)
-            put("contentCheckOk", true)
-            put("racyCheckOk", true)
-        })
-        var answer = ask(visitorId(c))
-        // Taken for a bot: try once more with the visitor id YouTube just gave.
-        val reason = answer.at("playabilityStatus/reason").str.orEmpty()
-        if (answer.at("playabilityStatus/status").str != "OK" && reason.contains("bot", ignoreCase = true)) {
-            answer.at("responseContext/visitorData").str?.let { fresh ->
-                visitor = fresh
-                answer = ask(fresh)
-            }
-        }
-        val url = pick(answer)
-        return url to (if (url.contains("mime=audio%2Fmp4")) "m4a" else "webm")
-    }
-
-    /** Chooses the stream from a player answer; throws YouTube's reason when it won't play. */
-    fun pick(answer: JsonElement): String {
-        val status = answer.at("playabilityStatus/status").str
-        check(status == "OK") { answer.at("playabilityStatus/reason").str ?: status ?: "not playable" }
-        fun JsonElement.num(k: String) = (at(k) as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L
-        val rank = mapOf(251L to 4, 140L to 3, 250L to 2, 249L to 1)
-        val best = answer.at("streamingData/adaptiveFormats").arr
-            .filter { it.at("mimeType").str?.startsWith("audio/") == true && it.at("url").str != null }
-            .maxWithOrNull(compareBy({ rank[it.num("itag")] ?: 0 }, { it.num("bitrate") }))
-        return checkNotNull(best?.at("url").str) { "no direct audio stream" }
     }
 }

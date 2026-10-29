@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
@@ -170,6 +172,14 @@ fun LibraryPage(vm: AppViewModel) {
             }
         } else {
             item { Text("Sign in to see your playlists", color = Dim, modifier = Modifier.padding(16.dp)) }
+        }
+        // Account: sign out, or sign in when browsing without an account (both show the sign-in screen).
+        item {
+            if (vm.api.signedIn) {
+                LibraryRow("Sign out", "Use another account or none", Brush.linearGradient(listOf(Color(0xFF3A3A42), Color(0xFF3A3A42))), Icons.AutoMirrored.Filled.Logout) { vm.signOut() }
+            } else {
+                LibraryRow("Sign in with Google", "Your playlists, likes and history", Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.AutoMirrored.Filled.Login) { vm.signOut() }
+            }
         }
     }
     if (naming) NewPlaylist({ naming = false }) { vm.createPlaylist(it, null); naming = false }

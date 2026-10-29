@@ -98,6 +98,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signOut() {
         prefs.edit().remove("cookie").apply()
+        // Forget the sign-in page's Google session too, so the next sign-in can pick another account.
+        android.webkit.CookieManager.getInstance().removeAllCookies(null)
         player.stop()
         api = YtMusic(null)
         signedIn = false

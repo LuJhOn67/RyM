@@ -28,9 +28,9 @@ class PlaybackService : MediaSessionService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
-        // Songs play from files: the cache (see Streams) or Music/RymPlayer (downloads).
+        // Web links stream in 4 MB ranges (see RangedHttpDataSource); files play directly.
         val exo = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this)))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, RangedHttpDataSource.Factory())))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .build()
