@@ -10,6 +10,7 @@ pub mod login;
 pub mod lyrics;
 pub mod page_cache;
 pub mod stream;
+pub mod vlc;
 
 use std::path::PathBuf;
 

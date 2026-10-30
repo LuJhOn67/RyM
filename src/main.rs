@@ -86,6 +86,8 @@ enum Event {
     Tracks(Page, Result<Vec<Track>, String>),
     /// The song to play: from the cache, or still arriving (it plays while it downloads).
     Fetched(String, Result<stream::Playable, String>),
+    /// The song's direct link for VLC.
+    InVlc(String, Result<(String, Vec<(String, String)>), String>),
     Lyrics(String, Result<Option<Lyrics>, String>),
     Rated(String, bool, Result<(), String>),
     /// A playlist was made; the song to put in it, if it was made from the picker.
@@ -101,6 +103,8 @@ fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
 }
 
 struct App {
+    /// VLC playing the current song, when "Play songs in" is VLC.
+    vlc: Option<std::process::Child>,
     /// Songs in a row that couldn't be fetched; playback stops at 3.
     failures: u32,
     tx: UnboundedSender<Event>,
@@ -149,6 +153,7 @@ impl App {
     fn new(tx: UnboundedSender<Event>) -> Self {
         App {
             failures: 0,
+            vlc: None,
             tx,
             mode: Mode::Login,
             focus: Focus::Tracks,
@@ -323,6 +328,24 @@ impl App {
                         }
                     }
                     Err(e) => self.status = e,
+                }
+            }
+            Event::InVlc(vid, result) => {
+                let Some(t) = self.now_playing().filter(|t| t.video_id == vid).cloned() else { return };
+                self.loading = false;
+                match (result, rymplayer::vlc::find()) {
+                    (Ok((url, headers)), Some(exe)) => {
+                        rymplayer::vlc::stop(&mut self.vlc);
+                        match rymplayer::vlc::play(&exe, &url, &headers, &format!("{} - {}", t.artist, t.title)) {
+                            Ok(child) => {
+                                self.vlc = Some(child);
+                                self.status = "Playing in VLC".into();
+                            }
+                            Err(e) => self.status = format!("VLC: {e}"),
+                        }
+                    }
+                    (Err(e), _) => self.status = format!("Can't play: {e}"),
+                    (_, None) => self.status = "VLC isn't installed".into(),
                 }
             }
             Event::Fetched(vid, result) => {
@@ -868,7 +891,17 @@ impl App {
 
         let vid = track.video_id.clone();
         let v = vid.clone();
-        self.spawn(async move { Event::Fetched(v.clone(), s(stream::open(v).await)) });
+        // "Play songs in: VLC" with VLC installed: the song opens there instead.
+        let in_vlc = self.config.play_in_vlc && rymplayer::vlc::find().is_some();
+        if self.config.play_in_vlc && !in_vlc {
+            self.status = "VLC isn't installed: playing here".into();
+        }
+        if in_vlc {
+            self.spawn(async move { Event::InVlc(v.clone(), s(stream::link(&v).await)) });
+        } else {
+            rymplayer::vlc::stop(&mut self.vlc);
+            self.spawn(async move { Event::Fetched(v.clone(), s(stream::open(v).await)) });
+        }
 
         let v = vid.clone();
         let dur = parse_duration(&track.duration);

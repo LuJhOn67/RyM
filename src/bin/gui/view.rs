@@ -394,6 +394,23 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        let vlc_found = rymplayer::vlc::find().is_some();
+        let vlc_row = row![
+            column![
+                line("Play songs in", 15, SEMI, p.text),
+                line(
+                    if vlc_found { "VLC: each song opens in VLC. RyM: the built-in player." } else { "VLC isn't installed on this PC, so songs play here." },
+                    13,
+                    FONT,
+                    p.dim
+                )
+            ]
+            .spacing(4)
+            .width(Fill),
+            button(line(if self.config.play_in_vlc { "VLC" } else { "RyM" }, 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::ToggleVlc),
+        ]
+        .align_y(Alignment::Center);
+
         let account: Element<'_, Message> = if self.logged_in() {
             button(line("Sign out", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
@@ -411,6 +428,7 @@ impl Gui {
             download_row,
             parallel_row,
             piece_row,
+            vlc_row,
             space().height(8),
             heading("Account", p),
             row![account],

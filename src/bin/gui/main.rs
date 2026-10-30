@@ -122,6 +122,10 @@ pub enum Message {
     PlayAll,
     /// The song to play: from the cache, or still arriving (it plays while it downloads).
     Fetched(String, Result<stream::Playable, String>),
+    /// The song's direct link for VLC.
+    InVlc(String, Result<(String, Vec<(String, String)>), String>),
+    /// "Play songs in": RyM or VLC.
+    ToggleVlc,
     Toggle,
     Next,
     Prev,
@@ -276,6 +280,8 @@ pub struct Gui {
     pub radio_pending: bool,
     /// Songs in a row that couldn't be fetched; playback stops at 3.
     failures: u32,
+    /// VLC playing the current song, when "Play songs in" is VLC.
+    vlc: Option<std::process::Child>,
 
     pub lyrics: Option<Lyrics>,
     pub lyrics_status: String,
@@ -349,6 +355,7 @@ impl Gui {
             volume: 0.8,
             radio_pending: false,
             failures: 0,
+            vlc: None,
             lyrics: None,
             lyrics_status: String::new(),
             now_playing_open: false,
@@ -700,6 +707,31 @@ impl Gui {
                 self.queue = vec![t];
                 let play = self.play(0);
                 return Task::batch([play, self.continue_with_radio()]);
+            }
+            Message::InVlc(vid, result) => {
+                let Some(t) = self.now_playing().filter(|t| t.video_id == vid).cloned() else { return Task::none() };
+                self.loading = false;
+                match (result, rymplayer::vlc::find()) {
+                    (Ok((url, headers)), Some(exe)) => {
+                        rymplayer::vlc::stop(&mut self.vlc);
+                        match rymplayer::vlc::play(&exe, &url, &headers, &format!("{} - {}", t.artist, t.title)) {
+                            Ok(child) => {
+                                self.vlc = Some(child);
+                                self.status = "Playing in VLC".into();
+                            }
+                            Err(e) => self.status = format!("VLC: {e}"),
+                        }
+                    }
+                    (Err(e), _) => self.status = format!("Can't play: {e}"),
+                    (_, None) => self.status = "VLC isn't installed".into(),
+                }
+            }
+            Message::ToggleVlc => {
+                self.config.play_in_vlc = !self.config.play_in_vlc;
+                self.config.save();
+                if !self.config.play_in_vlc {
+                    rymplayer::vlc::stop(&mut self.vlc);
+                }
             }
             Message::Fetched(vid, result) => {
                 if self.now_playing().map(|t| &t.video_id) != Some(&vid) {
@@ -1080,10 +1112,24 @@ impl Gui {
             a.stop();
         }
         let vid = track.video_id.clone();
-        let fetch = Task::perform(stream::open(vid.clone()), {
-            let vid = vid.clone();
-            move |r| Message::Fetched(vid.clone(), s(r))
-        });
+        // "Play songs in: VLC" with VLC installed: the song opens there instead.
+        let in_vlc = self.config.play_in_vlc && rymplayer::vlc::find().is_some();
+        if self.config.play_in_vlc && !in_vlc {
+            self.status = "VLC isn't installed: playing here".into();
+        }
+        let fetch = if in_vlc {
+            let v = vid.clone();
+            Task::perform(async move { stream::link(&v).await }, {
+                let vid = vid.clone();
+                move |r| Message::InVlc(vid.clone(), s(r))
+            })
+        } else {
+            rymplayer::vlc::stop(&mut self.vlc);
+            Task::perform(stream::open(vid.clone()), {
+                let vid = vid.clone();
+                move |r| Message::Fetched(vid.clone(), s(r))
+            })
+        };
         let api = self.api.clone();
         let lyr = Task::perform(
             {

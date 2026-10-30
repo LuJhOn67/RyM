@@ -53,6 +53,8 @@ pub struct Config {
     pub download_connections: u8,
     /// Size of each downloaded piece in MB; 0 = open: the song is split evenly over the connections.
     pub download_piece_mb: u8,
+    /// Play songs in VLC (when it's installed) instead of the built-in player.
+    pub play_in_vlc: bool,
 }
 
 /// Piece sizes the settings cycle through (MB; 0 = open).
@@ -143,6 +145,7 @@ impl Default for Config {
             download_best: true,
             download_connections: 8,
             download_piece_mb: 0,
+            play_in_vlc: false,
         }
     }
 }
@@ -261,10 +264,11 @@ pub enum Setting {
     Download,
     Connections,
     Piece,
+    Vlc,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 13] = [
+pub const SETTINGS: [Setting; 14] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -277,6 +281,7 @@ pub const SETTINGS: [Setting; 13] = [
     Setting::Download,
     Setting::Connections,
     Setting::Piece,
+    Setting::Vlc,
     Setting::Reset,
 ];
 
@@ -318,6 +323,7 @@ impl Config {
             Setting::Download => "Download quality",
             Setting::Connections => "Download connections",
             Setting::Piece => "Download piece size",
+            Setting::Vlc => "Play songs in",
             Setting::Reset => "Reset layout",
         }
     }
@@ -336,6 +342,7 @@ impl Config {
             Setting::Download => if self.download_best { "Best (yt-dlp, slower)" } else { "Fast (~160 kbps)" }.to_string(),
             Setting::Connections => format!("{} at once", self.download_connections),
             Setting::Piece => self.piece_label(),
+            Setting::Vlc => if self.play_in_vlc { "VLC (when installed)" } else { "RyM (built-in)" }.to_string(),
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -358,9 +365,10 @@ impl Config {
             Setting::Download => self.download_best = !self.download_best,
             Setting::Connections => self.download_connections = (self.download_connections as i32 + step).clamp(1, 16) as u8,
             Setting::Piece => self.download_piece_mb = cycle(&PIECE_SIZES, self.download_piece_mb, step),
+            Setting::Vlc => self.play_in_vlc = !self.play_in_vlc,
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, ..Config::default() }
             }
         }
     }
