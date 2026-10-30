@@ -56,6 +56,8 @@ enum Input {
     Search,
     Cookie,
     NewPlaylist,
+    /// How many liked songs to download (empty = all).
+    DownloadCount,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +72,8 @@ enum Page {
     Mix(String),
     /// YouTube Music radio started from a song.
     Radio(String),
+    /// An artist's songs, albums and singles.
+    Artist(String),
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +100,10 @@ enum Event {
     /// The lyrics pane's background, from the song's cover.
     LyricsBg(String, (u8, u8, u8)),
     Rated(String, bool, Result<(), String>),
+    /// "Go to artist" for a song without its artist's id: found by name.
+    ArtistFound(String, Result<Option<String>, String>),
+    /// The liked songs batch download, after each song.
+    Batch(stream::Batch),
     /// The account's liked songs, re-read now and then so likes made on the phone show here.
     Liked(Result<Vec<Track>, String>),
     /// A playlist was made; the song to put in it, if it was made from the picker.
@@ -155,6 +163,11 @@ struct App {
     settings: Option<usize>,
     /// Selected row while the add-to-playlist picker is open.
     picker: Option<usize>,
+    /// Selected row while the song menu is open, and the song it's for.
+    song_menu: Option<usize>,
+    menu_song: Option<Track>,
+    /// When Previous was last pressed: twice in a row goes back even mid-song.
+    last_prev: Instant,
     /// Song the picker (or a new playlist) is for.
     pick_song: Option<Track>,
     /// The user's own playlists, for the picker.
@@ -197,6 +210,9 @@ impl App {
             config: Config::default(),
             settings: None,
             picker: None,
+            song_menu: None,
+            menu_song: None,
+            last_prev: Instant::now() - Duration::from_secs(60),
             pick_song: None,
             playlists: Vec::new(),
         }
@@ -431,6 +447,21 @@ impl App {
             }
             Event::Liked(Err(_)) => {}
             Event::Rated(_, _, Ok(())) => {}
+            Event::ArtistFound(name, Ok(Some(id))) => {
+                self.status.clear();
+                self.open(Page::Artist(id), name);
+                self.focus = Focus::Tracks;
+            }
+            Event::ArtistFound(..) => self.status = tr("Artist not found").into(),
+            Event::Batch(b) => {
+                let mut words = format!("{} {} / {}", tr("Downloading songs"), b.done, b.total);
+                for (n, what) in [(b.saved, tr("saved")), (b.skipped, tr("already there")), (b.failed, tr("failed"))] {
+                    if n > 0 {
+                        words.push_str(&format!(" · {n} {what}"));
+                    }
+                }
+                self.status = words;
+            }
             Event::Created(Ok(p), song) => {
                 self.status = format!("Created \"{}\"", p.title);
                 if let Some(vid) = song {
@@ -487,6 +518,10 @@ impl App {
             self.settings_key(sel, k.code);
             return true;
         }
+        if let Some(sel) = self.song_menu {
+            self.song_menu_key(sel, k.code);
+            return true;
+        }
         if let Some(sel) = self.picker {
             self.picker_key(sel, k.code);
             return true;
@@ -525,6 +560,20 @@ impl App {
             KeyCode::Char(',') => self.settings = Some(0),
             KeyCode::Char('h') => self.open(Page::History, tr("History").into()),
             KeyCode::Char('a') => self.open_picker(),
+            KeyCode::Char('o') => self.open_song_menu(),
+            KeyCode::Char('A') => {
+                if let Some(t) = self.target_song() {
+                    self.go_artist(t);
+                }
+            }
+            KeyCode::Char('D') => {
+                if self.page != Page::Playlist(api::LIKED_ID.into()) {
+                    self.status = tr("Open the Liked songs page first").into();
+                } else {
+                    self.buffer.clear();
+                    self.input = Some(Input::DownloadCount);
+                }
+            }
             KeyCode::Char('N') => self.new_playlist(None),
             KeyCode::Char(' ') => {
                 if let Some(a) = &self.audio {
@@ -567,6 +616,10 @@ impl App {
     fn submit(&mut self, input: Input) {
         let text = std::mem::take(&mut self.buffer).trim().to_string();
         self.input = None;
+        if input == Input::DownloadCount {
+            self.download_all(text.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(5000));
+            return;
+        }
         if text.is_empty() {
             return;
         }
@@ -580,6 +633,7 @@ impl App {
                 self.focus = Focus::Tracks;
                 self.spawn(async move { Event::Tracks(Page::Search, s(api.search(text).await)) });
             }
+            Input::DownloadCount => {}
             Input::NewPlaylist => {
                 let Some(api) = self.api.clone() else { return };
                 let song = self.pick_song.take().map(|t| t.video_id);
@@ -676,6 +730,15 @@ impl App {
     /// Plays row `i` of the visible list; the queue is the list's songs (links skipped).
     fn play_from_list(&mut self, i: usize) {
         let Some(vid) = self.tracks.get(i).map(|t| t.video_id.clone()) else { return };
+        if self.page == Page::Search
+            && let Some(t) = self.tracks.get(i).cloned()
+        {
+            // A search result: the song, then a radio of songs like it (not the other results).
+            self.queue = vec![t];
+            self.play(0);
+            self.continue_with_radio();
+            return;
+        }
         self.queue = self.tracks.iter().filter(|t| t.link.is_none()).cloned().collect();
         if let Some(q) = self.queue.iter().position(|t| t.video_id == vid) {
             self.play(q);
@@ -724,6 +787,7 @@ impl App {
                 Page::Album(id) => api.album_tracks(id).await,
                 Page::Mix(id) => api.mix_tracks(id).await,
                 Page::Radio(vid) => api.radio(vid).await,
+                Page::Artist(id) => api.artist_page(id).await,
                 Page::Search | Page::Local => Ok(Vec::new()),
             };
             Event::Tracks(page, s(r))
@@ -795,6 +859,113 @@ impl App {
         if self.config.library == Side::Hidden {
             self.focus = Focus::Tracks;
         }
+    }
+
+    /// The selected song, or the playing one.
+    fn target_song(&self) -> Option<Track> {
+        let selected = (self.focus == Focus::Tracks)
+            .then(|| self.track_state.selected().and_then(|i| self.tracks.get(i)))
+            .flatten()
+            .filter(|t| t.link.is_none());
+        selected.or(self.now_playing()).cloned()
+    }
+
+    /// The song menu's rows: (text, what it does).
+    pub fn song_menu_rows(&self) -> Vec<(&'static str, char)> {
+        let Some(t) = &self.menu_song else { return Vec::new() };
+        let local = rymplayer::local::is_local(&t.video_id);
+        let mut rows = vec![(tr("Play next"), 'n'), (tr("Add to queue"), 'q')];
+        if !local {
+            rows.push((tr("Download"), 'd'));
+            if self.logged_in() {
+                rows.push((if self.liked.contains(&t.video_id) { tr("Remove from liked songs") } else { tr("Add to liked songs") }, 'l'));
+            }
+            if !t.artist.is_empty() {
+                rows.push((tr("Go to artist"), 'a'));
+            }
+        }
+        rows
+    }
+
+    /// `o` or a right-click: the song menu for the selected song (or the playing one).
+    fn open_song_menu(&mut self) {
+        let Some(t) = self.target_song() else { return };
+        self.menu_song = Some(t);
+        self.song_menu = Some(0);
+    }
+
+    fn song_menu_key(&mut self, sel: usize, code: KeyCode) {
+        let last = self.song_menu_rows().len().saturating_sub(1);
+        match code {
+            KeyCode::Esc | KeyCode::Char('o') | KeyCode::Char('q') => self.song_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => self.song_menu = Some(sel.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.song_menu = Some((sel + 1).min(last)),
+            KeyCode::Enter => self.song_menu_pick(sel),
+            _ => {}
+        }
+    }
+
+    pub fn song_menu_pick(&mut self, i: usize) {
+        self.song_menu = None;
+        let Some(t) = self.menu_song.take() else { return };
+        let Some(&(_, what)) = self.song_menu_rows_for(&t).get(i) else { return };
+        match what {
+            'n' => match self.current {
+                Some(c) => self.queue.insert(c + 1, t),
+                None => {
+                    self.queue = vec![t];
+                    self.play(0);
+                }
+            },
+            'q' => {
+                self.queue.push(t);
+                if self.current.is_none() {
+                    self.play(self.queue.len() - 1);
+                }
+            }
+            'd' => {
+                self.status = format!("{} \"{}\"...", tr("Downloading"), t.title);
+                self.spawn(async move { Event::Downloaded(s(stream::save_to_music(&t.video_id, &t.artist, &t.title).await)) });
+            }
+            'l' => self.like(t),
+            'a' => self.go_artist(t),
+            _ => {}
+        }
+    }
+
+    fn song_menu_rows_for(&mut self, t: &Track) -> Vec<(&'static str, char)> {
+        self.menu_song = Some(t.clone());
+        let rows = self.song_menu_rows();
+        self.menu_song = None;
+        rows
+    }
+
+    /// The artist's page: every song, then albums and singles. Songs without the artist's id
+    /// find it by name first.
+    fn go_artist(&mut self, t: Track) {
+        let name = t.artist.split(", ").next().unwrap_or(&t.artist).to_string();
+        if let Some(id) = t.artist_id {
+            self.open(Page::Artist(id), name);
+            self.focus = Focus::Tracks;
+            return;
+        }
+        let Some(api) = self.api.clone() else { return };
+        self.status = tr("Finding the artist...").into();
+        self.spawn(async move { Event::ArtistFound(name.clone(), s(api.artist_id_for(name).await)) });
+    }
+
+    /// Downloads the liked songs (the first `limit`), one after another, skipping ones already
+    /// in Music/RymPlayer; the status line shows how it goes.
+    fn download_all(&mut self, limit: usize) {
+        let Some(api) = self.api.clone().filter(Api::logged_in) else { return };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let songs = api.playlist_all(api::LIKED_ID.into(), limit).await.unwrap_or_default();
+            stream::download_many(songs, |b| {
+                let _ = tx.send(Event::Batch(b));
+            })
+            .await;
+        });
     }
 
     /// Picker rows: "new playlist", then the user's playlists.
@@ -876,6 +1047,7 @@ impl App {
                 self.change_setting(i, 1);
             }
             ui::Click::Pick(i) => self.pick(i),
+            ui::Click::MenuItem(i) => self.song_menu_pick(i),
         }
     }
 
@@ -890,15 +1062,25 @@ impl App {
                 self.button(*click);
                 return;
             }
-            if self.settings.is_some() || self.picker.is_some() {
+            if self.settings.is_some() || self.picker.is_some() || self.song_menu.is_some() {
                 if !inside(a.popup) {
                     self.settings = None;
                     self.picker = None;
+                    self.song_menu = None;
                 }
                 return;
             }
         }
-        if self.settings.is_some() || self.picker.is_some() {
+        if self.settings.is_some() || self.picker.is_some() || self.song_menu.is_some() {
+            return;
+        }
+        if m.kind == MouseEventKind::Down(MouseButton::Right) && inside(a.tracks) && m.row >= a.tracks.y + 2 {
+            let i = self.track_state.offset() + (m.row - a.tracks.y - 2) as usize;
+            if self.tracks.get(i).is_some_and(|t| t.link.is_none()) {
+                self.focus = Focus::Tracks;
+                self.track_state.select(Some(i));
+                self.open_song_menu();
+            }
             return;
         }
         match m.kind {
@@ -1017,8 +1199,12 @@ impl App {
 
     fn prev(&mut self) {
         let Some(i) = self.current else { return };
-        // Like most players: restart the song unless we're at its start.
-        if self.pos > 3.0 || i == 0 {
+        // Like most players: restart the song unless we're at its start, or Previous was
+        // pressed twice in a row. The player's own position, not the last drawn one.
+        let pos = self.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position);
+        let again = self.last_prev.elapsed() < Duration::from_millis(1500);
+        self.last_prev = Instant::now();
+        if (pos > 3.0 && !again) || i == 0 {
             if let Some(a) = &self.audio {
                 a.seek(0.0);
             }
@@ -1051,7 +1237,13 @@ impl App {
     }
 
     fn toggle_like(&mut self) {
-        let (Some(t), Some(api)) = (self.now_playing().cloned(), self.api.clone()) else { return };
+        if let Some(t) = self.now_playing().cloned() {
+            self.like(t);
+        }
+    }
+
+    fn like(&mut self, t: Track) {
+        let Some(api) = self.api.clone() else { return };
         if rymplayer::local::is_local(&t.video_id) {
             self.status = tr("Likes are for YouTube Music songs").into();
             return;

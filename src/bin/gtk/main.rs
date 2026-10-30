@@ -260,6 +260,10 @@ enum Ev {
     Rated(String, bool, anyhow::Result<()>),
     Radio(anyhow::Result<Vec<Track>>),
     Downloaded(anyhow::Result<PathBuf>),
+    /// "Go to artist" for a song without its artist's id: found by name.
+    ArtistFound(String, anyhow::Result<Option<String>>),
+    /// The liked songs batch download, after each song.
+    Batch(stream::Batch),
     Done,
 }
 
@@ -326,6 +330,14 @@ struct Ui {
     /// Song rows on screen, by song, to mark the playing one.
     rows: Vec<(String, glib::WeakRef<Button>)>,
     toast_id: u64,
+    /// The list page holds search results: a click plays the song, then a radio like it.
+    from_search: bool,
+    /// Liked songs batch download: how it's going, and the widgets that show it.
+    batch: Option<stream::Batch>,
+    batch_label: Option<glib::WeakRef<Label>>,
+    batch_bar: Option<glib::WeakRef<gtk::ProgressBar>>,
+    /// When Previous was last pressed: twice in a row goes back even mid-song.
+    last_prev: Instant,
     /// What the player bar shows now, so the ticker only changes what changed.
     shown_playing: Option<bool>,
     shown_len: f32,
@@ -788,6 +800,11 @@ fn build(app: &Application) {
         hearts: Vec::new(),
         rows: Vec::new(),
         toast_id: 0,
+        from_search: false,
+        batch: None,
+        batch_label: None,
+        batch_bar: None,
+        last_prev: Instant::now() - Duration::from_secs(60),
         shown_playing: None,
         shown_len: 0.0,
         shown_pos: None,
@@ -834,6 +851,28 @@ fn build(app: &Application) {
             glib::Propagation::Proceed
         });
         window.add_controller(keys);
+    }
+    {
+        // The bar's cover opens the lyrics (it never skips the song).
+        let ui2 = ui.clone();
+        let click = gtk::GestureClick::new();
+        click.connect_released(move |_, _, _, _| ui2.borrow().w.lyrics_panel.set_reveal_child(true));
+        let s = ui.borrow();
+        s.w.bar_cover.add_controller(click);
+        s.w.bar_cover.set_cursor_from_name(Some("pointer"));
+        s.w.bar_cover.set_tooltip_text(Some(tr("Lyrics")));
+    }
+    {
+        let ui2 = ui.clone();
+        let click = gtk::GestureClick::new();
+        click.connect_released(move |_, _, _, _| {
+            if let Some(t) = now_playing(&ui2) {
+                go_artist(&ui2, &t);
+            }
+        });
+        let s = ui.borrow();
+        s.w.bar_artist.add_controller(click);
+        s.w.bar_artist.set_cursor_from_name(Some("pointer"));
     }
     {
         let ui = ui.clone();
@@ -957,6 +996,7 @@ fn go(ui: &Shared, page: Page) {
 fn open_songs(ui: &Shared, title: String, load: impl Future<Output = anyhow::Result<Vec<Track>>> + Send + 'static) {
     {
         let mut s = ui.borrow_mut();
+        s.from_search = false;
         s.page = Page::Songs(title);
         s.page_id += 1;
         s.tracks.clear();
@@ -983,6 +1023,7 @@ fn search_songs(ui: &Shared, q: String) {
         return;
     };
     open_songs(ui, format!("{} \"{q}\"", tr("Results for")), api.search(q));
+    ui.borrow_mut().from_search = true;
 }
 
 /// A fresh home feed: new songs on top, liked songs read on the way.
@@ -1056,6 +1097,7 @@ fn render_page(ui: &Shared) {
     ui.borrow().w.content.append(&body);
     want_covers(ui, wants);
     refresh_hearts(ui);
+    update_batch(ui);
 }
 
 fn page_box() -> gtk::Box {
@@ -1200,7 +1242,41 @@ fn list_page(ui: &Shared, title: &str, liked_page: bool, wants: &mut Wants) -> g
         let songs = songs.clone();
         play_all.connect_clicked(move |_| play_list(&ui, &songs, 0));
     }
-    info.append(&play_all);
+    let buttons = gtk::Box::new(Orientation::Horizontal, 10);
+    buttons.append(&play_all);
+    if liked_page && signed {
+        let count = gtk::Entry::new();
+        count.set_placeholder_text(Some(tr("How many (empty = all)")));
+        count.set_input_purpose(gtk::InputPurpose::Digits);
+        count.set_width_chars(18);
+        count.add_css_class("search");
+        let all = Button::with_label(tr("Download all"));
+        all.add_css_class("ghost");
+        let start = {
+            let ui = ui.clone();
+            let count = count.clone();
+            move || download_all(&ui, count.text().trim().parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(5000))
+        };
+        {
+            let start = start.clone();
+            all.connect_clicked(move |_| start());
+        }
+        count.connect_activate(move |_| start());
+        buttons.append(&count);
+        buttons.append(&all);
+    }
+    info.append(&buttons);
+    if liked_page && signed {
+        let words = label("", &["dim", "small"]);
+        let bar = gtk::ProgressBar::new();
+        bar.set_size_request(280, -1);
+        bar.set_halign(Align::Start);
+        info.append(&words);
+        info.append(&bar);
+        let mut s = ui.borrow_mut();
+        s.batch_label = Some(words.downgrade());
+        s.batch_bar = Some(bar.downgrade());
+    }
     head.append(&info);
     page.append(&head);
 
@@ -1238,7 +1314,7 @@ fn song_row(ui: &Shared, i: usize, t: &Track, songs: Rc<Vec<Track>>, playing: Op
     names.set_valign(Align::Center);
     names.set_hexpand(true);
     names.append(&label(&t.title, &["title"]));
-    names.append(&label(&t.artist, &["dim", "small"]));
+    names.append(&artist_label(ui, t, &["dim", "small"]));
     row.append(&names);
     let album = label(&t.album, &["dim", "small"]);
     album.set_width_chars(22);
@@ -1268,6 +1344,9 @@ fn song_row(ui: &Shared, i: usize, t: &Track, songs: Rc<Vec<Track>>, playing: Op
         b.connect_clicked(move |_| {
             if t.link.is_some() {
                 open_link(&ui, &t);
+            } else if ui.borrow().from_search {
+                // A search result: the song, then a radio of songs like it.
+                play_with_radio(&ui, t.clone());
             } else if let Some(at) = songs.iter().position(|s| s.video_id == t.video_id) {
                 play_list(&ui, &songs, at);
             }
@@ -1467,49 +1546,134 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
     page.upcast()
 }
 
-/// Right-click on a song: play next, add to queue, radio, like, download.
+/// Right-click (or a long press on touch screens) on a song: play next, add to queue, radio,
+/// like, download, go to the artist.
 fn song_menu_on(ui: &Shared, widget: &impl IsA<gtk::Widget>, t: Track) {
+    let anchor = widget.clone().upcast::<gtk::Widget>();
     let click = gtk::GestureClick::new();
     click.set_button(3);
-    let weak = Rc::downgrade(ui);
-    let anchor = widget.clone().upcast::<gtk::Widget>();
-    click.connect_pressed(move |_, _, x, y| {
-        let Some(ui) = weak.upgrade() else { return };
-        let pop = gtk::Popover::new();
-        pop.set_parent(&anchor);
-        pop.set_has_arrow(false);
-        pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-        let col = gtk::Box::new(Orientation::Vertical, 0);
-        let liked = ui.borrow().liked.contains(&t.video_id);
-        let items: Vec<(&str, Box<dyn Fn(&Shared, &Track)>)> = vec![
-            (tr("Play next"), Box::new(|ui: &Shared, t: &Track| play_next(ui, t.clone()))),
-            (tr("Add to queue"), Box::new(|ui: &Shared, t: &Track| add_to_queue(ui, t.clone()))),
-            (tr("Start radio"), Box::new(|ui: &Shared, t: &Track| play_with_radio(ui, t.clone()))),
-            (if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))),
-            (tr("Download"), Box::new(|ui: &Shared, t: &Track| download(ui, t.clone()))),
-        ];
-        for (text, act) in items {
-            let b = Button::with_label(text);
-            if let Some(l) = b.child().and_downcast::<Label>() {
-                l.set_xalign(0.0);
+    {
+        let (weak, anchor, t) = (Rc::downgrade(ui), anchor.clone(), t.clone());
+        click.connect_pressed(move |_, _, x, y| {
+            if let Some(ui) = weak.upgrade() {
+                song_menu(&ui, &anchor, x, y, &t);
             }
-            let ui = ui.clone();
-            let t = t.clone();
-            let pop2 = pop.clone();
-            b.connect_clicked(move |_| {
-                pop2.popdown();
-                act(&ui, &t);
-            });
-            col.append(&b);
-        }
-        pop.set_child(Some(&col));
-        pop.connect_closed(|p| {
-            let p = p.clone();
-            glib::idle_add_local_once(move || p.unparent());
         });
-        pop.popup();
-    });
+    }
     widget.add_controller(click);
+    let hold = gtk::GestureLongPress::new();
+    let weak = Rc::downgrade(ui);
+    hold.connect_pressed(move |g, x, y| {
+        g.set_state(gtk::EventSequenceState::Claimed);
+        if let Some(ui) = weak.upgrade() {
+            song_menu(&ui, &anchor, x, y, &t);
+        }
+    });
+    widget.add_controller(hold);
+}
+
+fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
+    let pop = gtk::Popover::new();
+    pop.set_parent(anchor);
+    pop.set_has_arrow(false);
+    pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    let col = gtk::Box::new(Orientation::Vertical, 0);
+    let liked = ui.borrow().liked.contains(&t.video_id);
+    let mut items: Vec<(&str, Box<dyn Fn(&Shared, &Track)>)> = vec![
+        (tr("Play next"), Box::new(|ui: &Shared, t: &Track| play_next(ui, t.clone()))),
+        (tr("Add to queue"), Box::new(|ui: &Shared, t: &Track| add_to_queue(ui, t.clone()))),
+        (tr("Start radio"), Box::new(|ui: &Shared, t: &Track| play_with_radio(ui, t.clone()))),
+        (if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))),
+        (tr("Download"), Box::new(|ui: &Shared, t: &Track| download(ui, t.clone()))),
+    ];
+    if !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id) {
+        items.push((tr("Go to artist"), Box::new(|ui: &Shared, t: &Track| go_artist(ui, t))));
+    }
+    for (text, act) in items {
+        let b = Button::with_label(text);
+        if let Some(l) = b.child().and_downcast::<Label>() {
+            l.set_xalign(0.0);
+        }
+        let (ui, t, pop2) = (ui.clone(), t.clone(), pop.clone());
+        b.connect_clicked(move |_| {
+            pop2.popdown();
+            act(&ui, &t);
+        });
+        col.append(&b);
+    }
+    pop.set_child(Some(&col));
+    pop.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+    pop.popup();
+}
+
+/// An artist's name that opens their page when clicked.
+fn artist_label(ui: &Shared, t: &Track, classes: &[&str]) -> Label {
+    let l = label(&t.artist, classes);
+    if t.link.is_none() && !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id) {
+        l.set_cursor_from_name(Some("pointer"));
+        let click = gtk::GestureClick::new();
+        let (weak, t) = (Rc::downgrade(ui), t.clone());
+        click.connect_released(move |g, _, _, _| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            if let Some(ui) = weak.upgrade() {
+                go_artist(&ui, &t);
+            }
+        });
+        l.add_controller(click);
+    }
+    l
+}
+
+/// The artist's page: every song, then albums and singles. Songs without the artist's id find
+/// it by name first.
+fn go_artist(ui: &Shared, t: &Track) {
+    let Some(api) = api_of(ui) else { return };
+    let name = t.artist.split(", ").next().unwrap_or(&t.artist).to_string();
+    match t.artist_id.clone() {
+        Some(id) => open_songs(ui, name, api.artist_page(id)),
+        None => {
+            toast(ui, tr("Finding the artist..."));
+            post(ui, async move { Ev::ArtistFound(name.clone(), api.artist_id_for(name).await) });
+        }
+    }
+}
+
+/// Downloads the liked songs (the first `limit`), one after another, skipping ones already in
+/// Music/RymPlayer; the Liked page shows how it goes.
+fn download_all(ui: &Shared, limit: usize) {
+    let Some(api) = api_of(ui).filter(Api::logged_in) else { return };
+    let s = ui.borrow();
+    if s.batch.is_some_and(|b| !b.finished()) {
+        return;
+    }
+    let tx = s.tx.clone();
+    s.runtime.spawn(async move {
+        let songs = api.playlist_all(rymplayer::api::LIKED_ID.into(), limit).await.unwrap_or_default();
+        stream::download_many(songs, |b| {
+            let _ = tx.send(Ev::Batch(b));
+        })
+        .await;
+    });
+}
+
+fn update_batch(ui: &Shared) {
+    let s = ui.borrow();
+    let Some(b) = s.batch else { return };
+    let mut words = format!("{} {} / {}", tr("Downloading songs"), b.done, b.total);
+    for (n, what) in [(b.saved, tr("saved")), (b.skipped, tr("already there")), (b.failed, tr("failed"))] {
+        if n > 0 {
+            words.push_str(&format!(" · {n} {what}"));
+        }
+    }
+    if let Some(l) = s.batch_label.as_ref().and_then(glib::WeakRef::upgrade) {
+        l.set_text(&words);
+    }
+    if let Some(p) = s.batch_bar.as_ref().and_then(glib::WeakRef::upgrade) {
+        p.set_fraction(if b.total > 0 { b.done as f64 / b.total as f64 } else { 0.0 });
+    }
 }
 
 // ---------------------------------------------------------------- likes
@@ -1781,13 +1945,17 @@ fn skip(ui: &Shared) {
     }
 }
 
+/// Previous: back to the start of the song after its first 3 seconds; before that (or pressed
+/// twice in a row), the song before it.
 fn previous(ui: &Shared) {
-    let (current, pos) = {
-        let s = ui.borrow();
-        (s.current, s.audio.as_ref().map_or(0.0, Audio::position))
+    let (current, pos, again) = {
+        let mut s = ui.borrow_mut();
+        let again = s.last_prev.elapsed() < Duration::from_millis(1500);
+        s.last_prev = Instant::now();
+        (s.current, s.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position), again)
     };
     match current {
-        Some(i) if pos < 3.0 && i > 0 => play_at(ui, i - 1),
+        Some(i) if (pos < 3.0 || again) && i > 0 => play_at(ui, i - 1),
         Some(_) => {
             if let Some(a) = &ui.borrow().audio {
                 a.seek(0.0);
@@ -2174,6 +2342,16 @@ fn poll_events(ui: &Shared) {
             }
             Ev::Downloaded(Ok(p)) => toast(ui, &format!("{} {}", tr("Saved to"), p.display())),
             Ev::Downloaded(Err(e)) => toast(ui, &format!("{}: {e}", tr("Download failed"))),
+            Ev::ArtistFound(name, Ok(Some(id))) => {
+                if let Some(api) = api_of(ui) {
+                    open_songs(ui, name, api.artist_page(id));
+                }
+            }
+            Ev::ArtistFound(..) => toast(ui, tr("Artist not found")),
+            Ev::Batch(b) => {
+                ui.borrow_mut().batch = Some(b);
+                update_batch(ui);
+            }
             Ev::Done => {}
         }
     }

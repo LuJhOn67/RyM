@@ -192,6 +192,13 @@ pub enum Message {
     GoAlbum(Track),
     GoArtist(Track),
     Dislike(Track),
+    /// "Go to artist" for a song that came without its artist's id: found by name.
+    ArtistFound(String, Result<Option<String>, String>),
+    /// Liked songs page: how many to download (text from the box; empty = all).
+    BatchCount(String),
+    /// Download the liked songs (the first N), one after another.
+    DownloadAll,
+    BatchProgress(stream::Batch),
     Disliked(String, bool, Result<(), String>),
     Ignore,
 }
@@ -316,6 +323,11 @@ pub struct Gui {
     requested: HashSet<String>,
 
     pub disliked: HashSet<String>,
+    /// Liked songs batch download: the count typed in, and how it's going.
+    pub batch_count: String,
+    pub batch: Option<stream::Batch>,
+    /// When Previous was last pressed: twice in a row goes back even mid-song.
+    last_prev: Instant,
     pub menu: Option<MenuFor>,
     pub menu_pos: Point,
     cursor: Point,
@@ -386,6 +398,9 @@ impl Gui {
             images: HashMap::new(),
             requested: HashSet::new(),
             disliked: HashSet::new(),
+            batch_count: String::new(),
+            batch: None,
+            last_prev: long_ago(),
             menu: None,
             menu_pos: Point::ORIGIN,
             cursor: Point::ORIGIN,
@@ -725,6 +740,10 @@ impl Gui {
 
             Message::PlayRow(i) => {
                 let Some(t) = self.tracks.get(i).cloned() else { return Task::none() };
+                // Search results: the song, then a radio of songs like it (not the other results).
+                if matches!(self.page, Page::Search(_)) && t.link.is_none() {
+                    return self.update(Message::PlaySong(t));
+                }
                 if self.page == Page::Home {
                     rymplayer::feed::opened(&t);
                 }
@@ -810,12 +829,15 @@ impl Gui {
             Message::Next => return self.next(),
             Message::Prev => {
                 let Some(i) = self.current else { return Task::none() };
-                if self.pos > 3.0 || i == 0 {
-                    if let Some(a) = &self.audio {
-                        a.seek(0.0);
-                    }
-                } else {
+                // The player's own position (the shown one lags up to a tick behind).
+                let pos = self.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position);
+                let again = self.last_prev.elapsed() < Duration::from_millis(1500);
+                self.last_prev = Instant::now();
+                if i > 0 && (pos < 3.0 || again) {
                     return self.play(i - 1);
+                }
+                if let Some(a) = &self.audio {
+                    a.seek(0.0);
                 }
             }
             Message::Seek(v) => self.seeking = Some(v),
@@ -1099,11 +1121,43 @@ impl Gui {
                 return self.open(Page::Album(id), t.album);
             }
             Message::GoArtist(t) => {
-                let Some(id) = t.artist_id.clone() else { return Task::none() };
                 self.now_playing_open = false;
                 let name = t.artist.split(", ").next().unwrap_or(&t.artist).to_string();
+                if let Some(id) = t.artist_id.clone() {
+                    return self.open(Page::Artist(id), name);
+                }
+                // Songs from radios and some lists come without the artist's id: look it up.
+                let Some(api) = self.api.clone() else { return Task::none() };
+                self.status = tr("Finding the artist...").into();
+                return Task::perform(api.artist_id_for(name.clone()), move |r| Message::ArtistFound(name.clone(), s(r)));
+            }
+            Message::ArtistFound(name, Ok(Some(id))) => {
+                self.status.clear();
                 return self.open(Page::Artist(id), name);
             }
+            Message::ArtistFound(..) => self.status = tr("Artist not found").into(),
+            Message::BatchCount(text) => self.batch_count = text.chars().filter(char::is_ascii_digit).take(5).collect(),
+            Message::DownloadAll => {
+                let Some(api) = self.api.clone().filter(Api::logged_in) else { return Task::none() };
+                if self.batch.is_some_and(|b| !b.finished()) {
+                    return Task::none();
+                }
+                let limit = self.batch_count.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(5000);
+                self.batch = Some(stream::Batch::default());
+                // The whole liked list (page after page), then each song in turn; progress
+                // arrives as messages while it runs.
+                return Task::run(
+                    iced::stream::channel(8, move |mut out: iced::futures::channel::mpsc::Sender<stream::Batch>| async move {
+                        let songs = api.playlist_all(api::LIKED_ID.into(), limit).await.unwrap_or_default();
+                        stream::download_many(songs, |b| {
+                            let _ = out.try_send(b);
+                        })
+                        .await;
+                    }),
+                    Message::BatchProgress,
+                );
+            }
+            Message::BatchProgress(b) => self.batch = Some(b),
             Message::Dislike(t) => {
                 let Some(api) = self.api.clone() else { return Task::none() };
                 let vid = t.video_id.clone();
@@ -1164,7 +1218,7 @@ impl Gui {
                         Page::Album(id) => api.album_tracks(id).await,
                         Page::Mix(id) => api.mix_tracks(id).await,
                         Page::Radio(vid) => api.radio(vid).await,
-                        Page::Artist(id) => api.artist_songs(id).await,
+                        Page::Artist(id) => api.artist_page(id).await,
                         Page::Library | Page::Settings => Ok(Vec::new()),
                     }
                 }

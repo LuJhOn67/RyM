@@ -38,6 +38,8 @@ pub enum Click {
     Setting(usize),
     /// A row of the add-to-playlist picker.
     Pick(usize),
+    /// A row of the song menu.
+    MenuItem(usize),
 }
 
 /// Screen areas the mouse handler needs, filled in while drawing.
@@ -173,6 +175,15 @@ fn draw_main(f: &mut Frame, app: &mut App) {
     if let Some(sel) = app.picker {
         draw_picker(f, app, th, sel);
     }
+    if let Some(sel) = app.song_menu {
+        draw_song_menu(f, app, th, sel);
+    }
+    if app.input == Some(Input::DownloadCount) {
+        let area = centered(f.area(), 64, 3);
+        popup_bg(f, th, area);
+        let text = Line::from(vec![app.buffer.as_str().fg(th.text), "█".fg(th.accent)]);
+        f.render_widget(Paragraph::new(text).block(pane(th, i18n::tr("Download how many liked songs? (empty = all, Enter / Esc)"), true)), area);
+    }
     if app.input == Some(Input::NewPlaylist) {
         let area = centered(f.area(), 56, 3);
         popup_bg(f, th, area);
@@ -186,6 +197,24 @@ fn popup_bg(f: &mut Frame, th: &Theme, area: Rect) {
     f.render_widget(Clear, area);
     if let Some(bg) = th.bg {
         f.render_widget(Block::default().style(Style::new().bg(bg)), area);
+    }
+}
+
+/// The song menu (`o` or a right-click on a song).
+fn draw_song_menu(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
+    let rows = app.song_menu_rows();
+    let area = centered(f.area(), 44, rows.len() as u16 + 2);
+    popup_bg(f, th, area);
+    let title = app.menu_song.as_ref().map(|t| t.title.clone()).unwrap_or_default();
+    let block = pane(th, &title, true).title_bottom(Line::from(format!(" {} ", t("Enter choose  Esc close")).fg(th.dim)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    app.areas.popup = area;
+    for (i, (name, _)) in rows.iter().enumerate() {
+        let r = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        let style = if i == sel { cursor_style(th, true) } else { Style::new() };
+        f.render_widget(Paragraph::new(Line::from(format!(" {}", show(name)).fg(th.text))).style(style), r);
+        app.areas.buttons.push((r, Click::MenuItem(i)));
     }
 }
 
@@ -448,6 +477,9 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("h", "history"),
         ("F5/u", "refresh"),
         ("a", "add to playlist"),
+        ("o", "song menu"),
+        ("A", "artist"),
+        ("D", "download all"),
         ("tab", "switch"),
         (",", "settings"),
         ("q", "quit"),
@@ -498,7 +530,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
 
 /// The key hints' words as the static text the translations are keyed on.
 fn word(v: &str) -> &'static str {
-    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "switch", "settings", "quit"]
+    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "artist", "download all", "switch", "settings", "quit"]
         .into_iter()
         .find(|w| *w == v)
         .unwrap_or("")

@@ -453,6 +453,28 @@ impl Gui {
         scrollable(col).height(Fill).style(style::scroll(p)).into()
     }
 
+    /// "Downloading songs 12 / 50 · 10 saved · 1 already there · 1 failed", while it runs and after.
+    fn batch_line(&self, p: Palette) -> Element<'_, Message> {
+        let Some(b) = self.batch.filter(|_| self.page == Page::Playlist(api::LIKED_ID.into())) else { return space().into() };
+        let mut words = format!("{} {} / {}", tr("Downloading songs"), b.done, b.total);
+        for (n, what) in [(b.saved, tr("saved")), (b.skipped, tr("already there")), (b.failed, tr("failed"))] {
+            if n > 0 {
+                words.push_str(&format!(" · {n} {what}"));
+            }
+        }
+        let k = if b.total > 0 { b.done as f32 / b.total as f32 } else { 0.0 };
+        column![
+            line(words, 13, SEMI, if b.finished() { p.dim } else { p.accent }),
+            row![
+                container(space()).width(Length::FillPortion((k * 1000.0) as u16)).height(3).style(style::bg(p.accent)),
+                container(space()).width(Length::FillPortion(((1.0 - k) * 1000.0) as u16)).height(3).style(style::bg(p.divider)),
+            ]
+            .width(280),
+        ]
+        .spacing(4)
+        .into()
+    }
+
     /// Playlist, album, search, history: a header and song rows.
     fn list(&self, p: Palette) -> Element<'_, Message> {
         if self.tracks.is_empty() {
@@ -480,10 +502,29 @@ impl Gui {
                 container(line(&self.page_title, 30, BOLD, p.text)).clip(true),
                 line(format!("{songs} {}", tr("songs")), 13, FONT, p.dim),
                 space().height(4),
-                button(row![icon(Icon::Play, 18.0, p.pill_text), line(tr("Play all"), 14, BOLD, p.pill_text)].spacing(6).align_y(Alignment::Center))
-                    .padding([8, 20])
-                    .style(style::pill(p))
-                    .on_press(Message::PlayAll),
+                {
+                    let play = button(row![icon(Icon::Play, 18.0, p.pill_text), line(tr("Play all"), 14, BOLD, p.pill_text)].spacing(6).align_y(Alignment::Center))
+                        .padding([8, 20])
+                        .style(style::pill(p))
+                        .on_press(Message::PlayAll);
+                    let mut actions = row![play].spacing(10).align_y(Alignment::Center);
+                    if self.page == Page::Playlist(api::LIKED_ID.into()) && self.logged_in() {
+                        let running = self.batch.is_some_and(|b| !b.finished());
+                        let count = text_input(tr("How many (empty = all)"), &self.batch_count)
+                            .on_input(Message::BatchCount)
+                            .on_submit(Message::DownloadAll)
+                            .width(170)
+                            .padding([8, 12])
+                            .style(style::field(p));
+                        let go = button(row![icon(Icon::Download, 18.0, p.text), line(tr("Download all"), 14, BOLD, p.text)].spacing(6).align_y(Alignment::Center))
+                            .padding([8, 18])
+                            .style(style::chip(p))
+                            .on_press_maybe((!running).then_some(Message::DownloadAll));
+                        actions = actions.push(count).push(go);
+                    }
+                    actions
+                },
+                self.batch_line(p),
             ]
             .spacing(6)
         ]
@@ -522,7 +563,7 @@ impl Gui {
             };
             let r = row![
                 self.art(t.thumb.as_ref(), ROW_PX, 40.0, 4.0, p),
-                container(column![line(&t.title, 14, SEMI, title_color), line(&t.artist, 13, FONT, p.dim)].spacing(2))
+                container(column![line(&t.title, 14, SEMI, title_color), artist_link(t, line(&t.artist, 13, FONT, p.dim))].spacing(2))
                     .width(FillPortion(5))
                     .clip(true),
                 container(line(&t.album, 13, FONT, p.dim)).width(FillPortion(3)).clip(true),
@@ -550,11 +591,15 @@ impl Gui {
         let shadow = style::shadow(p);
         let cover = center(
             column![
-                container(self.art(t.thumb.as_ref(), ART_PX, 340.0, 10.0, p))
-                    .style(move |_| container::Style { shadow, border: Border { radius: 10.0.into(), ..Default::default() }, ..Default::default() }),
+                mouse_area(
+                    container(self.art(t.thumb.as_ref(), ART_PX, 340.0, 10.0, p))
+                        .style(move |_| container::Style { shadow, border: Border { radius: 10.0.into(), ..Default::default() }, ..Default::default() })
+                )
+                .on_press(Message::ShowTab(Tab::Lyrics))
+                .interaction(iced::mouse::Interaction::Pointer),
                 space().height(22),
                 line(&t.title, 24, BOLD, p.text),
-                line(&t.artist, 15, FONT, p.dim),
+                artist_link(t, line(&t.artist, 15, FONT, p.dim)),
             ]
             .align_x(Alignment::Center),
         )
@@ -584,7 +629,7 @@ impl Gui {
             let current = self.current == Some(i);
             let r = row![
                 self.art(t.thumb.as_ref(), ROW_PX, 40.0, 4.0, p),
-                container(column![line(&t.title, 14, SEMI, if current { p.accent } else { p.text }), line(&t.artist, 13, FONT, p.dim)].spacing(2))
+                container(column![line(&t.title, 14, SEMI, if current { p.accent } else { p.text }), artist_link(t, line(&t.artist, 13, FONT, p.dim))].spacing(2))
                     .width(Fill)
                     .clip(true),
                 line(&t.duration, 13, FONT, p.dim),
@@ -670,7 +715,7 @@ impl Gui {
                     .unwrap_or(&t.artist);
                 let menu = Message::Menu(MenuFor { track: t.clone(), queue_index: self.current });
                 row![
-                    mouse_area(button(self.art(t.thumb.as_ref(), ROW_PX, 48.0, 6.0, p)).padding(0).style(style::row(p, false)).on_press(Message::ToggleNowPlaying))
+                    mouse_area(button(self.art(t.thumb.as_ref(), ROW_PX, 48.0, 6.0, p)).padding(0).style(style::row(p, false)).on_press(Message::ShowLyrics))
                         .on_right_press(menu),
                     container(column![line(format!("{} - {}", t.title, t.artist), 12, FONT, p.dim), line(sung, 14, SEMI, p.text)].spacing(3)).width(Fill).clip(true),
                 ]
@@ -796,6 +841,14 @@ const LYRIC_SIZE: f32 = 26.0;
 const LYRIC_GAP: f32 = 16.0;
 const LYRIC_STEP: f32 = LYRIC_SIZE * 1.3 + LYRIC_GAP;
 
+/// An artist's name that opens their page when clicked.
+fn artist_link<'a>(t: &Track, name: iced::widget::Text<'a>) -> Element<'a, Message> {
+    if t.link.is_some() || t.artist.is_empty() || rymplayer::local::is_local(&t.video_id) {
+        return name.into();
+    }
+    mouse_area(name).on_press(Message::GoArtist(t.clone())).interaction(iced::mouse::Interaction::Pointer).into()
+}
+
 /// The song menu's rows. Only what RymPlayer can do is listed.
 fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {
     let t = &m.track;
@@ -818,7 +871,7 @@ fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {
     if t.album_id.is_some() {
         items.push((Icon::Album, tr("Go to album"), Message::GoAlbum(t.clone())));
     }
-    if t.artist_id.is_some() {
+    if t.artist_id.is_some() || (gui.api.is_some() && !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id)) {
         items.push((Icon::Artist, tr("Go to artist"), Message::GoArtist(t.clone())));
     }
     items.push((Icon::Share, tr("Share"), Message::Share(t.clone())));
