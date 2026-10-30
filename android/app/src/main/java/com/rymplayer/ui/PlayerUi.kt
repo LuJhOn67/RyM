@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -151,6 +152,9 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 Column(Modifier.weight(1f)) {
                     Marquee(t.title, 22, FontWeight.Bold, Color.White)
                     Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, modifier = Modifier.clickable { vm.goArtist(t) })
+                }
+                if (vm.hasVideo) {
+                    IconButton({ vm.watchVideo(t) }) { Icon(Icons.Default.OndemandVideo, tr("Watch video"), tint = Color.White) }
                 }
                 if (vm.api.signedIn) {
                     val liked = t.videoId in vm.liked

@@ -61,6 +61,27 @@ object YtDlp {
             ?: error("yt-dlp finished but the file is missing")
     }
 
+    /**
+     * The video plugin's universal downloader: a link from YouTube or any site yt-dlp knows, as a
+     * video (picture and sound in one file, best up to 1080p) or just the sound. Blocking; returns
+     * the file in the app's cache, ready to be published.
+     */
+    fun downloadAny(ctx: Context, url: String, video: Boolean, cookie: String?): File {
+        prepare(ctx)
+        val dir = File(ctx.cacheDir, "ytdlp-any").apply { deleteRecursively(); mkdirs() }
+        val request = YoutubeDLRequest(url.trim()).apply {
+            // One file without joining (the app has no ffmpeg): the best already-joined video, or the sound.
+            addOption("-f", if (video) "b[height<=1080][ext=mp4]/b[height<=1080]/b" else "ba[ext=m4a]/ba/b")
+            addOption("--no-playlist")
+            addOption("--no-part")
+            addOption("--restrict-filenames")
+            addOption("-o", File(dir, "%(title).100B [%(id)s].%(ext)s").absolutePath)
+            if (!cookie.isNullOrBlank() && ("youtube.com" in url || "youtu.be" in url)) addOption("--cookies", cookieFile(ctx, cookie).absolutePath)
+        }
+        YoutubeDL.getInstance().execute(request, "rym-link")
+        return dir.listFiles()?.filter { it.length() > 0 }?.maxByOrNull { it.length() } ?: error("yt-dlp saved nothing")
+    }
+
     /** yt-dlp wants a Netscape cookie file; this converts the `Cookie:` header the app signs in with. */
     private fun cookieFile(ctx: Context, header: String): File {
         val text = buildString {

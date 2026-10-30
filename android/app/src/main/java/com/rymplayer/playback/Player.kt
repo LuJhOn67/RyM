@@ -179,6 +179,10 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         }
     }
 
+    fun pause() {
+        controller?.pause()
+    }
+
     fun toggle() {
         val c = controller ?: return
         when {

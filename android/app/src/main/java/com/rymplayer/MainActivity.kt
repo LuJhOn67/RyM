@@ -71,6 +71,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { RymTheme { RymApp(viewModel()) } }
+        showUpdateFrom(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        showUpdateFrom(intent)
+    }
+
+    /** Opened from the "new update" notification: look again and show the patch notes. */
+    private fun showUpdateFrom(intent: android.content.Intent?) {
+        if (intent?.getBooleanExtra("show_update", false) == true) vm.checkUpdates(false)
     }
 }
 
@@ -106,7 +117,7 @@ fun RymApp(vm: AppViewModel) {
 
 @Composable
 private fun Main(vm: AppViewModel) {
-    BackHandler(vm.playerOpen || vm.stack.isNotEmpty() || vm.tab != Screen.Home) { vm.back() }
+    BackHandler(vm.video != null || vm.storeOpen || vm.settingsOpen || vm.playerOpen || vm.stack.isNotEmpty() || vm.tab != Screen.Home) { vm.back() }
     val tint = coverColor(vm.player.current?.thumb)
     Box(Modifier.fillMaxSize()) {
         Scaffold(
@@ -148,5 +159,14 @@ private fun Main(vm: AppViewModel) {
             FullPlayer(vm, tint)
         }
         vm.menu?.let { m -> com.rymplayer.ui.SongSheet(vm, m) { vm.menu = null } }
+        AnimatedVisibility(vm.settingsOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
+            com.rymplayer.ui.SettingsPage(vm)
+        }
+        AnimatedVisibility(vm.storeOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
+            com.rymplayer.ui.PluginStorePage(vm)
+        }
+        vm.video?.let { com.rymplayer.ui.VideoPage(vm, it) }
+        vm.update?.let { com.rymplayer.ui.UpdateDialog(vm, it) }
+        if (vm.linkOpen) com.rymplayer.ui.LinkDialog(vm)
     }
 }

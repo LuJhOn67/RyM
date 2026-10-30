@@ -226,6 +226,10 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         }
         t.albumId?.let { id -> item(tr("Go to album"), Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
         if (t.artist.isNotBlank()) item(tr("Go to artist"), Icons.Default.Person) { vm.goArtist(t) }()
+        if (vm.hasVideo) {
+            item(tr("Watch video"), Icons.Default.PlayArrow) { vm.watchVideo(t) }()
+            item(tr("Download video"), Icons.Default.Download) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true) }()
+        }
         if (queueIndex != null && queueIndex != vm.player.index) {
             item(tr("Remove from queue"), Icons.Default.MoreVert) { vm.player.remove(queueIndex) }()
         }

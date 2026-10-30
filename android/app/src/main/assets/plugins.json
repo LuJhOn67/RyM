@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "id": "video",
+      "name": "YouTube Video Player & Universal Downloader",
+      "name_ar": "مشغّل فيديو يوتيوب والمحمّل الشامل",
+      "version": "1.0.0",
+      "description": "Watch a song's music video, download videos, and download from YouTube or any site yt-dlp supports. Without it RyM stays an audio-only music player.",
+      "description_ar": "شاهد فيديو الأغنية، حمّل الفيديوهات، وحمّل من يوتيوب أو أي موقع يدعمه yt-dlp. بدونها يبقى RyM مشغّل موسيقى صوت بس.",
+      "platforms": ["windows", "linux", "android"]
+    }
+  ]
+}

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
@@ -152,46 +153,9 @@ fun LibraryPage(vm: AppViewModel) {
     LazyColumn(contentPadding = pagePadding) {
         item { Title(tr("Library")) }
         item {
-            LibraryRow(
-                tr("Language") + ": " + if (I18n.arabic) "العربية" else "English",
-                tr("The words in the app · tap to change"),
-                Brush.linearGradient(listOf(Color(0xFF2D9CFF), Color(0xFF8E44FF))),
-                Icons.Default.Language,
-            ) { vm.toggleArabic() }
-        }
-        item {
-            LibraryRow(
-                tr("Download quality") + ": " + (if (vm.downloadBest) tr("Best") else tr("Fast")),
-                if (vm.downloadBest) tr("yt-dlp with your account, 256 kbps for Premium, slower") else tr("About 160 kbps, in seconds · tap to change"),
-                Brush.linearGradient(listOf(Color(0xFF8E44FF), Color(0xFF2878D0))),
-                Icons.Default.Download,
-            ) { vm.toggleDownloadQuality() }
-        }
-        if (com.rymplayer.playback.Vlc.installed(context)) {
-            item {
-                LibraryRow(
-                    tr("Play songs in") + ": " + if (vm.playInVlc) "VLC" else "RyM",
-                    if (vm.playInVlc) tr("Each song opens in VLC · tap to play here") else tr("The built-in player · tap to use VLC"),
-                    Brush.linearGradient(listOf(Color(0xFFFF8800), Color(0xFFFF5500))),
-                    Icons.Default.PlayArrow,
-                ) { vm.togglePlayInVlc() }
+            LibraryRow(tr("Settings"), tr("Language, quality, plugins, updates, account"), Brush.linearGradient(listOf(Color(0xFF2D9CFF), Color(0xFF8E44FF))), Icons.Default.Settings) {
+                vm.settingsOpen = true
             }
-        }
-        item {
-            LibraryRow(
-                "${tr("Download connections")}: ${vm.connections}",
-                tr("How many at once (1-16); more use more of your line · tap to change"),
-                Brush.linearGradient(listOf(Color(0xFF2878D0), Color(0xFF19B6A5))),
-                Icons.Default.Download,
-            ) { vm.nextConnections() }
-        }
-        item {
-            LibraryRow(
-                tr("Download piece size") + ": " + if (vm.pieceMb == 0) tr("Open") else "${vm.pieceMb} MB",
-                if (vm.pieceMb == 0) tr("No fixed size: the song is split evenly over the connections") else "${tr("Each connection fetches")} ${vm.pieceMb} MB ${tr("at a time · tap to change")}",
-                Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF8E44FF))),
-                Icons.Default.Download,
-            ) { vm.nextPieceSize() }
         }
         item {
             LibraryRow(tr("Downloads"), tr("Saved on this phone, play without internet"), Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
@@ -228,15 +192,7 @@ fun LibraryPage(vm: AppViewModel) {
         } else {
             item { Text(tr("Sign in to see your playlists"), color = Dim, modifier = Modifier.padding(16.dp)) }
         }
-        item { Text("RyM ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()}", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(16.dp)) }
-        // Account: sign out, or sign in when browsing without an account (both show the sign-in screen).
-        item {
-            if (vm.api.signedIn) {
-                LibraryRow(tr("Sign out"), tr("Use another account or none"), Brush.linearGradient(listOf(Color(0xFF3A3A42), Color(0xFF3A3A42))), Icons.AutoMirrored.Filled.Logout) { vm.signOut() }
-            } else {
-                LibraryRow(tr("Sign in with Google"), tr("Your playlists, likes and history"), Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.AutoMirrored.Filled.Login) { vm.signOut() }
-            }
-        }
+        item { Text("RyM ${vm.versionName}", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(16.dp)) }
     }
     if (naming) NewPlaylist({ naming = false }) { vm.createPlaylist(it, null); naming = false }
 }

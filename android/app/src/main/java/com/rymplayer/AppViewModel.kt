@@ -90,6 +90,103 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         player.useVlc = prefs.getBoolean("vlc", false)
     }
 
+    // ---------------------------------------------------------------- settings, updates, plugins
+
+    /** Full-screen pages over everything: settings, the plugin store, a video. */
+    var settingsOpen by mutableStateOf(false)
+    var storeOpen by mutableStateOf(false)
+    /** Video plugin: the song whose video is showing. */
+    var video by mutableStateOf<Track?>(null)
+    /** Video plugin: the "download from a link" box is open. */
+    var linkOpen by mutableStateOf(false)
+
+    val versionName: String = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull().orEmpty()
+
+    var autoUpdates by mutableStateOf(prefs.getBoolean("auto_updates", true))
+        private set
+    var betaUpdates by mutableStateOf(prefs.getBoolean("beta_updates", false))
+        private set
+    /** A newer RyM, shown with its patch notes until closed. */
+    var update by mutableStateOf<com.rymplayer.data.Updates.Release?>(null)
+    var checking by mutableStateOf(false)
+        private set
+    var lastUpdateCheck by mutableStateOf(prefs.getLong("last_update_check", 0L))
+        private set
+
+    fun toggleAutoUpdates() {
+        autoUpdates = !autoUpdates
+        prefs.edit().putBoolean("auto_updates", autoUpdates).apply()
+        UpdateWorker.schedule(getApplication(), autoUpdates)
+    }
+
+    fun toggleBetaUpdates() {
+        betaUpdates = !betaUpdates
+        prefs.edit().putBoolean("beta_updates", betaUpdates).apply()
+    }
+
+    /** Looks on GitHub for a newer RyM; [asked]: from the settings, so "up to date" is said too. */
+    fun checkUpdates(asked: Boolean) {
+        if (checking) return
+        checking = true
+        viewModelScope.launch {
+            runCatching { com.rymplayer.data.Updates.check(betaUpdates, versionName) }
+                .onSuccess { r ->
+                    lastUpdateCheck = System.currentTimeMillis()
+                    prefs.edit().putLong("last_update_check", lastUpdateCheck).apply()
+                    if (r != null) update = r else if (asked) status = tr("You have the latest version")
+                }
+                .onFailure { if (asked) status = "${tr("Couldn't check for updates")}: ${it.message}" }
+            checking = false
+        }
+    }
+
+    /** The plugin store's list, and what's installed (id -> version). */
+    var store by mutableStateOf<List<com.rymplayer.data.Plugins.Plugin>?>(null)
+        private set
+    val plugins = androidx.compose.runtime.mutableStateMapOf<String, String>().apply { putAll(com.rymplayer.data.Plugins.installed(app)) }
+    val hasVideo: Boolean get() = com.rymplayer.data.Plugins.VIDEO in plugins
+
+    fun loadStore() = viewModelScope.launch {
+        runCatching { com.rymplayer.data.Plugins.store(getApplication()) }.onSuccess { list ->
+            store = list
+            val news = list.filter { p -> plugins[p.id]?.let { com.rymplayer.data.Updates.newer(p.version, it) } == true }
+            if (news.isNotEmpty()) status = "${tr("Plugin updates")}: ${news.joinToString { it.name }}"
+        }
+    }
+
+    /** Installs (or updates) a plugin, or removes it; its features appear or go at once. */
+    fun setPlugin(p: com.rymplayer.data.Plugins.Plugin, on: Boolean) {
+        com.rymplayer.data.Plugins.set(getApplication(), p.id, if (on) p.version else null)
+        if (on) plugins[p.id] = p.version else plugins.remove(p.id)
+        status = tr(if (on) "Plugin installed" else "Plugin removed")
+    }
+
+    /** Video plugin: the song's music video, full screen (the song pauses). */
+    fun watchVideo(t: Track) {
+        player.pause()
+        playerOpen = false
+        video = t
+    }
+
+    /** Video plugin: downloads a link from YouTube or any site, as a video or just the sound. */
+    fun downloadLink(url: String, asVideo: Boolean) = viewModelScope.launch {
+        status = "${tr("Downloading")} $url"
+        status = runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val file = com.rymplayer.data.YtDlp.downloadAny(getApplication(), url, asVideo, prefs.getString("cookie", null))
+                "${tr("Saved to")} ${Downloads.publish(getApplication(), file, asVideo)}"
+            }
+        }.getOrElse { "${tr("Download failed")}: ${it.message}" }
+    }
+
+    // After the settings above exist (Kotlin runs these in order).
+    init {
+        // Updates: the 12-hour background check, and a look now when it's been that long.
+        UpdateWorker.schedule(app, autoUpdates)
+        if (autoUpdates && System.currentTimeMillis() - lastUpdateCheck > com.rymplayer.data.Updates.EVERY_MS) checkUpdates(false)
+        loadStore()
+    }
+
     // ---------------------------------------------------------------- session
 
     fun start(cookie: String?) {
@@ -159,6 +256,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** True when something was closed. */
     fun back(): Boolean = when {
+        video != null -> { video = null; true }
+        storeOpen -> { storeOpen = false; true }
+        settingsOpen -> { settingsOpen = false; true }
         playerOpen -> { playerOpen = false; true }
         stack.isNotEmpty() -> { stack.removeAt(stack.lastIndex); true }
         tab != Screen.Home -> { tab = Screen.Home; true }

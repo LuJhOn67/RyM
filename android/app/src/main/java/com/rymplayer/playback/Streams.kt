@@ -196,7 +196,7 @@ object Streams {
     }
 
     /** The best audio-only link (Opus or AAC) and its file type. */
-    private fun initNewPipe() {
+    internal fun initNewPipe() {
         if (!ready) synchronized(this) {
             if (!ready) {
                 NewPipe.init(OkDownloader, Localization("en", "US"))
