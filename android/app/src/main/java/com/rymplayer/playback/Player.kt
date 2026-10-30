@@ -95,7 +95,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                         Streams.forget(context, it.videoId)
                         Streams.forgetLink(it.videoId)
                     }
-                    message = "Can't play: ${error.errorCodeName}"
+                    message = "${com.rymplayer.tr("Can't play")}: ${error.errorCodeName}"
                 }
             })
             ready.complete(c)
@@ -151,7 +151,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             // A downloaded song plays from Music/RymPlayer; others stream (or play from the cache).
             val url = Downloads.uriFor(context, t.videoId)?.toString()
                 ?: runCatching { Streams.playable(context, t.videoId) }
-                    .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "Can't play: ${it.message}" }
+                    .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "${com.rymplayer.tr("Can't play")}: ${it.message}" }
                     .getOrNull()
             if (url == null) {
                 loading = false
@@ -159,7 +159,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             }
             val c = runCatching { ready.await() }.getOrElse {
                 loading = false
-                message = "Can't start the player: ${it.message}"
+                message = "${com.rymplayer.tr("Can't start the player")}: ${it.message}"
                 return@launch
             }
             if (current?.videoId != t.videoId) return@launch
@@ -174,6 +174,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             c.play()
             // The next song's link is looked up while this one plays.
             Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
+            // Last song of the queue: a radio of similar songs follows it.
+            keepGoing(t)
         }
     }
 
@@ -190,8 +192,28 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         if (index + 1 < queue.size) play(index + 1)
     }
 
+    /** When Previous was last pressed: twice in a row goes back even mid-song. */
+    private var lastPrev = 0L
+
+    /**
+     * Previous: back to the start of the song after its first 3 seconds; before that (or pressed
+     * twice in a row), the song before it. Reads the player's own position: the shown one only
+     * moves while the screen is on.
+     */
     fun prev() {
-        if (position > 3f || index == 0) seekTo(0f) else play(index - 1)
+        val now = System.currentTimeMillis()
+        val again = now - lastPrev < 1500
+        lastPrev = now
+        val pos = (controller?.currentPosition ?: 0L) / 1000f
+        if (index > 0 && (pos < 3f || again)) play(index - 1) else seekTo(0f)
+    }
+
+    /** Songs like the one playing, added when the queue reaches its last song (the radio). */
+    private fun keepGoing(t: Track) {
+        if (index != queue.lastIndex || !::api.isInitialized) return
+        scope.launch {
+            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> append(radio.filter { it.videoId != t.videoId }) }
+        }
     }
 
     fun seekTo(secs: Float) {

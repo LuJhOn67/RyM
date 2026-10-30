@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import com.rymplayer.tr
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
 import android.webkit.WebView
@@ -55,10 +56,10 @@ fun LoginScreen(vm: AppViewModel) {
             }
             Spacer(Modifier.height(18.dp))
             Text("RyM", fontSize = 36.sp, fontWeight = FontWeight.Bold)
-            Text("YouTube Music, your way", color = Dim)
+            Text(tr("YouTube Music, your way"), color = Dim)
             Spacer(Modifier.height(36.dp))
-            Button({ web = true }, Modifier.fillMaxWidth().height(52.dp)) { Text("Sign in with Google", fontSize = 16.sp) }
-            TextButton(vm::guest, Modifier.padding(top = 8.dp)) { Text("Continue without an account", color = Color.White) }
+            Button({ web = true }, Modifier.fillMaxWidth().height(52.dp)) { Text(tr("Sign in with Google"), fontSize = 16.sp) }
+            TextButton(vm::guest, Modifier.padding(top = 8.dp)) { Text(tr("Continue without an account"), color = Color.White) }
             if (vm.status.isNotEmpty()) Text(vm.status, color = Dim, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
         }
     }

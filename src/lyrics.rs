@@ -103,8 +103,8 @@ pub async fn for_track(api: Option<Api>, t: Track) -> Option<Lyrics> {
         let (api, vid) = (api.clone(), t.video_id.clone());
         tokio::spawn(async move {
             match api {
-                Some(api) => api.lyrics(vid).await.ok().flatten(),
-                None => None,
+                Some(api) if !crate::local::is_local(&vid) => api.lyrics(vid).await.ok().flatten(),
+                _ => None,
             }
         })
     };
@@ -129,7 +129,16 @@ pub async fn prefetch(api: Option<Api>, t: Track) {
 }
 
 fn cache_path(video_id: &str) -> PathBuf {
-    crate::data_dir().join("lyrics").join(format!("{video_id}.json"))
+    // Songs on this device have a path for an id: a hash of it makes the file name.
+    let name = if video_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        video_id.to_string()
+    } else {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        video_id.hash(&mut h);
+        format!("local-{:016x}", h.finish())
+    };
+    crate::data_dir().join("lyrics").join(format!("{name}.json"))
 }
 
 /// `Some(Some)`: saved lyrics; `Some(None)`: looked up lately and there were none; `None`: not known.

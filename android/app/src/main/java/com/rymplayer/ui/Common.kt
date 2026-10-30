@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import com.rymplayer.tr
 import androidx.compose.material.icons.filled.PlayArrow
 
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -152,11 +153,20 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
                 t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
                 color = if (current) MaterialTheme.colorScheme.primary else Color.White,
             )
-            val sub = listOf(t.artist, t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
-            Text(sub, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+            // The artist's name opens their page; album and length follow it.
+            Row {
+                if (t.artist.isNotBlank()) {
+                    Text(
+                        t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp,
+                        modifier = Modifier.weight(1f, fill = false).clickable(enabled = t.link == null) { vm.goArtist(t) },
+                    )
+                }
+                val rest = listOf(t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
+                if (rest.isNotEmpty()) Text((if (t.artist.isNotBlank()) " • " else "") + rest, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+            }
         }
         if (t.videoId in vm.liked) Icon(Icons.Default.Favorite, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-        IconButton(onClick = { vm.menu = MenuFor(t, queueIndex) }) { Icon(Icons.Default.MoreVert, "More", tint = Dim) }
+        IconButton(onClick = { vm.menu = MenuFor(t, queueIndex) }) { Icon(Icons.Default.MoreVert, tr("More"), tint = Dim) }
     }
 }
 
@@ -195,29 +205,29 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
                 Text(label, fontSize = 15.sp, color = Color.White)
             }
         }
-        item("Start radio", Icons.Default.Radio) { vm.playRadio(t) }()
-        item("Play next", Icons.Default.SkipNext) { vm.player.playNext(t) }()
-        item("Add to queue", Icons.AutoMirrored.Filled.QueueMusic) { vm.player.append(listOf(t)) }()
-        item("Download", Icons.Default.Download) { vm.download(t) }()
+        item(tr("Start radio"), Icons.Default.Radio) { vm.playRadio(t) }()
+        item(tr("Play next"), Icons.Default.SkipNext) { vm.player.playNext(t) }()
+        item(tr("Add to queue"), Icons.AutoMirrored.Filled.QueueMusic) { vm.player.append(listOf(t)) }()
+        item(tr("Download"), Icons.Default.Download) { vm.download(t) }()
         if (com.rymplayer.playback.Vlc.installed(LocalContext.current)) {
-            item("Open in VLC", Icons.Default.PlayArrow) { vm.openInVlc(t) }()
+            item(tr("Open in VLC"), Icons.Default.PlayArrow) { vm.openInVlc(t) }()
         }
         if (vm.api.signedIn) {
             val liked = t.videoId in vm.liked
-            item(if (liked) "Remove from liked songs" else "Add to liked songs", if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder) { vm.toggleLike(t) }()
+            item(if (liked) tr("Remove from liked songs") else tr("Add to liked songs"), if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder) { vm.toggleLike(t) }()
             Row(
                 Modifier.fillMaxWidth().clickable { pick = true }.padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, tint = Dim)
                 Spacer(Modifier.width(20.dp))
-                Text("Save to playlist", fontSize = 15.sp, color = Color.White)
+                Text(tr("Save to playlist"), fontSize = 15.sp, color = Color.White)
             }
         }
-        t.albumId?.let { id -> item("Go to album", Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
-        t.artistId?.let { id -> item("Go to artist", Icons.Default.Person) { vm.open(Screen.Songs(Screen.Kind.Artist, id, t.artist.substringBefore(", "))) }() }
+        t.albumId?.let { id -> item(tr("Go to album"), Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
+        if (t.artist.isNotBlank()) item(tr("Go to artist"), Icons.Default.Person) { vm.goArtist(t) }()
         if (queueIndex != null && queueIndex != vm.player.index) {
-            item("Remove from queue", Icons.Default.MoreVert) { vm.player.remove(queueIndex) }()
+            item(tr("Remove from queue"), Icons.Default.MoreVert) { vm.player.remove(queueIndex) }()
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -235,14 +245,14 @@ fun SaveToPlaylist(vm: AppViewModel, t: Track, onDismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Save to playlist") },
+        title = { Text(tr("Save to playlist")) },
         text = {
             LazyColumn(Modifier.heightIn(max = 380.dp)) {
                 item {
                     Row(Modifier.fillMaxWidth().clickable { naming = true }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null)
                         Spacer(Modifier.width(14.dp))
-                        Text("New playlist", fontWeight = FontWeight.SemiBold)
+                        Text(tr("New playlist"), fontWeight = FontWeight.SemiBold)
                     }
                 }
                 items(vm.playlists) { p ->
@@ -254,7 +264,7 @@ fun SaveToPlaylist(vm: AppViewModel, t: Track, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onDismiss) { Text("Close") } },
+        confirmButton = { TextButton(onDismiss) { Text(tr("Close")) } },
     )
 }
 
@@ -263,10 +273,10 @@ fun NewPlaylist(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New playlist") },
-        text = { OutlinedTextField(name, { name = it }, label = { Text("Title") }, singleLine = true) },
-        confirmButton = { TextButton({ if (name.isNotBlank()) onCreate(name.trim()) }) { Text("Create") } },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } },
+        title = { Text(tr("New playlist")) },
+        text = { OutlinedTextField(name, { name = it }, label = { Text(tr("Title")) }, singleLine = true) },
+        confirmButton = { TextButton({ if (name.isNotBlank()) onCreate(name.trim()) }) { Text(tr("Create")) } },
+        dismissButton = { TextButton(onDismiss) { Text(tr("Cancel")) } },
     )
 }
 

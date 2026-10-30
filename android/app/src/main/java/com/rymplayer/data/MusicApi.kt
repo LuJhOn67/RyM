@@ -81,7 +81,8 @@ class MusicApi(private val cookie: String?) {
         }
     }
 
-    private suspend fun browse(id: String, query: String = ""): JsonElement = post("browse", buildJsonObject { put("browseId", id) }, query)
+    private suspend fun browse(id: String, query: String = "", params: String? = null): JsonElement =
+        post("browse", buildJsonObject { put("browseId", id); params?.let { put("params", it) } }, query)
 
     // ------------------------------------------------------------------ pages
 
@@ -123,7 +124,63 @@ class MusicApi(private val cookie: String?) {
         return songRows(page).map { it.copy(thumb = it.thumb ?: cover, album = it.album.ifEmpty { name }, albumId = it.albumId ?: id) }
     }
 
-    suspend fun artist(id: String): List<Track> = songRows(browse(id)).map { it.copy(artistId = it.artistId ?: id) }
+    /**
+     * A whole playlist, page after page, up to [limit] songs (one page is about a hundred).
+     * Both ways YouTube says "next page" are followed.
+     */
+    suspend fun playlistAll(id: String, limit: Int): List<Track> {
+        val out = LinkedHashMap<String, Track>()
+        var page = browse(if (id.startsWith("VL")) id else "VL$id")
+        repeat(60) {
+            for (t in songRows(page)) out.putIfAbsent(t.videoId, t)
+            if (out.size >= limit) return out.values.take(limit)
+            val newer = page.findAll("continuationCommand").firstNotNullOfOrNull { it.at("token").str }
+            val older = page.findAll("nextContinuationData").firstNotNullOfOrNull { it.at("continuation").str }
+            page = when {
+                newer != null -> post("browse", buildJsonObject { put("continuation", newer) })
+                older != null -> post("browse", JsonObject(emptyMap()), "&ctoken=$older&continuation=$older&type=next")
+                else -> return out.values.take(limit)
+            }
+        }
+        return out.values.take(limit)
+    }
+
+    /**
+     * An artist's whole catalogue: every song (the page's "See all" list, not just the top five),
+     * then their albums and singles (each shelf's "See all" grid) to open.
+     */
+    suspend fun artist(id: String): List<Track> {
+        val page = browse(id)
+        val shelf = page.findAll("musicShelfRenderer").firstOrNull()
+        val allSongs = shelf?.at("title/runs/0/navigationEndpoint/browseEndpoint/browseId").str
+            ?: shelf?.at("bottomEndpoint/browseEndpoint/browseId").str
+        val songs = allSongs?.let { runCatching { playlistAll(it, 3000) }.getOrNull() }.orEmpty()
+            .ifEmpty { shelf?.let(::songRows).orEmpty() }
+        val out = songs.map { it.copy(artistId = it.artistId ?: id) }.toMutableList()
+        for (carousel in page.findAll("musicCarouselShelfRenderer")) {
+            val header = carousel.at("header/musicCarouselShelfBasicHeaderRenderer")
+            val name = header.at("title").runsText()
+            val more = header.at("moreContentButton/buttonRenderer/navigationEndpoint/browseEndpoint")
+                ?: header.at("title/runs/0/navigationEndpoint/browseEndpoint")
+            var cards = more?.at("browseId").str?.let { moreId ->
+                runCatching { browse(moreId, params = more.at("params").str) }.getOrNull()
+                    ?.findAll("musicTwoRowItemRenderer")?.mapNotNull { card(JsonObject(mapOf("musicTwoRowItemRenderer" to it)), name) }
+            }.orEmpty()
+            if (cards.isEmpty()) cards = carousel.at("contents").arr.mapNotNull { card(it, name) }
+            // Albums, singles and EPs; not videos, playlists it's featured on, or other artists.
+            out += cards.filter { it.link is Link.Album }
+        }
+        return out
+    }
+
+    /** The channel of an artist known only by name (songs from radios and some lists). */
+    suspend fun artistIdFor(name: String): String? {
+        val first = name.substringBefore(", ")
+        val page = post("search", buildJsonObject { put("query", first); put("params", ARTISTS_FILTER) })
+        return page.findAll("browseEndpoint").firstNotNullOfOrNull { b ->
+            b.at("browseId").str?.takeIf { it.startsWith("UC") }
+        }
+    }
 
     suspend fun search(q: String): List<Track> =
         songRows(post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }))
@@ -257,6 +314,7 @@ class MusicApi(private val cookie: String?) {
     private fun queue(next: JsonElement): List<Track> = next.findAll("playlistPanelVideoRenderer").mapNotNull { r ->
         val videoId = r.at("videoId").str ?: return@mapNotNull null
         val byline = r.at("longBylineText").runsText().split(" • ")
+        val ids = r.at("longBylineText/runs").arr.mapNotNull { it.at("navigationEndpoint/browseEndpoint/browseId").str }
         Track(
             videoId = videoId,
             title = r.at("title").runsText(),
@@ -264,6 +322,8 @@ class MusicApi(private val cookie: String?) {
             album = byline.getOrNull(1).orEmpty(),
             duration = r.at("lengthText").runsText(),
             thumb = r.at("thumbnail/thumbnails").arr.lastOrNull().at("url").str,
+            artistId = ids.firstOrNull { it.startsWith("UC") },
+            albumId = ids.firstOrNull { it.startsWith("MPRE") },
         )
     }
 
@@ -275,6 +335,8 @@ class MusicApi(private val cookie: String?) {
         private const val FALLBACK_VERSION = "1.20250101.01.00"
         /** The "Songs" filter of the search page. */
         private const val SONGS_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA=="
+        /** The "Artists" filter of the search page. */
+        private const val ARTISTS_FILTER = "EgWKAQIgAWoKEAkQChAFEAMQBA=="
         private val DURATION = Regex("""^\d+(:\d\d)+$""")
     }
 }

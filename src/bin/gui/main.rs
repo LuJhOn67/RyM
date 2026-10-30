@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use iced::widget::image;
 use iced::{Color, Point, Size, Subscription, Task, Theme, window};
 
+use rymplayer::i18n::tr;
 use rymplayer::api::{self, Api, Link, Playlist, Track};
 use rymplayer::audio::Audio;
 use rymplayer::config::{Config, Renderer};
@@ -158,6 +159,8 @@ pub enum Message {
     ToggleGpu,
     /// Switch the audio source between yt-dlp and InnerTube.
     ToggleSource,
+    /// English or Arabic.
+    ToggleLanguage,
     /// Download quality: best (yt-dlp) or fast (the playback file).
     ToggleDownload,
     /// Download connections up or down by this many.
@@ -189,6 +192,13 @@ pub enum Message {
     GoAlbum(Track),
     GoArtist(Track),
     Dislike(Track),
+    /// "Go to artist" for a song that came without its artist's id: found by name.
+    ArtistFound(String, Result<Option<String>, String>),
+    /// Liked songs page: how many to download (text from the box; empty = all).
+    BatchCount(String),
+    /// Download the liked songs (the first N), one after another.
+    DownloadAll,
+    BatchProgress(stream::Batch),
     Disliked(String, bool, Result<(), String>),
     Ignore,
 }
@@ -313,6 +323,11 @@ pub struct Gui {
     requested: HashSet<String>,
 
     pub disliked: HashSet<String>,
+    /// Liked songs batch download: the count typed in, and how it's going.
+    pub batch_count: String,
+    pub batch: Option<stream::Batch>,
+    /// When Previous was last pressed: twice in a row goes back even mid-song.
+    last_prev: Instant,
     pub menu: Option<MenuFor>,
     pub menu_pos: Point,
     cursor: Point,
@@ -360,7 +375,7 @@ impl Gui {
             api: None,
             config: Config::default(),
             page: Page::Home,
-            page_title: "For you".into(),
+            page_title: tr("For you").into(),
             tracks: Vec::new(),
             search: String::new(),
             playlists: Vec::new(),
@@ -383,6 +398,9 @@ impl Gui {
             images: HashMap::new(),
             requested: HashSet::new(),
             disliked: HashSet::new(),
+            batch_count: String::new(),
+            batch: None,
+            last_prev: long_ago(),
             menu: None,
             menu_pos: Point::ORIGIN,
             cursor: Point::ORIGIN,
@@ -402,6 +420,7 @@ impl Gui {
         let mut gui = Gui::empty();
         gui.signed_in_screen = false;
         gui.config = Config::load();
+        rymplayer::i18n::set_arabic(gui.config.arabic);
         stream::use_source(gui.config.source);
         stream::download_best(gui.config.download_best);
         stream::download_parallel(gui.config.download_connections, gui.config.download_piece_mb);
@@ -410,12 +429,12 @@ impl Gui {
                 a.set_volume(gui.volume);
                 gui.audio = Some(a);
             }
-            Err(e) => gui.status = format!("No audio device: {e}"),
+            Err(e) => gui.status = format!("{}: {e}", tr("No audio device")),
         }
         let task = match std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
             Some(cookie) => {
                 gui.busy = true;
-                gui.status = "Signing in...".into();
+                gui.status = tr("Signing in...").into();
                 // The last home feed shows at once while signing in; the fresh one replaces it.
                 let saved = rymplayer::page_cache::load_home();
                 let covers = if saved.is_empty() {
@@ -423,7 +442,7 @@ impl Gui {
                 } else {
                     gui.signed_in_screen = true;
                     gui.page = Page::Home;
-                    gui.page_title = "For you".into();
+                    gui.page_title = tr("For you").into();
                     gui.tracks = saved;
                     let wanted: Vec<_> = gui.tracks.iter().map(|t| t.thumb.clone()).collect();
                     gui.want_images(wanted.iter().map(|u| (u, CARD_PX)))
@@ -603,7 +622,7 @@ impl Gui {
         match message {
             Message::SignIn => {
                 self.busy = true;
-                self.status = "Finish signing in in the Google window...".into();
+                self.status = tr("Finish signing in in the Google window...").into();
                 return Task::perform(
                     async {
                         let cookie = login::sign_in().await?;
@@ -622,7 +641,7 @@ impl Gui {
                 self.signed_in_screen = true;
                 let user = api.logged_in();
                 self.api = Some(api.clone());
-                let mut tasks = vec![self.open(Page::Home, "For you".into())];
+                let mut tasks = vec![self.open(Page::Home, tr("For you").into())];
                 if user {
                     // Liked songs come with the home feed, so hearts show everywhere.
                     tasks.push(Task::perform(api.clone().library_playlists(), |r| Message::Playlists(s(r))));
@@ -632,7 +651,7 @@ impl Gui {
             Message::LoggedIn(Err(e)) => {
                 self.busy = false;
                 self.signed_in_screen = false;
-                self.status = format!("Sign-in failed: {e}");
+                self.status = format!("{}: {e}", tr("Sign-in failed"));
             }
             Message::SignOut => {
                 let _ = std::fs::remove_file(cookie_path());
@@ -654,7 +673,7 @@ impl Gui {
             }
             Message::Playlists(Err(e)) if e.contains("signed out") => {
                 self.signed_in_screen = false;
-                self.status = "Google ended your session. Sign in again.".into();
+                self.status = tr("Google ended your session. Sign in again.").into();
             }
             Message::Playlists(Err(e)) => self.status = format!("Playlists: {e}"),
 
@@ -716,11 +735,15 @@ impl Gui {
                     return Task::none();
                 }
                 self.now_playing_open = false;
-                return self.open(Page::Search(q.clone()), format!("Results for \"{q}\""));
+                return self.open(Page::Search(q.clone()), format!("{} \"{q}\"", tr("Results for")));
             }
 
             Message::PlayRow(i) => {
                 let Some(t) = self.tracks.get(i).cloned() else { return Task::none() };
+                // Search results: the song, then a radio of songs like it (not the other results).
+                if matches!(self.page, Page::Search(_)) && t.link.is_none() {
+                    return self.update(Message::PlaySong(t));
+                }
                 if self.page == Page::Home {
                     rymplayer::feed::opened(&t);
                 }
@@ -750,13 +773,13 @@ impl Gui {
                         match rymplayer::vlc::play(&exe, &url, &headers, &format!("{} - {}", t.artist, t.title)) {
                             Ok(child) => {
                                 self.vlc = Some(child);
-                                self.status = "Playing in VLC".into();
+                                self.status = tr("Playing in VLC").into();
                             }
                             Err(e) => self.status = format!("VLC: {e}"),
                         }
                     }
-                    (Err(e), _) => self.status = format!("Can't play: {e}"),
-                    (_, None) => self.status = "VLC isn't installed".into(),
+                    (Err(e), _) => self.status = format!("{}: {e}", tr("Can't play")),
+                    (_, None) => self.status = tr("VLC isn't installed").into(),
                 }
             }
             Message::ToggleVlc => {
@@ -781,7 +804,7 @@ impl Gui {
                         if let Some(a) = &mut self.audio
                             && let Err(e) = a.play(&song, known)
                         {
-                            self.status = format!("Can't play: {e}");
+                            self.status = format!("{}: {e}", tr("Can't play"));
                         }
                         return self.prefetch_next();
                     }
@@ -790,10 +813,10 @@ impl Gui {
                         if self.failures >= 3 {
                             // Something is wrong for every song (YouTube, the connection, yt-dlp): stop and say why.
                             self.failures = 0;
-                            self.status = format!("Stopped after 3 songs failed: {e}");
+                            self.status = format!("{}: {e}", tr("Stopped after 3 songs failed"));
                             return Task::none();
                         }
-                        self.status = format!("Skipped, download failed: {e}");
+                        self.status = format!("{}: {e}", tr("Skipped, download failed"));
                         return self.next();
                     }
                 }
@@ -806,12 +829,15 @@ impl Gui {
             Message::Next => return self.next(),
             Message::Prev => {
                 let Some(i) = self.current else { return Task::none() };
-                if self.pos > 3.0 || i == 0 {
-                    if let Some(a) = &self.audio {
-                        a.seek(0.0);
-                    }
-                } else {
+                // The player's own position (the shown one lags up to a tick behind).
+                let pos = self.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position);
+                let again = self.last_prev.elapsed() < Duration::from_millis(1500);
+                self.last_prev = Instant::now();
+                if i > 0 && (pos < 3.0 || again) {
                     return self.play(i - 1);
+                }
+                if let Some(a) = &self.audio {
+                    a.seek(0.0);
                 }
             }
             Message::Seek(v) => self.seeking = Some(v),
@@ -863,7 +889,7 @@ impl Gui {
             }
             Message::Lyrics(vid, found) => {
                 if self.now_playing().map(|t| &t.video_id) == Some(&vid) {
-                    self.lyrics_status = if found.is_some() { String::new() } else { "No lyrics for this song".into() };
+                    self.lyrics_status = if found.is_some() { String::new() } else { tr("No lyrics for this song").into() };
                     self.lyrics = found;
                 }
             }
@@ -889,7 +915,7 @@ impl Gui {
             }
             Message::Rated(vid, like, Err(e)) => {
                 self.liked.set(&vid, !like);
-                self.status = format!("Like failed: {e}");
+                self.status = format!("{}: {e}", tr("Like failed"));
             }
             Message::Rated(..) => {}
             Message::Refreshed(result) => {
@@ -901,12 +927,17 @@ impl Gui {
                 });
                 return self.update(Message::Loaded(Page::Home, result));
             }
+            Message::ToggleLanguage => {
+                self.config.arabic = !self.config.arabic;
+                rymplayer::i18n::set_arabic(self.config.arabic);
+                self.config.save();
+            }
             Message::Refresh => {
                 if self.api.is_none() {
                     return Task::none();
                 }
                 self.now_playing_open = false;
-                return self.open(Page::Home, "For you".into());
+                return self.open(Page::Home, tr("For you").into());
             }
             Message::SyncLikes => {
                 let Some(api) = self.api.clone().filter(Api::logged_in) else { return Task::none() };
@@ -1006,7 +1037,7 @@ impl Gui {
                     return self.add_to(p, vid);
                 }
             }
-            Message::Created(Err(e), _) => self.status = format!("Couldn't create the playlist: {e}"),
+            Message::Created(Err(e), _) => self.status = format!("{}: {e}", tr("Couldn't create the playlist")),
             Message::AddTo(t) => self.dialog = Some(Dialog::AddTo(t)),
             Message::Pick(p) => {
                 let Some(Dialog::AddTo(t)) = self.dialog.take() else { return Task::none() };
@@ -1039,11 +1070,11 @@ impl Gui {
             Message::PlayNext(t) => {
                 let Some(i) = self.current else { return self.update(Message::PlaySong(t)) };
                 self.queue.insert(i + 1, t);
-                self.status = "Plays next".into();
+                self.status = tr("Plays next").into();
             }
             Message::AddToQueue(t) => {
                 self.queue.push(t);
-                self.status = "Added to queue".into();
+                self.status = tr("Added to queue").into();
                 if self.current.is_none() {
                     return self.play(self.queue.len() - 1);
                 }
@@ -1078,10 +1109,10 @@ impl Gui {
                 self.status = format!("Downloading \"{}\"...", t.title);
                 return Task::perform(download(t), |r| Message::Downloaded(s(r)));
             }
-            Message::Downloaded(Ok(p)) => self.status = format!("Saved to {}", p.display()),
-            Message::Downloaded(Err(e)) => self.status = format!("Download failed: {e}"),
+            Message::Downloaded(Ok(p)) => self.status = format!("{} {}", tr("Saved to"), p.display()),
+            Message::Downloaded(Err(e)) => self.status = format!("{}: {e}", tr("Download failed")),
             Message::Share(t) => {
-                self.status = "Link copied".into();
+                self.status = tr("Link copied").into();
                 return iced::clipboard::write(format!("https://music.youtube.com/watch?v={}", t.video_id));
             }
             Message::GoAlbum(t) => {
@@ -1090,11 +1121,43 @@ impl Gui {
                 return self.open(Page::Album(id), t.album);
             }
             Message::GoArtist(t) => {
-                let Some(id) = t.artist_id.clone() else { return Task::none() };
                 self.now_playing_open = false;
                 let name = t.artist.split(", ").next().unwrap_or(&t.artist).to_string();
+                if let Some(id) = t.artist_id.clone() {
+                    return self.open(Page::Artist(id), name);
+                }
+                // Songs from radios and some lists come without the artist's id: look it up.
+                let Some(api) = self.api.clone() else { return Task::none() };
+                self.status = tr("Finding the artist...").into();
+                return Task::perform(api.artist_id_for(name.clone()), move |r| Message::ArtistFound(name.clone(), s(r)));
+            }
+            Message::ArtistFound(name, Ok(Some(id))) => {
+                self.status.clear();
                 return self.open(Page::Artist(id), name);
             }
+            Message::ArtistFound(..) => self.status = tr("Artist not found").into(),
+            Message::BatchCount(text) => self.batch_count = text.chars().filter(char::is_ascii_digit).take(5).collect(),
+            Message::DownloadAll => {
+                let Some(api) = self.api.clone().filter(Api::logged_in) else { return Task::none() };
+                if self.batch.is_some_and(|b| !b.finished()) {
+                    return Task::none();
+                }
+                let limit = self.batch_count.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(5000);
+                self.batch = Some(stream::Batch::default());
+                // The whole liked list (page after page), then each song in turn; progress
+                // arrives as messages while it runs.
+                return Task::run(
+                    iced::stream::channel(8, move |mut out: iced::futures::channel::mpsc::Sender<stream::Batch>| async move {
+                        let songs = api.playlist_all(api::LIKED_ID.into(), limit).await.unwrap_or_default();
+                        stream::download_many(songs, |b| {
+                            let _ = out.try_send(b);
+                        })
+                        .await;
+                    }),
+                    Message::BatchProgress,
+                );
+            }
+            Message::BatchProgress(b) => self.batch = Some(b),
             Message::Dislike(t) => {
                 let Some(api) = self.api.clone() else { return Task::none() };
                 let vid = t.video_id.clone();
@@ -1155,7 +1218,7 @@ impl Gui {
                         Page::Album(id) => api.album_tracks(id).await,
                         Page::Mix(id) => api.mix_tracks(id).await,
                         Page::Radio(vid) => api.radio(vid).await,
-                        Page::Artist(id) => api.artist_songs(id).await,
+                        Page::Artist(id) => api.artist_page(id).await,
                         Page::Library | Page::Settings => Ok(Vec::new()),
                     }
                 }
@@ -1180,7 +1243,7 @@ impl Gui {
         self.pos = 0.0;
         self.seeking = None;
         self.lyrics = None;
-        self.lyrics_status = "Looking for lyrics...".into();
+        self.lyrics_status = tr("Looking for lyrics...").into();
         self.loading = true;
         if let Some(a) = &mut self.audio {
             a.stop();
@@ -1189,7 +1252,7 @@ impl Gui {
         // "Play songs in: VLC" with VLC installed: the song opens there instead.
         let in_vlc = self.config.play_in_vlc && rymplayer::vlc::find().is_some();
         if self.config.play_in_vlc && !in_vlc {
-            self.status = "VLC isn't installed: playing here".into();
+            self.status = tr("VLC isn't installed: playing here").into();
         }
         let fetch = if in_vlc {
             let v = vid.clone();
@@ -1350,6 +1413,20 @@ mod shots {
         gui.tab = Tab::Lyrics;
         gui.config.gui_theme = 3;
         shot(&gui, "lyrics-offline");
+    }
+
+    /// The settings page in Arabic, offline: `cargo test --bin RyM-Legacy-Player arabic_shot -- --ignored`.
+    #[test]
+    #[ignore]
+    fn arabic_shot() {
+        rymplayer::i18n::set_arabic(true);
+        let mut gui = Gui::empty();
+        gui.config.arabic = true;
+        gui.config.gui_theme = 3;
+        gui.page = Page::Settings;
+        gui.page_title = tr("Settings").into();
+        shot(&gui, "arabic-settings");
+        rymplayer::i18n::set_arabic(false);
     }
 
     /// Uses the signed-in session and real data; only counts are printed.

@@ -174,7 +174,7 @@ impl Api {
         let mut out = Vec::new();
         let mut continuation = None;
         for _ in 0..3 {
-            let query = HomeQuery { continuation: continuation.take() };
+            let query = RawBrowse { body: body(&[("browseId", "FEmusic_home")]), ctoken: continuation.take() };
             let raw = match &self {
                 Api::Guest(y) => y.raw_json_query(query).await,
                 Api::User(y) => y.raw_json_query(query).await,
@@ -353,6 +353,109 @@ impl Api {
             .collect())
     }
 
+    async fn raw_browse(&self, body: serde_json::Map<String, Value>, ctoken: Option<String>) -> Result<Value> {
+        let query = RawBrowse { body, ctoken };
+        let raw = match self {
+            Api::Guest(y) => y.raw_json_query(query).await,
+            Api::User(y) => y.raw_json_query(query).await,
+        }
+        .map_err(err)?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+
+    /// A whole playlist, page after page, up to `limit` songs (the library's own call stops at
+    /// the first hundred).
+    pub async fn playlist_all(self, id: String, limit: usize) -> Result<Vec<Track>> {
+        let id = if id.starts_with("VL") { id } else { format!("VL{id}") };
+        let mut page = self.raw_browse(body(&[("browseId", &id)]), None).await?;
+        let mut out: Vec<Track> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..60 {
+            for t in all(&page, "musicResponsiveListItemRenderer").into_iter().filter_map(song_row) {
+                if seen.insert(t.video_id.clone()) {
+                    out.push(t);
+                }
+            }
+            if out.len() >= limit {
+                break;
+            }
+            let newer = all(&page, "continuationCommand").into_iter().find_map(|c| c.get("token").and_then(Value::as_str)).map(String::from);
+            let older = all(&page, "nextContinuationData").into_iter().find_map(|c| c.get("continuation").and_then(Value::as_str)).map(String::from);
+            page = match (newer, older) {
+                (Some(token), _) => self.raw_browse(body(&[("continuation", &token)]), None).await?,
+                (None, Some(token)) => self.raw_browse(serde_json::Map::new(), Some(token)).await?,
+                (None, None) => break,
+            };
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// An artist's whole catalogue: every song (from the page's "See all" list, not just the top
+    /// five), then their albums and singles (from each shelf's "See all" grid) to open.
+    pub async fn artist_page(self, channel_id: String) -> Result<Vec<Track>> {
+        let page = self.raw_browse(body(&[("browseId", &channel_id)]), None).await?;
+        let shelf = all(&page, "musicShelfRenderer").into_iter().next();
+        let all_songs = shelf.and_then(|s| {
+            s.pointer("/title/runs/0/navigationEndpoint/browseEndpoint/browseId")
+                .or_else(|| s.pointer("/bottomEndpoint/browseEndpoint/browseId"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
+        let mut out = match all_songs {
+            Some(id) => self.clone().playlist_all(id, 3000).await.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        if out.is_empty()
+            && let Some(s) = shelf
+        {
+            out = all(s, "musicResponsiveListItemRenderer").into_iter().filter_map(song_row).collect();
+        }
+        for t in &mut out {
+            t.artist_id = t.artist_id.take().or_else(|| Some(channel_id.clone()));
+        }
+        for carousel in all(&page, "musicCarouselShelfRenderer") {
+            let header = carousel.pointer("/header/musicCarouselShelfBasicHeaderRenderer");
+            let name = text(header.and_then(|h| h.get("title")));
+            let more = header.and_then(|h| {
+                h.pointer("/moreContentButton/buttonRenderer/navigationEndpoint/browseEndpoint")
+                    .or_else(|| h.pointer("/title/runs/0/navigationEndpoint/browseEndpoint"))
+            });
+            let mut cards: Vec<Track> = Vec::new();
+            if let Some(m) = more
+                && let Some(id) = m.get("browseId").and_then(Value::as_str)
+            {
+                let mut b = body(&[("browseId", id)]);
+                if let Some(p) = m.get("params").and_then(Value::as_str) {
+                    b.insert("params".into(), Value::from(p));
+                }
+                if let Ok(grid) = self.raw_browse(b, None).await {
+                    cards = all(&grid, "musicTwoRowItemRenderer")
+                        .into_iter()
+                        .filter_map(|r| home_item(&serde_json::json!({ "musicTwoRowItemRenderer": r }), &name))
+                        .collect();
+                }
+            }
+            if cards.is_empty() {
+                cards = carousel.get("contents").and_then(Value::as_array).into_iter().flatten().filter_map(|i| home_item(i, &name)).collect();
+            }
+            // Albums, singles and EPs; not videos, playlists it's featured on, or other artists.
+            out.extend(cards.into_iter().filter(|t| matches!(t.link, Some(Link::Album(_)))));
+        }
+        Ok(out)
+    }
+
+    /// The channel of an artist known only by name (songs from radios and some lists).
+    pub async fn artist_id_for(self, name: String) -> Result<Option<String>> {
+        let first = name.split(", ").next().unwrap_or(&name).to_string();
+        let found = match &self {
+            Api::Guest(y) => y.search_artists(first.as_str()).await,
+            Api::User(y) => y.search_artists(first.as_str()).await,
+        }
+        .map_err(err)?;
+        Ok(found.into_iter().next().map(|a| a.browse_id.get_raw().to_string()))
+    }
+
     /// Thumbs down (or takes it back). YouTube Music plays disliked songs less.
     pub async fn dislike(self, video_id: String, on: bool) -> Result<()> {
         let Api::User(y) = &self else { return Err(anyhow!("sign in to rate songs")) };
@@ -475,33 +578,39 @@ fn home_item(item: &Value, section: &str) -> Option<Track> {
     })
 }
 
-/// The YouTube Music home feed ("Quick picks", mixes...). Not in the library, so it's a custom
-/// query read with `raw_json_query`; the parsed output is unused.
+/// Any `browse` request the library has no query for (the home feed, whole playlists, artist
+/// pages), read with `raw_json_query`; the parsed output is unused. `ctoken` is the older style
+/// of asking for the next page; the newer one puts `continuation` in the body.
 #[derive(Debug)]
-struct HomeQuery {
-    continuation: Option<String>,
+struct RawBrowse {
+    body: serde_json::Map<String, Value>,
+    ctoken: Option<String>,
+}
+
+fn body(pairs: &[(&str, &str)]) -> serde_json::Map<String, Value> {
+    pairs.iter().map(|(k, v)| (k.to_string(), Value::from(*v))).collect()
 }
 
 #[derive(Debug)]
 struct Unparsed;
 
-impl ParseFrom<HomeQuery> for Unparsed {
-    fn parse_from(_: ProcessedResult<HomeQuery>) -> music_api::Result<Self> {
+impl ParseFrom<RawBrowse> for Unparsed {
+    fn parse_from(_: ProcessedResult<RawBrowse>) -> music_api::Result<Self> {
         Ok(Unparsed)
     }
 }
 
-impl<A: AuthToken> Query<A> for HomeQuery {
+impl<A: AuthToken> Query<A> for RawBrowse {
     type Output = Unparsed;
     type Method = PostMethod;
 }
 
-impl PostQuery for HomeQuery {
+impl PostQuery for RawBrowse {
     fn header(&self) -> serde_json::Map<String, serde_json::Value> {
-        serde_json::Map::from_iter([("browseId".to_string(), serde_json::json!("FEmusic_home"))])
+        self.body.clone()
     }
     fn params(&self) -> Vec<(&str, std::borrow::Cow<'_, str>)> {
-        match &self.continuation {
+        match &self.ctoken {
             Some(c) => vec![("ctoken", c.into()), ("continuation", c.into()), ("type", "next".into())],
             None => vec![],
         }
@@ -509,6 +618,93 @@ impl PostQuery for HomeQuery {
     fn path(&self) -> &str {
         "browse"
     }
+}
+
+/// Every object stored under `key`, anywhere in the tree (depth-first, in order).
+fn find_all<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a Value>) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m {
+                if k == key {
+                    out.push(x);
+                }
+                find_all(x, key, out);
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| find_all(x, key, out)),
+        _ => {}
+    }
+}
+
+fn all<'a>(v: &'a Value, key: &str) -> Vec<&'a Value> {
+    let mut out = Vec::new();
+    find_all(v, key, &mut out);
+    out
+}
+
+fn is_duration(s: &str) -> bool {
+    !s.is_empty() && s.split(':').count() >= 2 && s.split(':').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// One song row of a raw page (playlists, artist songs): title, artists and album with their
+/// ids, length.
+fn song_row(r: &Value) -> Option<Track> {
+    let video_id = r
+        .pointer("/playlistItemData/videoId")
+        .and_then(Value::as_str)
+        .or_else(|| all(r, "watchEndpoint").iter().find_map(|w| w.get("videoId").and_then(Value::as_str)))?
+        .to_string();
+    let col = |i: usize| r.pointer(&format!("/flexColumns/{i}/musicResponsiveListItemFlexColumnRenderer/text"));
+    let (mut artists, mut artist_id, mut album, mut album_id, mut duration) = (Vec::new(), None, String::new(), None, String::new());
+    for i in 1..=3 {
+        for run in col(i).and_then(|c| c.get("runs")).and_then(Value::as_array).into_iter().flatten() {
+            let Some(t) = run.get("text").and_then(Value::as_str) else { continue };
+            let browse = run.pointer("/navigationEndpoint/browseEndpoint");
+            let kind = browse
+                .and_then(|b| b.pointer("/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let id = browse.and_then(|b| b.get("browseId")).and_then(Value::as_str).map(String::from);
+            match kind {
+                "MUSIC_PAGE_TYPE_ARTIST" | "MUSIC_PAGE_TYPE_USER_CHANNEL" => {
+                    artists.push(t.to_string());
+                    artist_id = artist_id.or(id);
+                }
+                "MUSIC_PAGE_TYPE_ALBUM" => {
+                    album = t.to_string();
+                    album_id = id;
+                }
+                _ if is_duration(t) => duration = t.to_string(),
+                _ => {}
+            }
+        }
+    }
+    if artists.is_empty() {
+        // Rows without links: "Artist • Album • 3:12".
+        let line = text(col(1));
+        let mut parts = line.split(" • ");
+        artists.extend(parts.next().map(String::from));
+        if album.is_empty() {
+            album = parts.next().filter(|p| !is_duration(p)).unwrap_or_default().to_string();
+        }
+    }
+    if duration.is_empty() {
+        let fixed = text(r.pointer("/fixedColumns/0/musicResponsiveListItemFixedColumnRenderer/text"));
+        if is_duration(&fixed) {
+            duration = fixed;
+        }
+    }
+    Some(Track {
+        video_id,
+        title: text(col(0)),
+        artist: artists.join(", "),
+        album,
+        duration,
+        thumb: json_thumb(r),
+        album_id,
+        artist_id,
+        link: None,
+    })
 }
 
 #[cfg(test)]
@@ -546,5 +742,34 @@ mod home_probe {
                 _ => continue,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod raw_tests {
+    use super::*;
+
+    #[test]
+    fn song_rows_keep_artist_album_ids_and_length() {
+        let row = serde_json::json!({
+            "playlistItemData": { "videoId": "abc" },
+            "flexColumns": [
+                { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Song" }] } } },
+                { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [
+                    { "text": "Singer", "navigationEndpoint": { "browseEndpoint": { "browseId": "UC1",
+                        "browseEndpointContextSupportedConfigs": { "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_ARTIST" } } } } },
+                    { "text": " • " },
+                    { "text": "Record", "navigationEndpoint": { "browseEndpoint": { "browseId": "MPREb_1",
+                        "browseEndpointContextSupportedConfigs": { "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_ALBUM" } } } } }
+                ] } } }
+            ],
+            "fixedColumns": [{ "musicResponsiveListItemFixedColumnRenderer": { "text": { "runs": [{ "text": "3:41" }] } } }]
+        });
+        let t = song_row(&row).unwrap();
+        assert_eq!((t.video_id.as_str(), t.title.as_str(), t.artist.as_str(), t.album.as_str(), t.duration.as_str()), ("abc", "Song", "Singer", "Record", "3:41"));
+        assert_eq!((t.artist_id.as_deref(), t.album_id.as_deref()), (Some("UC1"), Some("MPREb_1")));
+        // Both ways of saying "next page" are found.
+        let page = serde_json::json!({ "x": [{ "continuationItemRenderer": { "continuationEndpoint": { "continuationCommand": { "token": "T1" } } } }] });
+        assert_eq!(all(&page, "continuationCommand")[0]["token"], "T1");
     }
 }

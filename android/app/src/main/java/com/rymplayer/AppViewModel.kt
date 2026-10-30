@@ -21,6 +21,8 @@ import com.rymplayer.data.SignedOutException
 import com.rymplayer.data.Track
 import com.rymplayer.data.MusicApi
 import com.rymplayer.data.parseDuration
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import com.rymplayer.playback.Player
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -78,6 +80,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lyricsJob: Job? = null
 
     init {
+        I18n.arabic = prefs.getBoolean("arabic", false)
         com.rymplayer.playback.Streams.warmUp()
         com.rymplayer.playback.Streams.connections = prefs.getInt("dl_connections", 8)
         com.rymplayer.playback.Streams.pieceMb = prefs.getInt("dl_piece_mb", 0)
@@ -112,7 +115,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     PageCache.savePlaylists(getApplication(), lists)
                     syncLiked(likedSongs)
                 } catch (e: SignedOutException) {
-                    status = "Your session ended. Sign in again."
+                    status = tr("Your session ended. Sign in again.")
                     signOut()
                 } catch (e: Exception) {
                     status = e.message.orEmpty()
@@ -174,7 +177,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun search() {
         val q = query.trim()
-        if (q.isNotEmpty()) open(Screen.Songs(Screen.Kind.Results, q, "Results for \"$q\""))
+        if (q.isNotEmpty()) open(Screen.Songs(Screen.Kind.Results, q, "${tr("Results for")} \"$q\""))
     }
 
     /** When the feed was last fetched; coming back after half an hour fetches a fresh one. */
@@ -331,6 +334,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         com.rymplayer.playback.Streams.pieceMb = pieceMb
     }
 
+    /** The app's words in Arabic instead of English (Library > Language). */
+    fun toggleArabic() {
+        I18n.arabic = !I18n.arabic
+        prefs.edit().putBoolean("arabic", I18n.arabic).apply()
+    }
+
     /** Play songs in VLC instead of the built-in player (only offered when VLC is installed). */
     var playInVlc by mutableStateOf(prefs.getBoolean("vlc", false))
         private set
@@ -342,7 +351,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openInVlc(t: Track) = viewModelScope.launch {
-        runCatching { com.rymplayer.playback.Vlc.open(getApplication(), t) }.onFailure { status = "VLC couldn't open it: ${it.message}" }
+        runCatching { com.rymplayer.playback.Vlc.open(getApplication(), t) }.onFailure { status = "${tr("VLC couldn't open it")}: ${it.message}" }
     }
 
     /** Downloads in the best quality (yt-dlp, slow on a phone) instead of the playback file. */
@@ -356,11 +365,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
     fun download(t: Track) = viewModelScope.launch {
-        status = "Downloading \"${t.title}\"..."
-        status = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }.fold({ "Saved to Music/RymPlayer" }, {
+        status = "${tr("Downloading")} \"${t.title}\"..."
+        status = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
-            "Download failed: ${it.message ?: it.javaClass.simpleName}"
+            "${tr("Download failed")}: ${it.message ?: it.javaClass.simpleName}"
         })
+    }
+
+    /** The artist's page (every song, then albums and singles); found by name when the song lacks the id. */
+    fun goArtist(t: Track) {
+        if (t.artist.isBlank()) return
+        val name = t.artist.substringBefore(", ")
+        playerOpen = false
+        t.artistId?.let { open(Screen.Songs(Screen.Kind.Artist, it, name)); return }
+        status = tr("Finding the artist...")
+        viewModelScope.launch {
+            val id = runCatching { api.artistIdFor(name) }.getOrNull()
+            if (id == null) status = tr("Artist not found") else open(Screen.Songs(Screen.Kind.Artist, id, name))
+        }
+    }
+
+    /** How the liked songs batch download is going (null: not started). */
+    data class Batch(val done: Int, val total: Int, val saved: Int = 0, val skipped: Int = 0, val failed: Int = 0) {
+        val finished get() = done >= total
+    }
+
+    var batch by mutableStateOf<Batch?>(null)
+        private set
+
+    /** Downloads the first [limit] liked songs, one after another, skipping ones already saved. */
+    fun downloadAll(limit: Int) {
+        if (batch?.finished == false || !api.signedIn) return
+        batch = Batch(0, 0)
+        viewModelScope.launch {
+            val songs = runCatching { api.playlistAll(LIKED_ID, limit) }.getOrElse {
+                status = "${tr("Download failed")}: ${it.message}"
+                batch = null
+                return@launch
+            }
+            var b = Batch(0, songs.size)
+            batch = b
+            for (t in songs) {
+                val r = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }
+                b = when {
+                    r.getOrNull() == "already saved" -> b.copy(skipped = b.skipped + 1)
+                    r.isSuccess -> b.copy(saved = b.saved + 1)
+                    else -> b.copy(failed = b.failed + 1)
+                }
+                b = b.copy(done = b.done + 1)
+                batch = b
+            }
+        }
     }
 
     fun toggleLike(t: Track) {
@@ -369,7 +424,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { api.rate(t.videoId, if (like) MusicApi.Rating.Like else MusicApi.Rating.None) }.onFailure {
                 setLiked(t, !like)
-                status = "Couldn't save the like"
+                status = tr("Couldn't save the like")
             }
         }
     }
@@ -385,7 +440,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addToPlaylist(p: Playlist, t: Track) = viewModelScope.launch {
-        status = runCatching { api.addToPlaylist(p.id, t.videoId) }.fold({ "Added to \"${p.title}\"" }, { "Couldn't add: ${it.message}" })
+        status = runCatching { api.addToPlaylist(p.id, t.videoId) }.fold({ "${tr("Added to")} \"${p.title}\"" }, { "${tr("Couldn't add")}: ${it.message}" })
     }
 
     fun createPlaylist(title: String, with: Track?) = viewModelScope.launch {
@@ -393,18 +448,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             playlists = listOf(p) + playlists
             status = "Created \"$title\""
             if (with != null) addToPlaylist(p, with)
-        }.onFailure { status = "Couldn't create the playlist" }
+        }.onFailure { status = tr("Couldn't create the playlist") }
     }
 
     private fun loadLyrics(t: Track?) {
         lyricsJob?.cancel()
         lyrics = null
         if (t == null) return
-        lyricsStatus = "Looking for lyrics..."
+        lyricsStatus = tr("Looking for lyrics...")
         lyricsJob = viewModelScope.launch {
             val found = findLyrics(t)
             lyrics = found
-            lyricsStatus = if (found == null) "No lyrics for this song" else ""
+            lyricsStatus = if (found == null) tr("No lyrics for this song") else ""
             // The next song's lyrics are ready before it starts.
             player.queue.getOrNull(player.index + 1)?.let { next ->
                 if (LyricsCache.get(getApplication(), next.videoId) == null) findLyrics(next)

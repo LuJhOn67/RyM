@@ -89,8 +89,11 @@ pub fn cache_dir() -> PathBuf {
     crate::data_dir().join("cache")
 }
 
-/// Already-downloaded file for this video, if any.
+/// Already-downloaded file for this video, if any (a song on this device is its own file).
 pub fn cached(video_id: &str) -> Option<PathBuf> {
+    if let Some(p) = crate::local::path_of(video_id) {
+        return p.is_file().then_some(p);
+    }
     let dir = cache_dir();
     ["webm", "m4a", "opus", "mp4"]
         .iter()
@@ -191,10 +194,7 @@ pub async fn fetch(video_id: String) -> Result<PathBuf> {
 
 /// Saves a song as a file in the Music folder: `Music\RymPlayer\Artist - Title.ext`.
 pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<PathBuf> {
-    let music = directories::UserDirs::new()
-        .and_then(|d| d.audio_dir().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let dir = music.join("RymPlayer");
+    let dir = music_dir();
     tokio::fs::create_dir_all(&dir).await?;
     let name = file_name(artist, title);
     if !DOWNLOAD_BEST.load(Ordering::Relaxed) {
@@ -207,6 +207,53 @@ pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<
     }
     let (_, path) = ytdlp_parallel(video_id, &dir.join(&name)).await?;
     Ok(path)
+}
+
+/// Where downloads go: Music/RymPlayer.
+pub fn music_dir() -> PathBuf {
+    directories::UserDirs::new().and_then(|d| d.audio_dir().map(PathBuf::from)).unwrap_or_else(|| PathBuf::from(".")).join("RymPlayer")
+}
+
+/// The song's file in Music/RymPlayer, when it was downloaded before.
+pub fn downloaded(artist: &str, title: &str) -> Option<PathBuf> {
+    let name = file_name(artist, title);
+    ["webm", "m4a", "opus", "mka", "mp4", "mp3", "ogg"].iter().map(|e| music_dir().join(format!("{name}.{e}"))).find(|p| p.is_file())
+}
+
+/// How a batch download is going.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Batch {
+    /// Songs handled so far (saved, already there, or failed) out of `total`.
+    pub done: usize,
+    pub total: usize,
+    pub saved: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+impl Batch {
+    pub fn finished(&self) -> bool {
+        self.done >= self.total
+    }
+}
+
+/// Downloads songs to Music/RymPlayer one after another (each over several connections),
+/// skipping ones already there; `progress` hears after every song.
+pub async fn download_many(tracks: Vec<crate::api::Track>, mut progress: impl FnMut(Batch)) -> Batch {
+    let mut b = Batch { total: tracks.len(), ..Batch::default() };
+    progress(b);
+    for t in tracks {
+        if t.link.is_some() || crate::local::is_local(&t.video_id) || downloaded(&t.artist, &t.title).is_some() {
+            b.skipped += 1;
+        } else if save_to_music(&t.video_id, &t.artist, &t.title).await.is_ok() {
+            b.saved += 1;
+        } else {
+            b.failed += 1;
+        }
+        b.done += 1;
+        progress(b);
+    }
+    b
 }
 
 fn http() -> &'static reqwest::Client {

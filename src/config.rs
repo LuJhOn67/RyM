@@ -3,6 +3,8 @@
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::tr;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Side {
     Left,
@@ -55,6 +57,23 @@ pub struct Config {
     pub download_piece_mb: u8,
     /// Play songs in VLC (when it's installed) instead of the built-in player.
     pub play_in_vlc: bool,
+    /// Folders with songs on this device, besides the Music folder.
+    pub local_folders: Vec<String>,
+    /// The apps' words in Arabic instead of English.
+    pub arabic: bool,
+}
+
+/// A side or place ("Left", "Bottom"...) in the app's language.
+fn place(name: &str) -> String {
+    let word = match name {
+        "Left" => "Left",
+        "Right" => "Right",
+        "Top" => "Top",
+        "Bottom" => "Bottom",
+        "Hidden" => "Hidden",
+        other => return other.to_string(),
+    };
+    tr(word).to_string()
 }
 
 /// Piece sizes the settings cycle through (MB; 0 = open).
@@ -63,7 +82,7 @@ pub const PIECE_SIZES: [u8; 5] = [0, 1, 2, 4, 8];
 impl Config {
     pub fn piece_label(&self) -> String {
         match self.download_piece_mb {
-            0 => "Open (split evenly)".to_string(),
+            0 => tr("Open (split evenly)").to_string(),
             mb => format!("{mb} MB"),
         }
     }
@@ -113,7 +132,7 @@ impl Renderer {
         match self {
             Renderer::Vulkan => "Vulkan",
             Renderer::Dx12 => "DirectX 12",
-            Renderer::Cpu => "Processor",
+            Renderer::Cpu => tr("Processor"),
         }
     }
 
@@ -146,6 +165,8 @@ impl Default for Config {
             download_connections: 8,
             download_piece_mb: 0,
             play_in_vlc: false,
+            local_folders: Vec::new(),
+            arabic: false,
         }
     }
 }
@@ -265,10 +286,11 @@ pub enum Setting {
     Connections,
     Piece,
     Vlc,
+    Language,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 14] = [
+pub const SETTINGS: [Setting; 15] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -282,6 +304,7 @@ pub const SETTINGS: [Setting; 14] = [
     Setting::Connections,
     Setting::Piece,
     Setting::Vlc,
+    Setting::Language,
     Setting::Reset,
 ];
 
@@ -310,7 +333,7 @@ impl Config {
     }
 
     pub fn label(s: Setting) -> &'static str {
-        match s {
+        tr(match s {
             Setting::Theme => "Theme",
             Setting::Library => "Library panel",
             Setting::LibraryWidth => "Library width",
@@ -324,25 +347,27 @@ impl Config {
             Setting::Connections => "Download connections",
             Setting::Piece => "Download piece size",
             Setting::Vlc => "Play songs in",
+            Setting::Language => "Language",
             Setting::Reset => "Reset layout",
-        }
+        })
     }
 
     pub fn value(&self, s: Setting) -> String {
         match s {
             Setting::Theme => self.theme().name.to_string(),
-            Setting::Library => format!("{:?}", self.library),
-            Setting::LibraryWidth => format!("{} columns", self.library_width),
-            Setting::Lyrics => format!("{:?}", self.lyrics),
+            Setting::Library => place(&format!("{:?}", self.library)),
+            Setting::LibraryWidth => format!("{} {}", self.library_width, tr("columns")),
+            Setting::Lyrics => place(&format!("{:?}", self.lyrics)),
             Setting::LyricsSize => format!("{}%", self.lyrics_size),
-            Setting::LyricsAlign => if self.lyrics_centered { "Centered" } else { "Left" }.to_string(),
-            Setting::Player => format!("{:?}", self.player),
-            Setting::Help => if self.help { "Shown" } else { "Hidden" }.to_string(),
+            Setting::LyricsAlign => tr(if self.lyrics_centered { "Centered" } else { "Left" }).to_string(),
+            Setting::Player => place(&format!("{:?}", self.player)),
+            Setting::Help => tr(if self.help { "Shown" } else { "Hidden" }).to_string(),
             Setting::Source => self.source.label().to_string(),
-            Setting::Download => if self.download_best { "Best (yt-dlp, slower)" } else { "Fast (~160 kbps)" }.to_string(),
-            Setting::Connections => format!("{} at once", self.download_connections),
+            Setting::Download => tr(if self.download_best { "Best (yt-dlp, slower)" } else { "Fast (~160 kbps)" }).to_string(),
+            Setting::Connections => format!("{} {}", self.download_connections, tr("at once")),
             Setting::Piece => self.piece_label(),
-            Setting::Vlc => if self.play_in_vlc { "VLC (when installed)" } else { "RyM (built-in)" }.to_string(),
+            Setting::Vlc => tr(if self.play_in_vlc { "VLC (when installed)" } else { "RyM (built-in)" }).to_string(),
+            Setting::Language => if self.arabic { "العربية" } else { "English" }.to_string(),
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -366,9 +391,13 @@ impl Config {
             Setting::Connections => self.download_connections = (self.download_connections as i32 + step).clamp(1, 16) as u8,
             Setting::Piece => self.download_piece_mb = cycle(&PIECE_SIZES, self.download_piece_mb, step),
             Setting::Vlc => self.play_in_vlc = !self.play_in_vlc,
+            Setting::Language => {
+                self.arabic = !self.arabic;
+                crate::i18n::set_arabic(self.arabic);
+            }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, ..Config::default() }
             }
         }
     }
