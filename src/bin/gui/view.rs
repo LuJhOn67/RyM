@@ -110,7 +110,7 @@ impl Gui {
         let badge = container(icon(Icon::Play, size as f32 * 0.45, Color::WHITE))
             .padding(size as f32 * 0.18)
             .style(style::card_bg(p.accent, 999.0));
-        row![badge, line("RymPlayer", size, BOLD, p.text)].spacing(10).align_y(Alignment::Center).into()
+        row![badge, line("Legacy Player", size, BOLD, p.text)].spacing(10).align_y(Alignment::Center).into()
     }
 
     // ---------------------------------------------------------------- chrome
@@ -589,36 +589,57 @@ impl Gui {
         scrollable(col.padding([8, 0])).height(Fill).style(style::scroll(p)).into()
     }
 
-    fn lyrics_view(&self, p: Palette) -> Element<'_, Message> {
-        let Some(l) = &self.lyrics else {
-            return center(text(&self.lyrics_status).size(15).color(p.dim)).into();
+    /// Lyrics on a panel in the cover's color: big bold lines, the ones to come dark, the sung
+    /// one white, sung ones soft white. Click a line to jump there.
+    fn lyrics_view(&self, _p: Palette) -> Element<'_, Message> {
+        // The cover's color, at the level the shared lyrics colors use (see rymplayer::colors).
+        let bg = self
+            .now_playing()
+            .and_then(|t| self.image(t.thumb.as_ref(), ROW_PX))
+            .and_then(|t| t.tint)
+            .map(|c| {
+                let max = c.r.max(c.g).max(c.b).max(0.01);
+                let k = 150.0 / 255.0 / max;
+                Color::from_rgb(c.r * k, c.g * k, c.b * k)
+            })
+            .unwrap_or(Color::from_rgb8(72, 72, 80));
+        let sung = mix(bg, Color::WHITE, 0.72);
+        let next = mix(bg, Color::BLACK, 0.55);
+        let panel = |content: Element<'static, Message>| -> Element<'_, Message> {
+            container(content).width(Fill).height(Fill).padding([26, 30]).clip(true).style(style::card_bg(bg, 12.0)).into()
         };
-        let source = line(format!("Source: {}", l.source), 12, FONT, p.dim);
+        let Some(l) = &self.lyrics else {
+            return panel(center(text(self.lyrics_status.clone()).size(18).font(BOLD).color(sung)).into());
+        };
+        let source = text(format!("Lyrics from {}", l.source)).size(12).font(SEMI).color(sung);
         if l.synced.is_empty() {
-            let lines = Column::with_children(l.plain.iter().map(|s| text(s).size(17).color(p.text).center().width(Fill).into())).spacing(8);
-            return scrollable(column![lines, space().height(8), source].padding([16, 8])).height(Fill).style(style::scroll(p)).into();
+            let mut lines = Column::new().spacing(10).push(text("These lyrics aren't synced to the song").size(13).color(sung));
+            for s in &l.plain {
+                lines = lines.push(text(s.clone()).size(24).font(BOLD).color(Color::WHITE));
+            }
+            let body = scrollable(column![lines, space().height(10), source]).height(Fill).style(style::scroll_on(bg));
+            return panel(body.into());
         }
         // A window around the sung line keeps it in view without scrolling state. When the line
         // changes, the window moves down one line and starts one line lower, then slides up.
         let cur = lyrics::current_line(&l.synced, self.pos);
         let k = ease(self.lyric_changed, 420.0);
-        let start = cur.unwrap_or(0).saturating_sub(3);
-        let slide = if cur.is_some_and(|c| c >= 3) { (1.0 - k) * LYRIC_STEP } else { 0.0 };
-        let mut col = Column::new().spacing(14).padding(iced::Padding { top: 28.0 + slide, right: 8.0, bottom: 24.0, left: 8.0 });
-        let lit = if p.light { p.accent } else { p.text };
-        let faded = Color { a: 0.4, ..p.dim };
-        for (i, (_, s)) in l.synced.iter().enumerate().skip(start).take(16) {
-            let s = if s.is_empty() { "♪" } else { s.as_str() };
-            // The sung line grows and lights up; the one before it shrinks and dims.
-            let (size, font, color) = match cur {
-                Some(c) if c == i => (19.0 + 5.0 * k, BOLD, mix(p.dim, lit, k)),
-                Some(c) if i + 1 == c => (24.0 - 5.0 * k, SEMI, mix(lit, faded, k)),
-                Some(c) if i < c => (19.0, SEMI, faded),
-                _ => (19.0, SEMI, p.dim),
+        let start = cur.unwrap_or(0).saturating_sub(2);
+        let slide = if cur.is_some_and(|c| c >= 2) { (1.0 - k) * LYRIC_STEP } else { 0.0 };
+        let mut col = Column::new().spacing(LYRIC_GAP).padding(iced::Padding { top: slide, ..Default::default() });
+        for (i, (at, s)) in l.synced.iter().enumerate().skip(start).take(14) {
+            let s = if s.is_empty() { "♪".to_string() } else { s.clone() };
+            // The sung line turns white; the one before it fades to the sung color.
+            let color = match cur {
+                Some(c) if c == i => mix(next, Color::WHITE, k),
+                Some(c) if i + 1 == c => mix(Color::WHITE, sung, k),
+                Some(c) if i < c => sung,
+                _ => next,
             };
-            col = col.push(text(s).size(size).font(font).color(color).center().width(Fill));
+            let words = text(s).size(LYRIC_SIZE).font(BOLD).color(color).width(Fill);
+            col = col.push(button(words).padding(0).style(style::invisible()).on_press(Message::SeekLyric(*at)));
         }
-        column![container(col).height(Fill).clip(true), container(source).center_x(Fill)].into()
+        panel(column![container(col).height(Fill).clip(true), source].spacing(10).into())
     }
 
     /// Slim bar: cover, song and the line being sung on the left; controls on the right.
@@ -759,7 +780,10 @@ impl Gui {
 }
 
 /// Height of one lyrics line plus the gap, for the slide.
-const LYRIC_STEP: f32 = 40.0;
+/// Lyrics lines: size, gap, and the distance from one line's top to the next (one-line lines).
+const LYRIC_SIZE: f32 = 26.0;
+const LYRIC_GAP: f32 = 16.0;
+const LYRIC_STEP: f32 = LYRIC_SIZE * 1.3 + LYRIC_GAP;
 
 /// The song menu's rows. Only what RymPlayer can do is listed.
 fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {

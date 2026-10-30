@@ -1,9 +1,10 @@
 //! RymPlayer's shared core: YouTube Music access, playback, lyrics, settings and sign-in.
-//! Used by the terminal app (`RymPlayer`) and the windowed app (`RymPlayer-GUI`).
+//! Used by the terminal app (`RymPlayer`) and the window apps (`RyM-Legacy-Player`, `RymPlayer-GTK`).
 
 pub mod api;
 pub mod arriving;
 pub mod audio;
+pub mod colors;
 pub mod config;
 pub mod feed;
 pub mod innertube;

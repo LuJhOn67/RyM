@@ -64,7 +64,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
@@ -141,7 +140,7 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                     val side = minOf(maxWidth, maxHeight) - 48.dp
                     Box(Modifier.scale(scale).shadow(24.dp, RoundedCornerShape(16.dp))) { Cover(t.thumb, side, 720, 16.dp) }
                 }
-                Panel.Lyrics -> LyricsView(vm)
+                Panel.Lyrics -> LyricsView(vm, tint)
                 Panel.Queue -> QueueView(vm)
             }
         }
@@ -201,45 +200,68 @@ private fun PanelButton(icon: androidx.compose.ui.graphics.vector.ImageVector, l
     }
 }
 
-/** Synced lyrics glide so the sung line stays in the upper third; it grows and lights up. */
+/** The cover's color at the level all the RyM apps use for lyrics: dark enough for white lines. */
+private fun lyricsBackground(tint: Color): Color {
+    val max = maxOf(tint.red, tint.green, tint.blue)
+    if (max < 0.04f) return Color(0xFF484850)
+    val k = (150f / 255f) / max
+    return Color(tint.red * k, tint.green * k, tint.blue * k)
+}
+
+/**
+ * Lyrics on a panel in the cover's color: big bold lines, the ones to come dark, the sung one
+ * white, sung ones soft white; they glide so the sung line stays in the upper third. Tap a line
+ * to jump there.
+ */
 @Composable
-private fun LyricsView(vm: AppViewModel) {
-    val l = vm.lyrics ?: return Box(Modifier.fillMaxSize(), Alignment.Center) { Text(vm.lyricsStatus, color = Dim) }
-    val state = rememberLazyListState()
-    if (l.synced.isEmpty()) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp)) {
-            itemsIndexed(l.plain) { _, s -> Text(s, color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(vertical = 4.dp)) }
-            item { Text("Source: ${l.source}", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(top = 16.dp)) }
+private fun LyricsView(vm: AppViewModel, tint: Color) {
+    val bg = lyricsBackground(tint)
+    val sung = lerp(bg, Color.White, 0.72f)
+    val next = lerp(bg, Color.Black, 0.55f)
+    Box(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 6.dp).clip(RoundedCornerShape(16.dp)).background(bg)) {
+        val l = vm.lyrics
+        if (l == null) {
+            Text(vm.lyricsStatus, color = sung, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.align(Alignment.Center))
+            return@Box
         }
-        return
-    }
-    val cur = Lrclib.currentLine(l.synced, vm.player.position)
-    var viewport by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(cur) {
-        if (cur != null) state.animateScrollToItem(cur, -(viewport / 3).toInt())
-    }
-    LazyColumn(
-        state = state,
-        modifier = Modifier.fillMaxSize().onSizeChanged { viewport = it.height.toFloat() },
-        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 120.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        itemsIndexed(l.synced) { i, (time, line) ->
-            val active = i == cur
-            val passed = cur != null && i < cur
-            val alpha by animateFloatAsState(if (active) 1f else if (passed) 0.35f else 0.55f, tween(450), label = "a")
-            val scale by animateFloatAsState(if (active) 1.06f else 1f, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessLow), label = "s")
-            Text(
-                line.ifEmpty { "♪" },
-                color = Color.White,
-                fontSize = 26.sp,
-                lineHeight = 32.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.graphicsLayer { this.alpha = alpha; scaleX = scale; scaleY = scale; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f) }
-                    .clickable { vm.player.seekTo(time) },
-            )
+        val state = rememberLazyListState()
+        if (l.synced.isEmpty()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp)) {
+                item { Text("These lyrics aren't synced to the song", color = sung, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp)) }
+                itemsIndexed(l.plain) { _, s -> Text(s, color = Color.White, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp)) }
+                item { Text("Lyrics from ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp)) }
+            }
+            return@Box
         }
-        item { Text("Source: ${l.source}", color = Dim, fontSize = 12.sp) }
+        val cur = Lrclib.currentLine(l.synced, vm.player.position)
+        var viewport by remember { mutableFloatStateOf(0f) }
+        LaunchedEffect(cur) {
+            if (cur != null) state.animateScrollToItem(cur, -(viewport / 3).toInt())
+        }
+        LazyColumn(
+            state = state,
+            modifier = Modifier.fillMaxSize().onSizeChanged { viewport = it.height.toFloat() },
+            contentPadding = PaddingValues(horizontal = 22.dp, vertical = 90.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            itemsIndexed(l.synced) { i, (time, line) ->
+                val target = when {
+                    i == cur -> Color.White
+                    cur != null && i < cur -> sung
+                    else -> next
+                }
+                val color by animateColorAsState(target, tween(350), label = "line")
+                Text(
+                    line.ifEmpty { "♪" },
+                    color = color,
+                    fontSize = 26.sp,
+                    lineHeight = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth().clickable { vm.player.seekTo(time) },
+                )
+            }
+            item { Text("Lyrics from ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }
 

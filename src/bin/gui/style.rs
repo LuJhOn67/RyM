@@ -358,3 +358,23 @@ pub fn shadow(p: Palette) -> Shadow {
         blur_radius: 24.0,
     }
 }
+
+/// Scrollbars on a colored panel (the lyrics).
+pub fn scroll_on(_bg: Color) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style {
+    move |theme, status| {
+        let mut s = scrollable::default(theme, status);
+        for rail in [&mut s.vertical_rail, &mut s.horizontal_rail] {
+            rail.background = None;
+            rail.border = Border::default();
+            rail.scroller.background = Background::Color(rgba(255, 255, 255, 0.3));
+            rail.scroller.border = Border { radius: 4.0.into(), ..Default::default() };
+        }
+        s.container.background = None;
+        s
+    }
+}
+
+/// A button that looks like its content alone (clickable lyrics lines).
+pub fn invisible() -> impl Fn(&Theme, button::Status) -> button::Style {
+    |_, _| button::Style { background: None, ..button::Style::default() }
+}

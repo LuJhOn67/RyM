@@ -89,6 +89,8 @@ enum Event {
     /// The song's direct link for VLC.
     InVlc(String, Result<(String, Vec<(String, String)>), String>),
     Lyrics(String, Result<Option<Lyrics>, String>),
+    /// The lyrics pane's background, from the song's cover.
+    LyricsBg(String, (u8, u8, u8)),
     Rated(String, bool, Result<(), String>),
     /// The account's liked songs, re-read now and then so likes made on the phone show here.
     Liked(Result<Vec<Track>, String>),
@@ -134,6 +136,8 @@ struct App {
 
     lyrics: Option<Lyrics>,
     lyrics_status: String,
+    /// The lyrics pane's color (the playing song's cover).
+    lyrics_bg: (u8, u8, u8),
     liked: Likes,
     /// When the liked songs were last read from the account.
     likes_synced: Instant,
@@ -180,6 +184,7 @@ impl App {
             volume: 0.8,
             lyrics: None,
             lyrics_status: String::new(),
+            lyrics_bg: rymplayer::colors::PLAIN,
             liked: Likes::default(),
             likes_synced: Instant::now(),
             play_when_loaded: None,
@@ -386,6 +391,11 @@ impl App {
                             self.next();
                         }
                     }
+                }
+            }
+            Event::LyricsBg(vid, color) => {
+                if self.now_playing().map(|t| &t.video_id) == Some(&vid) {
+                    self.lyrics_bg = color;
                 }
             }
             Event::Lyrics(vid, result) => {
@@ -931,6 +941,8 @@ impl App {
             self.spawn(async move { Event::Fetched(v.clone(), s(stream::open(v).await)) });
         }
 
+        let (v, thumb) = (vid.clone(), track.thumb.clone());
+        self.spawn(async move { Event::LyricsBg(v.clone(), rymplayer::colors::for_cover(thumb).await) });
         let v = vid.clone();
         let api = self.api.clone();
         self.spawn(async move { Event::Lyrics(v, Ok(lyrics::for_track(api, track).await)) });

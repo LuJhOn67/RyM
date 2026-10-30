@@ -171,9 +171,8 @@ button.heart.on { color: @accent@; }
 button.play { background: @text@; color: @surface@; border-radius: 22px; min-width: 40px; min-height: 40px; }
 button.play:hover { background: @accent@; }
 .bar { background: @bar@; border-top: 1px solid @divider@; padding: 8px 14px; }
-.lyrics { background: @surface@; border-left: 1px solid @divider@; padding: 18px; }
-.lyric { font-size: 17px; color: @dim@; padding: 6px 8px; border-radius: 8px; }
-.lyric.now { color: @text@; font-weight: 800; background: @selected@; }
+.lyrics { border-radius: 14px; margin: 10px; padding: 26px 28px; }
+.lyric { font-size: 25px; font-weight: 800; padding: 7px 0; transition: color 300ms ease; }
 .toast { background: @menu@; color: @text@; border-radius: 10px; padding: 10px 16px; margin: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
 popover > contents { background: @menu@; color: @text@; border-radius: 10px; padding: 6px; }
 popover button { background: transparent; border: none; box-shadow: none; color: @text@; padding: 8px 12px; border-radius: 6px; }
@@ -201,6 +200,20 @@ fn css(theme: usize) -> String {
         .replace("@input@", t.input)
         .replace("@divider@", t.divider)
         .replace("@menu@", t.menu)
+}
+
+/// The lyrics panel in the playing song's cover color: lines to come dark, the sung line white,
+/// sung lines soft white (see rymplayer::colors).
+fn lyrics_css(bg: (u8, u8, u8)) -> String {
+    let [sung, _, next] = rymplayer::colors::lyric_colors(bg);
+    let c = |(r, g, b): (u8, u8, u8)| format!("rgb({r},{g},{b})");
+    format!(
+        ".lyrics {{ background: {}; }} .lyric {{ color: {}; }} .lyric.sung {{ color: {}; }} .lyric.now {{ color: #ffffff; }} .lyrics-note {{ color: {}; font-weight: 600; }}",
+        c(bg),
+        c(next),
+        c(sung),
+        c(sung)
+    )
 }
 
 fn apply_theme(provider: &CssProvider, theme: usize) {
@@ -241,6 +254,8 @@ enum Ev {
     /// The song's direct link for VLC.
     InVlc(u64, anyhow::Result<(String, Vec<(String, String)>)>),
     Lyrics(String, Option<Lyrics>),
+    /// The lyrics panel's color, from the song's cover.
+    LyricsBg(String, (u8, u8, u8)),
     Rated(String, bool, anyhow::Result<()>),
     Radio(anyhow::Result<Vec<Track>>),
     Downloaded(anyhow::Result<PathBuf>),
@@ -251,6 +266,8 @@ enum Ev {
 struct Widgets {
     window: ApplicationWindow,
     provider: CssProvider,
+    /// The lyrics panel's colors, changed for each song.
+    lyrics_provider: CssProvider,
     rail: Vec<(Page, Button)>,
     content: gtk::Box,
     scroll: gtk::ScrolledWindow,
@@ -546,6 +563,11 @@ fn build(app: &Application) {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
     apply_theme(&provider, config.gui_theme);
+    let lyrics_provider = CssProvider::new();
+    if let Some(display) = gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(&display, &lyrics_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    }
+    lyrics_provider.load_from_string(&lyrics_css(rymplayer::colors::PLAIN));
 
     let window = ApplicationWindow::builder().application(app).title("RyM").default_width(1240).default_height(800).build();
     window.add_css_class("rym");
@@ -618,7 +640,7 @@ fn build(app: &Application) {
     lyrics_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
     lyrics_scroll.set_child(Some(&lyrics_box));
     lyrics_scroll.set_vexpand(true);
-    lyrics_scroll.set_size_request(340, -1);
+    lyrics_scroll.set_size_request(440, -1);
     lyrics_scroll.add_css_class("lyrics");
     let lyrics_panel = gtk::Revealer::new();
     lyrics_panel.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
@@ -719,6 +741,7 @@ fn build(app: &Application) {
         w: Widgets {
             window: window.clone(),
             provider,
+            lyrics_provider,
             rail,
             content,
             scroll,
@@ -1342,7 +1365,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             apply_theme(&s.w.provider, s.config.gui_theme);
         });
     }
-    page.append(&setting_row("Theme", "Shared with the other window app", &theme));
+    page.append(&setting_row("Theme", "Shared with RyM Legacy Player", &theme));
 
     let source = gtk::DropDown::from_strings(&["Auto", "yt-dlp", "InnerTube"]);
     source.set_selected(match config.source {
@@ -1649,7 +1672,7 @@ fn play_at(ui: &Shared, i: usize) {
             }
         }
         clear(&s.w.lyrics_box);
-        s.w.lyrics_box.append(&label("Looking for lyrics…", &["dim"]));
+        s.w.lyrics_box.append(&label("Looking for lyrics…", &["lyrics-note"]));
         let in_vlc = s.config.play_in_vlc && vlc::find().is_some();
         if !in_vlc {
             vlc::stop(&mut s.vlc);
@@ -1660,6 +1683,10 @@ fn play_at(ui: &Shared, i: usize) {
     refresh_hearts(ui);
 
     log(&format!("play {} ({}){}", track.title, track.video_id, if in_vlc { " in VLC" } else { "" }));
+    {
+        let (vid, thumb) = (track.video_id.clone(), track.thumb.clone());
+        post(ui, async move { Ev::LyricsBg(vid, rymplayer::colors::for_cover(thumb).await) });
+    }
     ui.borrow_mut().play_asked = Instant::now();
     let vid = track.video_id.clone();
     if in_vlc {
@@ -1768,14 +1795,25 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     clear(&s.w.lyrics_box);
     s.lyric_line = None;
     let Some(lyrics) = lyrics else {
-        s.w.lyrics_box.append(&label("No lyrics for this song", &["dim"]));
+        s.w.lyrics_box.append(&label("No lyrics for this song", &["lyrics-note"]));
         s.lyrics = None;
         return;
     };
-    let lines: Vec<String> =
-        if lyrics.synced.is_empty() { lyrics.plain.clone() } else { lyrics.synced.iter().map(|(_, l)| l.clone()).collect() };
+    let lines: Vec<String> = if lyrics.synced.is_empty() {
+        lyrics.plain.clone()
+    } else {
+        lyrics.synced.iter().map(|(_, l)| if l.is_empty() { "♪".to_string() } else { l.clone() }).collect()
+    };
+    if lyrics.synced.is_empty() {
+        let note = label("These lyrics aren't synced to the song", &["lyrics-note"]);
+        note.set_margin_bottom(10);
+        s.w.lyrics_box.append(&note);
+    }
     for (i, line) in lines.into_iter().enumerate() {
         let l = Label::new(Some(&line));
+        if lyrics.synced.is_empty() {
+            l.add_css_class("now");
+        }
         l.set_xalign(0.0);
         l.set_wrap(true);
         l.add_css_class("lyric");
@@ -1794,10 +1832,26 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
         }
         s.w.lyrics_box.append(&l);
     }
-    let src = label(&format!("Lyrics · {}", lyrics.source), &["dim", "small"]);
-    src.set_margin_top(12);
+    let src = label(&format!("Lyrics from {}", lyrics.source), &["lyrics-note", "small"]);
+    src.set_margin_top(18);
     s.w.lyrics_box.append(&src);
     s.lyrics = Some(lyrics);
+}
+
+/// Scrolls to `target` over a third of a second, easing out, in step with the screen's frames.
+fn glide(scroll: &gtk::ScrolledWindow, target: f64) {
+    let adj = scroll.vadjustment();
+    let from = adj.value();
+    let started = Rc::new(std::cell::Cell::new(None::<i64>));
+    scroll.add_tick_callback(move |_, clock| {
+        let now = clock.frame_time();
+        let t0 = *started.get().get_or_insert(now);
+        started.set(Some(t0));
+        let t = ((now - t0) as f64 / 330_000.0).min(1.0);
+        let k = 1.0 - (1.0 - t).powi(3);
+        adj.set_value(from + (target - from) * k);
+        if t >= 1.0 { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+    });
 }
 
 fn tick(ui: &Shared) {
@@ -1839,21 +1893,31 @@ fn tick(ui: &Shared) {
         let mut i = 0;
         let mut target = None;
         while let Some(c) = child {
-            if Some(i) == line {
-                c.add_css_class("now");
-                target = Some(c.clone());
-            } else {
-                c.remove_css_class("now");
+            // Sung lines soft white, the sung one white, the rest dark (colors in lyrics_css).
+            match line {
+                Some(n) if i < n => {
+                    c.add_css_class("sung");
+                    c.remove_css_class("now");
+                }
+                Some(n) if i == n => {
+                    c.remove_css_class("sung");
+                    c.add_css_class("now");
+                    target = Some(c.clone());
+                }
+                _ => {
+                    c.remove_css_class("sung");
+                    c.remove_css_class("now");
+                }
             }
             child = c.next_sibling();
             i += 1;
         }
-        // Keep the sung line in the middle of the panel.
+        // Keep the sung line about a third of the way down.
         if let Some(c) = target {
             let adj = s.w.lyrics_scroll.vadjustment();
             if let Some(p) = c.compute_point(&s.w.lyrics_box, &gtk::graphene::Point::new(0.0, 0.0)) {
-                let y = p.y() as f64 - adj.page_size() / 2.0 + c.height() as f64 / 2.0;
-                adj.set_value(y.clamp(adj.lower(), (adj.upper() - adj.page_size()).max(adj.lower())));
+                let y = p.y() as f64 - adj.page_size() / 3.0;
+                glide(&s.w.lyrics_scroll, y.clamp(adj.lower(), (adj.upper() - adj.page_size()).max(adj.lower())));
             }
         }
         s.lyric_line = line;
@@ -2053,6 +2117,11 @@ fn poll_events(ui: &Shared) {
                 };
                 drop(s);
                 toast(ui, &msg);
+            }
+            Ev::LyricsBg(vid, bg) => {
+                if now_playing(ui).is_some_and(|t| t.video_id == vid) {
+                    ui.borrow().w.lyrics_provider.load_from_string(&lyrics_css(bg));
+                }
             }
             Ev::Lyrics(vid, found) => {
                 log(&format!("  lyrics for {vid}: {}", found.as_ref().map_or("none".to_string(), |l| format!("{} synced lines, from {}", l.synced.len(), l.source))));

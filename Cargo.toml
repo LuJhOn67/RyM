@@ -50,7 +50,7 @@ name = "RyM"
 path = "src/main.rs"
 
 [[bin]]
-name = "RymPlayer-GUI"
+name = "RyM-Legacy-Player"
 path = "src/bin/gui/main.rs"
 
 [[bin]]

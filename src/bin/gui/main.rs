@@ -131,6 +131,8 @@ pub enum Message {
     Prev,
     Seek(f32),
     SeekDone,
+    /// A lyrics line was clicked: jump to where it's sung.
+    SeekLyric(f32),
     Volume(f32),
     Tick,
     Radio(Result<Vec<Track>, String>),
@@ -435,8 +437,8 @@ impl Gui {
 
     fn title(&self) -> String {
         match self.now_playing() {
-            Some(t) => format!("{} · {} — RymPlayer", t.title, t.artist),
-            None => "RymPlayer".into(),
+            Some(t) => format!("{} · {} — RyM Legacy Player", t.title, t.artist),
+            None => "RyM Legacy Player".into(),
         }
     }
 
@@ -813,6 +815,10 @@ impl Gui {
                 }
             }
             Message::Seek(v) => self.seeking = Some(v),
+            Message::SeekLyric(v) => {
+                self.seeking = Some(v);
+                return self.update(Message::SeekDone);
+            }
             Message::SeekDone => {
                 if let (Some(v), Some(a)) = (self.seeking.take(), &self.audio)
                     && a.is_loaded()
@@ -1263,7 +1269,7 @@ async fn download(t: Track) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod shots {
-    //! Renders screens to PNG without opening a window: `cargo test --bin RymPlayer-GUI -- --ignored`.
+    //! Renders screens to PNG without opening a window: `cargo test --bin RyM-Legacy-Player -- --ignored`.
     //! Output lands in `target/gui-shots/`.
 
     use super::*;
@@ -1303,6 +1309,47 @@ mod shots {
                 gui.images.insert(url, t);
             }
         }
+    }
+
+    /// The lyrics page alone, offline: a made-up song with a red cover, the third line being sung.
+    /// `cargo test --bin RyM-Legacy-Player lyrics_shot -- --ignored` (PNG in target/gui-shots).
+    #[test]
+    #[ignore]
+    fn lyrics_shot() {
+        let mut gui = Gui::empty();
+        let url = "https://lh3.googleusercontent.com/fake=w60-h60".to_string();
+        let mut png = Vec::new();
+        ::image::RgbaImage::from_pixel(32, 32, ::image::Rgba([200, 40, 50, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png)
+            .unwrap();
+        let mut thumb = Thumb::new(png, true).expect("thumb");
+        thumb.loaded = long_ago();
+        gui.images.insert(api::thumb_sized(&url, ROW_PX), thumb);
+        gui.queue = vec![Track {
+            video_id: "x".into(),
+            title: "City Lights".into(),
+            artist: "Some Band".into(),
+            album: String::new(),
+            duration: "3:30".into(),
+            thumb: Some(url),
+            album_id: None,
+            artist_id: None,
+            link: None,
+        }];
+        gui.current = Some(0);
+        gui.pos = 71.0;
+        gui.lyrics = Some(Lyrics {
+            synced: lyrics::parse_lrc(
+                "[00:58.00]Under the neon, under the rain\n[01:04.00]Every street sings it again\n[01:10.00]I hear the city calling my name\n[01:16.00]Running till the morning light\n[01:22.00]Nothing ever feels the same\n[01:28.00]Hold on, hold on tonight\n[01:34.00]We were young and we were wild\n[01:40.00]Dancing on the edge of time",
+            ),
+            plain: Vec::new(),
+            source: "LRCLIB".into(),
+        });
+        gui.lyric_changed = long_ago();
+        gui.now_playing_open = true;
+        gui.tab = Tab::Lyrics;
+        gui.config.gui_theme = 3;
+        shot(&gui, "lyrics-offline");
     }
 
     /// Uses the signed-in session and real data; only counts are printed.
@@ -1448,7 +1495,7 @@ mod queue_tests {
 
 #[cfg(test)]
 mod frame_cost {
-    //! How long one full software-rendered frame takes: `cargo test --release --bin RymPlayer-GUI frame_cost -- --ignored --nocapture`.
+    //! How long one full software-rendered frame takes: `cargo test --release --bin RyM-Legacy-Player frame_cost -- --ignored --nocapture`.
 
     use super::*;
     use iced_test::simulator::Simulator;
