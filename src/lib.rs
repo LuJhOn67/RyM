@@ -7,6 +7,7 @@ pub mod config;
 pub mod innertube;
 pub mod login;
 pub mod lyrics;
+pub mod page_cache;
 pub mod stream;
 
 use std::path::PathBuf;

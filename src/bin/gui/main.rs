@@ -389,7 +389,19 @@ impl Gui {
             Some(cookie) => {
                 gui.busy = true;
                 gui.status = "Signing in...".into();
-                Task::perform(Api::with_cookie(cookie), |r| Message::LoggedIn(s(r)))
+                // The last home feed shows at once while signing in; the fresh one replaces it.
+                let saved = rymplayer::page_cache::load_home();
+                let covers = if saved.is_empty() {
+                    Task::none()
+                } else {
+                    gui.signed_in_screen = true;
+                    gui.page = Page::Home;
+                    gui.page_title = "For you".into();
+                    gui.tracks = saved;
+                    let wanted: Vec<_> = gui.tracks.iter().map(|t| t.thumb.clone()).collect();
+                    gui.want_images(wanted.iter().map(|u| (u, CARD_PX)))
+                };
+                Task::batch([Task::perform(Api::with_cookie(cookie), |r| Message::LoggedIn(s(r))), covers])
             }
             None => Task::none(),
         };
@@ -591,6 +603,7 @@ impl Gui {
             }
             Message::SignOut => {
                 let _ = std::fs::remove_file(cookie_path());
+                rymplayer::page_cache::clear();
                 if let Some(a) = &mut self.audio {
                     a.stop();
                 }
@@ -638,6 +651,9 @@ impl Gui {
                 match result {
                     Ok(t) => {
                         self.status.clear();
+                        if self.page == Page::Home {
+                            rymplayer::page_cache::save_home(&t);
+                        }
                         self.tracks = t;
                         self.page_shown = Instant::now();
                         self.animate(400);
@@ -1012,10 +1028,14 @@ impl Gui {
 
     fn open(&mut self, page: Page, title: String) -> Task<Message> {
         let Some(api) = self.api.clone() else { return Task::none() };
+        // The saved home feed stays on screen until the fresh one arrives.
+        let keep = page == Page::Home && self.page == Page::Home && !self.tracks.is_empty();
         self.page = page.clone();
         self.page_title = title;
         self.busy = true;
-        self.tracks.clear();
+        if !keep {
+            self.tracks.clear();
+        }
         Task::perform(
             {
                 let page = page.clone();

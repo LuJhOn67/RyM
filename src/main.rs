@@ -198,6 +198,16 @@ impl App {
         if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
             self.busy = true;
             self.status = "Signing in...".into();
+            // The last home feed shows at once while signing in; the fresh one replaces it.
+            let saved = rymplayer::page_cache::load_home();
+            if !saved.is_empty() {
+                self.mode = Mode::Main;
+                self.rebuild_nav(Vec::new());
+                self.page = Page::ForYou;
+                self.page_title = "For you".into();
+                self.track_state.select(Some(0));
+                self.tracks = saved;
+            }
             self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(cookie).await)) });
         }
     }
@@ -298,6 +308,9 @@ impl App {
                 self.busy = false;
                 match result {
                     Ok(t) => {
+                        if page == Page::ForYou {
+                            rymplayer::page_cache::save_home(&t);
+                        }
                         if page == Page::Playlist(api::LIKED_ID.into()) {
                             self.liked.extend(t.iter().map(|t| t.video_id.clone()));
                         }
@@ -532,6 +545,7 @@ impl App {
 
     fn sign_out(&mut self) {
         let _ = std::fs::remove_file(cookie_path());
+        rymplayer::page_cache::clear();
         if let Some(a) = &mut self.audio {
             a.stop();
         }
@@ -601,11 +615,15 @@ impl App {
 
     fn open(&mut self, page: Page, title: String) {
         let Some(api) = self.api.clone() else { return };
+        // The saved home feed stays on screen until the fresh one arrives.
+        let keep = page == Page::ForYou && self.page == Page::ForYou && !self.tracks.is_empty();
         self.page = page.clone();
         self.page_title = title;
         self.busy = true;
-        self.tracks.clear();
-        self.track_state.select(None);
+        if !keep {
+            self.tracks.clear();
+            self.track_state.select(None);
+        }
         self.spawn(async move {
             let r = match page.clone() {
                 Page::ForYou => api.home().await,

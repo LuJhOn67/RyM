@@ -17,7 +17,7 @@ use music_api::query::{GetLibraryPlaylistsQuery, GetWatchPlaylistQuery, PostMeth
 /// Liked Music is a regular playlist with a fixed id.
 pub const LIKED_ID: &str = "LM";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub video_id: String,
     pub title: String,
@@ -33,7 +33,7 @@ pub struct Track {
     pub link: Option<Link>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Link {
     Playlist(String),
     Album(String),
