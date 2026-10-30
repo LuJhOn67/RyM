@@ -26,7 +26,7 @@ wry = { version = "0.57.1", optional = true }
 music_api = { package = "ytmapi-rs", version = "0.3.3" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # The GTK 4 window app (needs GTK 4 to build): `cargo build --release --features gtk-ui --bin RymPlayer-GTK`.
-gtk = { package = "gtk4", version = "0.11.5", optional = true }
+gtk = { package = "gtk4", version = "0.11.5", optional = true, features = ["v4_12"] }
 
 [features]
 default = ["webview"]
