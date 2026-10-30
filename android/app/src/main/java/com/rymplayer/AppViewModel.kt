@@ -15,6 +15,7 @@ import com.rymplayer.data.LIKED_ID
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
 import com.rymplayer.data.Lyrics
+import com.rymplayer.data.LyricsCache
 import com.rymplayer.data.Playlist
 import com.rymplayer.data.SignedOutException
 import com.rymplayer.data.Track
@@ -401,10 +402,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (t == null) return
         lyricsStatus = "Looking for lyrics..."
         lyricsJob = viewModelScope.launch {
-            val found = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration))
-                ?: runCatching { api.lyrics(t.videoId) }.getOrNull()
+            val found = findLyrics(t)
             lyrics = found
             lyricsStatus = if (found == null) "No lyrics for this song" else ""
+            // The next song's lyrics are ready before it starts.
+            player.queue.getOrNull(player.index + 1)?.let { next ->
+                if (LyricsCache.get(getApplication(), next.videoId) == null) findLyrics(next)
+            }
+        }
+    }
+
+    /** Saved lyrics, or LRCLIB and YouTube Music asked at once (LRCLIB's preferred: it has timing). */
+    private suspend fun findLyrics(t: Track): Lyrics? {
+        val ctx = getApplication<Application>()
+        LyricsCache.get(ctx, t.videoId)?.let { return it.lyrics }
+        return coroutineScope {
+            val ytm = async { runCatching { api.lyrics(t.videoId) }.getOrNull() }
+            val found = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration)) ?: ytm.await()
+            ytm.cancel()
+            LyricsCache.put(ctx, t.videoId, found)
+            found
         }
     }
 

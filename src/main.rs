@@ -932,18 +932,8 @@ impl App {
         }
 
         let v = vid.clone();
-        let dur = parse_duration(&track.duration);
         let api = self.api.clone();
-        self.spawn(async move {
-            let synced = lyrics::lrclib(track.title, track.artist, track.album, dur).await;
-            let found = match (synced, api) {
-                (Ok(Some(l)), _) => Some(l),
-                // LRCLIB has nothing (or is down): YouTube Music's own, unsynced lyrics.
-                (_, Some(api)) => api.lyrics(v.clone()).await.ok().flatten(),
-                (_, None) => None,
-            };
-            Event::Lyrics(v, Ok(found))
-        });
+        self.spawn(async move { Event::Lyrics(v, Ok(lyrics::for_track(api, track).await)) });
 
         if let Some(api) = self.api.clone() {
             // Fire and forget: keeps YouTube Music history in sync.
@@ -951,8 +941,12 @@ impl App {
         }
     }
 
+    /// The next song (and its lyrics) download while this one plays.
     fn prefetch_next(&self) {
         let next = self.current.and_then(|i| self.queue.get(i + 1));
+        if let Some(t) = next {
+            tokio::spawn(lyrics::prefetch(self.api.clone(), t.clone()));
+        }
         if let Some(t) = next
             && stream::cached(&t.video_id).is_none()
         {

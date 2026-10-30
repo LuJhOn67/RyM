@@ -1,6 +1,8 @@
 package com.rymplayer.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -13,7 +15,10 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
-/** Synced lyrics from LRCLIB: exact match first, then looser searches. */
+/**
+ * Synced lyrics from LRCLIB: the exact match and three looser searches, all asked at once and
+ * taken in that order of preference (the first synced answer wins once the better ones are in).
+ */
 object Lrclib {
     private val http = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
     private val json = Json { ignoreUnknownKeys = true }
@@ -26,7 +31,7 @@ object Lrclib {
                 if (resp.isSuccessful) return@withContext json.parseToJsonElement(resp.body?.string().orEmpty())
                 if (resp.code == 404) return@withContext null
             }
-            if (attempt == 0) delay(800)
+            if (attempt == 0) delay(400)
         }
         null
     }
@@ -38,7 +43,7 @@ object Lrclib {
         return if (synced.size >= 4 || plain.size >= 4) Lyrics(synced, plain, "LRCLIB") else null
     }
 
-    suspend fun find(title: String, artist: String, album: String, duration: Float?): Lyrics? = runCatching {
+    suspend fun find(title: String, artist: String, album: String, duration: Float?): Lyrics? = runCatching { coroutineScope {
         val exact = "https://lrclib.net/api/get".toHttpUrl().newBuilder()
             .addQueryParameter("track_name", title)
             .addQueryParameter("artist_name", artist)
@@ -46,9 +51,6 @@ object Lrclib {
                 if (album.isNotEmpty()) addQueryParameter("album_name", album)
                 if (duration != null) addQueryParameter("duration", duration.toInt().toString())
             }.build().toString()
-        var fallback: Lyrics? = null
-        toLyrics(get(exact))?.let { if (it.synced.isNotEmpty()) return it else fallback = it }
-
         val clean = cleanTitle(title)
         val first = firstArtist(artist)
         val queries = listOf(
@@ -56,18 +58,27 @@ object Lrclib {
             listOf("track_name" to clean, "artist_name" to first),
             listOf("q" to "$clean $first"),
         ).distinct()
-        for (q in queries) {
-            val url = "https://lrclib.net/api/search".toHttpUrl().newBuilder().apply { q.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
-            val hits = get(url.toString()).arr
-            val best = hits.mapNotNull { h ->
-                val off = duration?.let { d -> h.at("duration")?.jsonPrimitive?.floatOrNull?.let { abs(it - d) } } ?: 0f
-                if (off > 10f) null else toLyrics(h)?.let { off to it }
-            }.sortedWith(compareBy({ it.second.synced.isEmpty() }, { it.first })).firstOrNull()?.second
-            if (best != null && best.synced.isNotEmpty()) return best
-            if (fallback == null) fallback = best
+        val jobs = listOf(async { toLyrics(get(exact)) }) + queries.map { q ->
+            async {
+                val url = "https://lrclib.net/api/search".toHttpUrl().newBuilder().apply { q.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
+                get(url.toString()).arr.mapNotNull { h ->
+                    val off = duration?.let { d -> h.at("duration")?.jsonPrimitive?.floatOrNull?.let { abs(it - d) } } ?: 0f
+                    if (off > 10f) null else toLyrics(h)?.let { off to it }
+                }.sortedWith(compareBy({ it.second.synced.isEmpty() }, { it.first })).firstOrNull()?.second
+            }
         }
-        fallback
-    }.getOrNull()
+        // In order of preference: waiting on a query only while the better ones had nothing synced.
+        val answers = mutableListOf<Lyrics?>()
+        for (job in jobs) {
+            val l = runCatching { job.await() }.getOrNull()
+            if (l != null && l.synced.isNotEmpty()) {
+                jobs.forEach { it.cancel() }
+                return@coroutineScope l
+            }
+            answers += l
+        }
+        answers.firstOrNull { it != null }
+    } }.getOrNull()
 
     /** "Song (feat. X) [Live]" -> "Song" */
     fun cleanTitle(title: String): String =

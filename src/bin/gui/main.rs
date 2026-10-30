@@ -1203,16 +1203,7 @@ impl Gui {
             {
                 let t = track.clone();
                 let api = api.clone();
-                async move {
-                    let dur = parse_duration(&t.duration);
-                    match lyrics::lrclib(t.title, t.artist, t.album, dur).await {
-                        Ok(Some(l)) => Some(l),
-                        _ => match api {
-                            Some(api) => api.lyrics(t.video_id).await.ok().flatten(),
-                            None => None,
-                        },
-                    }
-                }
+                lyrics::for_track(api, t)
             },
             {
                 let vid = vid.clone();
@@ -1248,13 +1239,14 @@ impl Gui {
         Task::perform(api.radio(vid), |r| Message::Radio(s(r)))
     }
 
+    /// The next song (and its lyrics) download while this one plays.
     fn prefetch_next(&self) -> Task<Message> {
-        match self.current.and_then(|i| self.queue.get(i + 1)) {
-            Some(t) if stream::cached(&t.video_id).is_none() => {
-                Task::perform(stream::fetch(t.video_id.clone()), |_| Message::Ignore)
-            }
-            _ => Task::none(),
+        let Some(t) = self.current.and_then(|i| self.queue.get(i + 1)) else { return Task::none() };
+        let words = Task::perform(lyrics::prefetch(self.api.clone(), t.clone()), |_| Message::Ignore);
+        if stream::cached(&t.video_id).is_some() {
+            return words;
         }
+        Task::batch([words, Task::perform(stream::fetch(t.video_id.clone()), |_| Message::Ignore)])
     }
 
     fn add_to(&mut self, p: Playlist, video_id: String) -> Task<Message> {

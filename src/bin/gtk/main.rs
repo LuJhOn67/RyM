@@ -24,16 +24,29 @@ use rymplayer::{cookie_path, feed, fmt_time, login, page_cache, parse_duration, 
 
 const APP_ID: &str = "com.rymplayer.Gtk";
 /// Cover sizes requested from Google (pixels; drawn at about half for sharp HiDPI).
-const ROW_PX: u32 = 96;
-const CARD_PX: u32 = 240;
-const ART_PX: u32 = 480;
+const ROW_PX: u32 = 104;
+const CARD_PX: u32 = 160;
+const ART_PX: u32 = 300;
+
+/// Hybrid laptops (a built-in GPU and a fast one): asks the NVIDIA and AMD drivers to run this
+/// program on the fast graphics card. The drivers read these from the .exe's exports
+/// (build.rs exports them).
+#[cfg(windows)]
+#[allow(non_upper_case_globals)]
+#[unsafe(no_mangle)]
+#[used]
+pub static NvOptimusEnablement: u32 = 1;
+#[cfg(windows)]
+#[allow(non_upper_case_globals)]
+#[unsafe(no_mangle)]
+#[used]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
 
 // ---------------------------------------------------------------- themes
 
 /// The iced app's palettes, as CSS colors (same order, so `gui_theme` means the same theme).
 struct Theme {
     name: &'static str,
-    light: bool,
     bg: &'static str,
     surface: &'static str,
     bar: &'static str,
@@ -52,7 +65,6 @@ struct Theme {
 const fn light(name: &'static str, accent: &'static str, bg: &'static str, selected: &'static str) -> Theme {
     Theme {
         name,
-        light: true,
         bg,
         surface: "#ffffff",
         bar: "#ffffff",
@@ -75,7 +87,6 @@ const THEMES: [Theme; 6] = [
     light("Sakura", "#de5e8c", "#faf0f4", "rgba(222,94,140,0.12)"),
     Theme {
         name: "Midnight",
-        light: false,
         bg: "#0e1219",
         surface: "#141a23",
         bar: "#11161e",
@@ -92,7 +103,6 @@ const THEMES: [Theme; 6] = [
     },
     Theme {
         name: "Red night",
-        light: false,
         bg: "#030303",
         surface: "#0f0e0d",
         bar: "#212121",
@@ -109,7 +119,6 @@ const THEMES: [Theme; 6] = [
     },
     Theme {
         name: "Green night",
-        light: false,
         bg: "#000000",
         surface: "#121212",
         bar: "#000000",
@@ -171,7 +180,7 @@ popover button { background: transparent; border: none; box-shadow: none; color:
 popover button:hover { background: @hover@; }
 scale trough { background: @divider@; min-height: 4px; border-radius: 3px; }
 scale highlight { background: @accent@; border-radius: 3px; }
-scale slider { background: @text@; min-width: 12px; min-height: 12px; border: none; box-shadow: none; }
+scale slider { background: @text@; min-width: 12px; min-height: 12px; margin: -4px; border: none; box-shadow: none; }
 dropdown button { background: @input@; color: @text@; border: none; box-shadow: none; border-radius: 8px; }
 scrollbar slider { background: @dim@; border-radius: 8px; min-width: 6px; }
 "#;
@@ -196,9 +205,6 @@ fn css(theme: usize) -> String {
 
 fn apply_theme(provider: &CssProvider, theme: usize) {
     provider.load_from_string(&css(theme));
-    if let Some(s) = gtk::Settings::default() {
-        s.set_gtk_application_prefer_dark_theme(!THEMES[theme % THEMES.len()].light);
-    }
 }
 
 // ---------------------------------------------------------------- state
@@ -228,7 +234,8 @@ enum Ev {
     Tracks(u64, anyhow::Result<Vec<Track>>),
     Playlists(anyhow::Result<Vec<Playlist>>),
     Liked(anyhow::Result<Vec<Track>>),
-    Cover(String, Option<Vec<u8>>),
+    /// A cover's pixels (width, height, RGBA), decoded off the window's thread.
+    Cover(String, Option<(u32, u32, Vec<u8>)>),
     /// The song to play: from the cache, or still arriving (it plays while it downloads).
     Fetched(u64, anyhow::Result<stream::Playable>),
     /// The song's direct link for VLC.
@@ -301,18 +308,51 @@ struct Ui {
     /// Song rows on screen, by song, to mark the playing one.
     rows: Vec<(String, glib::WeakRef<Button>)>,
     toast_id: u64,
+    /// What the player bar shows now, so the ticker only changes what changed.
+    shown_playing: Option<bool>,
+    shown_len: f32,
+    shown_pos: Option<u32>,
+    shown_slider: f32,
+    /// When the playing song was asked for (for the log).
+    play_asked: Instant,
 }
 
 type Shared = Rc<RefCell<Ui>>;
 /// Covers a page wants: the sized URL and the picture to put it in.
-type Wants = Vec<(String, gtk::Picture)>;
+type Wants = Vec<(String, u32, gtk::Picture)>;
+
+/// A cover cut to a centered square and scaled to `px`, as RGBA pixels. Runs off the main thread,
+/// so decoding never holds up the window.
+fn decode_cover(bytes: &[u8], px: u32) -> Option<(u32, u32, Vec<u8>)> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let side = img.width().min(img.height());
+    let square = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side);
+    let sized = if side > px { square.resize_exact(px, px, image::imageops::FilterType::Triangle) } else { square };
+    let rgba = sized.to_rgba8();
+    Some((rgba.width(), rgba.height(), rgba.into_raw()))
+}
+
+/// Things that took too long on the window's thread, and which renderer GTK picked:
+/// `rym-gtk.log` in the data folder, for finding stutters without screenshots.
+fn log(line: &str) {
+    use std::io::Write;
+    let path = rymplayer::data_dir().join("rym-gtk.log");
+    // Kept small: started over past 200 KB.
+    let fresh = std::fs::metadata(&path).map(|m| m.len() > 200_000).unwrap_or(false);
+    let file = std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&path);
+    if let Ok(mut f) = file {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "{secs} {line}");
+    }
+}
 
 fn main() {
     configure_gtk_runtime();
     if std::env::args().any(|arg| arg == "--login") {
         login::run();
     }
-    let app = Application::builder().application_id(APP_ID).build();
+    // Each start is its own window (like the other apps), not a second window of the first.
+    let app = Application::builder().application_id(APP_ID).flags(gtk::gio::ApplicationFlags::NON_UNIQUE).build();
     app.connect_activate(build);
     app.run();
 }
@@ -320,6 +360,22 @@ fn main() {
 /// Windows: a portable GTK runtime beside the program (its DLLs next to the .exe, its data in
 /// `share` and `lib`) instead of a system install.
 fn configure_gtk_runtime() {
+    // Draw on the graphics card (OpenGL) unless the user picked a renderer themselves.
+    // GTK on Windows draws with OpenGL only through DirectComposition, which it turns on when
+    // asked (GDK_DEBUG=dcomp); without it, it falls back to drawing on the processor.
+    #[cfg(windows)]
+    {
+        let debug = std::env::var("GDK_DEBUG").unwrap_or_default();
+        // SAFETY: this runs before GTK or Tokio creates any threads.
+        unsafe {
+            if !debug.split(',').any(|f| f == "dcomp") {
+                std::env::set_var("GDK_DEBUG", if debug.is_empty() { "dcomp".to_string() } else { format!("{debug},dcomp") });
+            }
+            if std::env::var_os("GSK_RENDERER").is_none() {
+                std::env::set_var("GSK_RENDERER", "gl");
+            }
+        }
+    }
     #[cfg(windows)]
     if let Some(root) = std::env::current_exe().ok().and_then(|path| path.parent().map(std::path::Path::to_path_buf))
         && root.join("share").join("glib-2.0").is_dir()
@@ -392,7 +448,7 @@ fn cover(state: &Ui, url: Option<&String>, px: u32, size: i32, class: &str, want
         let url = api::thumb_sized(url, px);
         match state.covers.get(&url) {
             Some(t) => pic.set_paintable(Some(t)),
-            None => wants.push((url, pic.clone())),
+            None => wants.push((url, px, pic.clone())),
         }
     }
     pic
@@ -427,18 +483,19 @@ fn covers_limit() -> &'static tokio::sync::Semaphore {
 
 fn want_covers(ui: &Shared, wants: Wants) {
     let mut s = ui.borrow_mut();
-    for (url, pic) in wants {
+    for (url, px, pic) in wants {
         s.waiting.entry(url.clone()).or_default().push(pic.downgrade());
         if s.requested.insert(url.clone()) {
             spawn(&s, async move {
                 // A few at a time over one connection pool, so covers don't hold up a song.
-                let bytes = async {
+                let pixels = async {
                     let _turn = covers_limit().acquire().await.ok()?;
                     let r = covers_http().get(&url).send().await.ok()?.error_for_status().ok()?;
-                    Some(r.bytes().await.ok()?.to_vec())
+                    let bytes = r.bytes().await.ok()?;
+                    tokio::task::spawn_blocking(move || decode_cover(&bytes, px)).await.ok().flatten()
                 }
                 .await;
-                Ev::Cover(url, bytes)
+                Ev::Cover(url, pixels)
             });
         }
     }
@@ -565,6 +622,7 @@ fn build(app: &Application) {
     lyrics_scroll.add_css_class("lyrics");
     let lyrics_panel = gtk::Revealer::new();
     lyrics_panel.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
+    lyrics_panel.set_reveal_child(true);
     lyrics_panel.set_child(Some(&lyrics_scroll));
 
     let middle = gtk::Box::new(Orientation::Horizontal, 0);
@@ -615,7 +673,7 @@ fn build(app: &Application) {
     center.append(&controls);
     center.append(&line);
 
-    let lyrics_toggle = icon_button("format-justify-left-symbolic", "Lyrics", &["dim"]);
+    let lyrics_toggle = icon_button("format-justify-left-symbolic", "Lyrics", &[]);
     let vol_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.set_draw_value(false);
@@ -640,7 +698,13 @@ fn build(app: &Application) {
     root.append(&bar);
     window.set_child(Some(&root));
 
-    let audio = Audio::new().ok();
+    let audio = match Audio::new() {
+        Ok(a) => Some(a),
+        Err(e) => {
+            log(&format!("no audio device: {e}"));
+            None
+        }
+    };
     if let Some(a) = &audio {
         a.set_volume(0.8);
     }
@@ -697,6 +761,11 @@ fn build(app: &Application) {
         hearts: Vec::new(),
         rows: Vec::new(),
         toast_id: 0,
+        shown_playing: None,
+        shown_len: 0.0,
+        shown_pos: None,
+        shown_slider: -1.0,
+        play_asked: Instant::now(),
     }));
     if ui.borrow().audio.is_none() {
         toast(&ui, "No audio device found");
@@ -795,9 +864,22 @@ fn build(app: &Application) {
 
     let poll = ui.clone();
     glib::timeout_add_local(Duration::from_millis(80), move || {
+        let started = Instant::now();
         poll_events(&poll);
+        let took = started.elapsed();
+        if took > Duration::from_millis(40) {
+            log(&format!("slow turn: {} ms (page {})", took.as_millis(), page_name(&poll.borrow().page)));
+        }
         glib::ControlFlow::Continue
     });
+    {
+        // Which renderer GTK picked (GL on the graphics card, or cairo on the processor).
+        let window = window.clone();
+        glib::timeout_add_local_once(Duration::from_secs(2), move || {
+            let renderer = window.native().and_then(|n| n.renderer()).map(|r| r.type_().name().to_string()).unwrap_or_default();
+            log(&format!("started: renderer {renderer}, GSK_RENDERER={:?}", std::env::var("GSK_RENDERER").ok()));
+        });
+    }
 
     // Start: the last home feed at once, then sign in and fetch a fresh one.
     match std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
@@ -896,7 +978,27 @@ fn refresh_home(ui: &Shared) {
 
 // ---------------------------------------------------------------- pages
 
+fn page_name(p: &Page) -> &'static str {
+    match p {
+        Page::Home => "home",
+        Page::Liked => "liked",
+        Page::Library => "library",
+        Page::History => "history",
+        Page::Settings => "settings",
+        Page::Songs(_) => "songs",
+    }
+}
+
 fn render(ui: &Shared) {
+    let started = Instant::now();
+    render_page(ui);
+    let took = started.elapsed();
+    if took > Duration::from_millis(30) {
+        log(&format!("render {}: {} ms", page_name(&ui.borrow().page), took.as_millis()));
+    }
+}
+
+fn render_page(ui: &Shared) {
     let mut wants = Wants::new();
     {
         let mut s = ui.borrow_mut();
@@ -1519,6 +1621,10 @@ fn play_at(ui: &Shared, i: usize) {
         s.w.bar_title.set_text(&track.title);
         s.w.bar_artist.set_text(&track.artist);
         s.w.play.set_icon_name("content-loading-symbolic");
+        s.shown_playing = None;
+        s.shown_len = 0.0;
+        s.shown_pos = None;
+        s.shown_slider = -1.0;
         s.w.progress.set_value(0.0);
         s.w.pos.set_text("0:00");
         s.w.len.set_text(if track.duration.is_empty() { "0:00" } else { &track.duration });
@@ -1528,8 +1634,8 @@ fn play_at(ui: &Shared, i: usize) {
             Some(p) => s.w.bar_cover.set_paintable(Some(&p)),
             None => {
                 s.w.bar_cover.set_paintable(gdk::Paintable::NONE);
-                if let Some((url, _)) = wants.pop() {
-                    wants.push((url, s.w.bar_cover.clone()));
+                if let Some((url, px, _)) = wants.pop() {
+                    wants.push((url, px, s.w.bar_cover.clone()));
                 }
             }
         }
@@ -1553,35 +1659,41 @@ fn play_at(ui: &Shared, i: usize) {
     want_covers(ui, wants);
     refresh_hearts(ui);
 
+    log(&format!("play {} ({}){}", track.title, track.video_id, if in_vlc { " in VLC" } else { "" }));
+    ui.borrow_mut().play_asked = Instant::now();
     let vid = track.video_id.clone();
     if in_vlc {
         post(ui, async move { Ev::InVlc(id, stream::link(&vid).await) });
     } else {
         post(ui, async move { Ev::Fetched(id, stream::open(vid).await) });
     }
+    if let Some(api) = api.clone() {
+        // Tells YouTube Music it was played (history, recommendations); nothing waits for it.
+        let vid = track.video_id.clone();
+        post(ui, async move {
+            let _ = api.report_play(vid).await;
+            Ev::Done
+        });
+    }
     post(ui, async move {
-        let duration = parse_duration(&track.duration);
-        let found = match rymplayer::lyrics::lrclib(track.title, track.artist, track.album, duration).await {
-            Ok(Some(l)) => Some(l),
-            _ => match &api {
-                Some(api) => api.clone().lyrics(track.video_id.clone()).await.ok().flatten(),
-                None => None,
-            },
-        };
-        if let Some(api) = api {
-            let _ = api.report_play(track.video_id.clone()).await;
-        }
-        Ev::Lyrics(track.video_id, found)
+        let vid = track.video_id.clone();
+        Ev::Lyrics(vid, rymplayer::lyrics::for_track(api, track).await)
     });
 }
 
-/// The next song downloads while this one plays.
+/// The next song (and its lyrics) download while this one plays.
 fn prefetch_next(ui: &Shared) {
-    let next = {
+    let (next, api) = {
         let s = ui.borrow();
-        s.current.and_then(|i| s.queue.get(i + 1)).map(|t| t.video_id.clone())
+        (s.current.and_then(|i| s.queue.get(i + 1)).cloned(), s.api.clone())
     };
-    if let Some(id) = next.filter(|id| stream::cached(id).is_none()) {
+    if let Some(t) = next.clone() {
+        post(ui, async move {
+            rymplayer::lyrics::prefetch(api, t).await;
+            Ev::Done
+        });
+    }
+    if let Some(id) = next.map(|t| t.video_id).filter(|id| stream::cached(id).is_none()) {
         post(ui, async move {
             let _ = stream::fetch(id).await;
             Ev::Done
@@ -1698,12 +1810,28 @@ fn tick(ui: &Shared) {
     if s.loading {
         return;
     }
-    s.w.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
+    // Widgets are touched only when what they show changed: each change makes GTK lay out again.
+    if s.shown_playing != Some(playing) {
+        s.shown_playing = Some(playing);
+        s.w.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
+    }
     if loaded && dur > 0.0 {
-        s.w.progress.set_range(0.0, dur as f64);
-        s.w.progress.set_value(pos.min(dur) as f64);
-        s.w.pos.set_text(&fmt_time(pos));
-        s.w.len.set_text(&fmt_time(dur));
+        if s.shown_len != dur {
+            s.shown_len = dur;
+            s.w.progress.set_range(0.0, dur as f64);
+            s.w.len.set_text(&fmt_time(dur));
+        }
+        // The slider moves only when it would move by a whole pixel.
+        let px_per_sec = s.w.progress.width().max(1) as f32 / dur;
+        if (pos - s.shown_slider).abs() * px_per_sec >= 1.0 {
+            s.shown_slider = pos;
+            s.w.progress.set_value(pos.min(dur) as f64);
+        }
+        let sec = pos as u32;
+        if s.shown_pos != Some(sec) {
+            s.shown_pos = Some(sec);
+            s.w.pos.set_text(&fmt_time(pos));
+        }
     }
     let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, pos));
     if line != s.lyric_line {
@@ -1855,8 +1983,11 @@ fn poll_events(ui: &Shared) {
             Ev::Playlists(Err(e)) => toast(ui, &format!("Playlists: {e}")),
             Ev::Liked(Ok(t)) => sync_liked(ui, t),
             Ev::Liked(Err(_)) => {}
-            Ev::Cover(url, bytes) => {
-                let texture = bytes.and_then(|b| gdk::Texture::from_bytes(&glib::Bytes::from_owned(b)).ok());
+            Ev::Cover(url, pixels) => {
+                let texture = pixels.map(|(w, h, data)| -> gdk::Texture {
+                    gdk::MemoryTexture::new(w as i32, h as i32, gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(data), w as usize * 4)
+                        .upcast()
+                });
                 let mut s = ui.borrow_mut();
                 let waiting = s.waiting.remove(&url).unwrap_or_default();
                 match texture {
@@ -1885,7 +2016,12 @@ fn poll_events(ui: &Shared) {
                     (Ok(_), None) => Err("no audio device".into()),
                     (Err(e), _) => Err(e.to_string()),
                 };
+                let ms = s.play_asked.elapsed().as_millis();
                 drop(s);
+                match &started {
+                    Ok(()) => log(&format!("  playing after {ms} ms")),
+                    Err(e) => log(&format!("  can't play after {ms} ms: {e}")),
+                }
                 match started {
                     Ok(()) => prefetch_next(ui),
                     Err(e) => {
@@ -1919,6 +2055,7 @@ fn poll_events(ui: &Shared) {
                 toast(ui, &msg);
             }
             Ev::Lyrics(vid, found) => {
+                log(&format!("  lyrics for {vid}: {}", found.as_ref().map_or("none".to_string(), |l| format!("{} synced lines, from {}", l.synced.len(), l.source))));
                 if now_playing(ui).is_some_and(|t| t.video_id == vid) {
                     show_lyrics(ui, found);
                 }
