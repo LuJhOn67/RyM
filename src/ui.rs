@@ -333,34 +333,40 @@ fn draw_tracks(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     f.render_stateful_widget(table, area, &mut app.track_state);
 }
 
+/// Lyrics on the cover's color: lines to come dark, the sung line bright white and bold, sung
+/// lines soft white; a blank line between lines so each stands apart.
 fn draw_lyrics(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let rgb = |(r, g, b): (u8, u8, u8)| ratatui::style::Color::Rgb(r, g, b);
+    let bg = app.lyrics_bg;
+    let [sung, now, next] = rymplayer::colors::lyric_colors(bg).map(rgb);
     let inner_h = area.height.saturating_sub(2);
     let (lines, scroll): (Vec<Line>, u16) = match &app.lyrics {
         Some(l) if !l.synced.is_empty() => {
             let cur = lyrics::current_line(&l.synced, app.pos);
-            let lines = l
-                .synced
-                .iter()
-                .enumerate()
-                .map(|(i, (_, text))| {
-                    let text = if text.is_empty() { "♪".to_string() } else { text.clone() };
-                    match cur {
-                        Some(c) if c == i => Line::from(text.bold().fg(th.text)),
-                        Some(c) if i < c => Line::from(text.fg(th.faint)),
-                        _ => Line::from(text.fg(th.dim)),
-                    }
-                })
-                .collect();
+            let mut lines = Vec::new();
+            for (i, (_, text)) in l.synced.iter().enumerate() {
+                let text = if text.is_empty() { "♪".to_string() } else { text.clone() };
+                lines.push(match cur {
+                    Some(c) if c == i => Line::from(text.bold().fg(now)),
+                    Some(c) if i < c => Line::from(text.bold().fg(sung)),
+                    _ => Line::from(text.bold().fg(next)),
+                });
+                lines.push(Line::default());
+            }
             // Keep the sung line about a third of the way down.
-            let scroll = cur.unwrap_or(0).saturating_sub(inner_h as usize / 3) as u16;
+            let scroll = (cur.unwrap_or(0) * 2).saturating_sub(inner_h as usize / 3) as u16;
             (lines, scroll)
         }
-        Some(l) => (l.plain.iter().map(|t| Line::from(t.clone().fg(th.text))).collect(), 0),
-        None => (vec![Line::from(app.lyrics_status.clone().fg(th.dim))], 0),
+        Some(l) => {
+            let mut lines = vec![Line::from("These lyrics aren't synced to the song".italic().fg(sung)), Line::default()];
+            lines.extend(l.plain.iter().map(|t| Line::from(t.clone().bold().fg(now))));
+            (lines, 0)
+        }
+        None => (vec![Line::from(app.lyrics_status.clone().fg(sung))], 0),
     };
-    let mut block = pane(th, "Lyrics", false);
+    let mut block = pane(th, "Lyrics", false).style(Style::new().bg(rgb(bg)));
     if let Some(l) = &app.lyrics {
-        block = block.title_bottom(Line::from(format!(" {} ", l.source).fg(th.faint)));
+        block = block.title_bottom(Line::from(format!(" Lyrics from {} ", l.source).fg(sung)));
     }
     let align = if app.config.lyrics_centered { Alignment::Center } else { Alignment::Left };
     f.render_widget(Paragraph::new(lines).block(block).alignment(align).scroll((scroll, 0)), area);
@@ -426,6 +432,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("d", "download"),
         ("/", "search"),
         ("h", "history"),
+        ("F5/u", "refresh"),
         ("a", "add to playlist"),
         ("tab", "switch"),
         (",", "settings"),
@@ -524,7 +531,7 @@ mod tests {
         a.track_state.select(Some(1));
         a.queue = a.tracks.clone();
         a.current = Some(1);
-        a.liked.insert("v2".into());
+        a.liked.set("v2", true);
         a.lyrics = Some(lyrics::Lyrics {
             synced: lyrics::parse_lrc("[00:00.00]first line\n[00:05.00]second line\n[00:10.00]third line"),
             plain: vec![],

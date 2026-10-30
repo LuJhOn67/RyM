@@ -1,8 +1,7 @@
 mod ui;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -10,7 +9,8 @@ use crossterm::event::{
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use rymplayer::{api, audio, config, cookie_path, data_dir, fmt_time, login, lyrics, parse_duration, stream};
+use rymplayer::likes::{Likes, SYNC_EVERY};
+use rymplayer::{api, audio, config, cookie_path, data_dir, feed, fmt_time, login, lyrics, parse_duration, stream};
 
 use api::{Api, Link, Playlist, Track};
 use audio::Audio;
@@ -89,7 +89,11 @@ enum Event {
     /// The song's direct link for VLC.
     InVlc(String, Result<(String, Vec<(String, String)>), String>),
     Lyrics(String, Result<Option<Lyrics>, String>),
+    /// The lyrics pane's background, from the song's cover.
+    LyricsBg(String, (u8, u8, u8)),
     Rated(String, bool, Result<(), String>),
+    /// The account's liked songs, re-read now and then so likes made on the phone show here.
+    Liked(Result<Vec<Track>, String>),
     /// A playlist was made; the song to put in it, if it was made from the picker.
     Created(Result<Playlist, String>, Option<String>),
     /// A song was added to the named playlist.
@@ -132,7 +136,11 @@ struct App {
 
     lyrics: Option<Lyrics>,
     lyrics_status: String,
-    liked: HashSet<String>,
+    /// The lyrics pane's color (the playing song's cover).
+    lyrics_bg: (u8, u8, u8),
+    liked: Likes,
+    /// When the liked songs were last read from the account.
+    likes_synced: Instant,
     /// Start playing this page as soon as it loads (radio started with `r`).
     play_when_loaded: Option<Page>,
     radio_pending: bool,
@@ -176,7 +184,9 @@ impl App {
             volume: 0.8,
             lyrics: None,
             lyrics_status: String::new(),
-            liked: HashSet::new(),
+            lyrics_bg: rymplayer::colors::PLAIN,
+            liked: Likes::default(),
+            likes_synced: Instant::now(),
             play_when_loaded: None,
             radio_pending: false,
             areas: ui::Areas::default(),
@@ -274,6 +284,7 @@ impl App {
                     self.spawn(async move { Event::Playlists(s(api.library_playlists().await)) });
                 }
                 self.rebuild_nav(Vec::new());
+                self.likes_synced = Instant::now();
                 self.open(Page::ForYou, "For you".into());
             }
             Event::Radio(result) => {
@@ -318,10 +329,13 @@ impl App {
                             rymplayer::page_cache::save_home(&t);
                         }
                         if page == Page::Playlist(api::LIKED_ID.into()) {
-                            self.liked.extend(t.iter().map(|t| t.video_id.clone()));
+                            self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                            self.likes_synced = Instant::now();
                         }
                         self.status.clear();
                         self.track_state.select((!t.is_empty()).then_some(0));
+                        // The first songs' links are looked up now, so a tap starts at once.
+                        tokio::spawn(stream::look_ahead(t.iter().filter(|t| t.link.is_none()).map(|t| t.video_id.clone()).collect()));
                         self.tracks = t;
                         if self.play_when_loaded.take() == Some(page) {
                             self.play_from_list(0);
@@ -379,6 +393,11 @@ impl App {
                     }
                 }
             }
+            Event::LyricsBg(vid, color) => {
+                if self.now_playing().map(|t| &t.video_id) == Some(&vid) {
+                    self.lyrics_bg = color;
+                }
+            }
             Event::Lyrics(vid, result) => {
                 if self.now_playing().map(|t| &t.video_id) != Some(&vid) {
                     return;
@@ -394,13 +413,18 @@ impl App {
             }
             Event::Rated(vid, like, Err(e)) => {
                 // Roll back the optimistic toggle.
-                if like {
-                    self.liked.remove(&vid);
-                } else {
-                    self.liked.insert(vid);
-                }
+                self.liked.set(&vid, !like);
                 self.status = format!("Like failed: {e}");
             }
+            Event::Liked(Ok(t)) => {
+                self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                if self.page == Page::Playlist(api::LIKED_ID.into()) && !self.busy {
+                    self.tracks = t;
+                    let last = self.tracks.len().saturating_sub(1);
+                    self.track_state.select((!self.tracks.is_empty()).then(|| self.track_state.selected().unwrap_or(0).min(last)));
+                }
+            }
+            Event::Liked(Err(_)) => {}
             Event::Rated(_, _, Ok(())) => {}
             Event::Created(Ok(p), song) => {
                 self.status = format!("Created \"{}\"", p.title);
@@ -506,6 +530,11 @@ impl App {
             KeyCode::Char('g') if !self.busy => self.google_login(),
             KeyCode::Char('r') => self.start_radio(),
             KeyCode::Char('d') => self.download(),
+            // Refresh: a new home feed (new songs on top) and the liked songs again.
+            KeyCode::F(5) | KeyCode::Char('u') => {
+                self.open(Page::ForYou, "For you".into());
+                self.focus = Focus::Tracks;
+            }
             // Like YouTube: 0-9 jump to 0%..90% of the song.
             KeyCode::Char(c @ '0'..='9') => {
                 let tenth = c.to_digit(10).unwrap_or(0) as f32 / 10.0;
@@ -618,6 +647,9 @@ impl App {
             Focus::Tracks => {
                 let Some(i) = self.track_state.selected() else { return };
                 let Some(t) = self.tracks.get(i).cloned() else { return };
+                if self.page == Page::ForYou {
+                    feed::opened(&t);
+                }
                 match t.link {
                     Some(Link::Playlist(id)) => self.open(Page::Playlist(id), t.title),
                     Some(Link::Album(id)) => self.open(Page::Album(id), t.title),
@@ -648,9 +680,15 @@ impl App {
             self.tracks.clear();
             self.track_state.select(None);
         }
+        let tx = self.tx.clone();
         self.spawn(async move {
             let r = match page.clone() {
-                Page::ForYou => api.home().await,
+                Page::ForYou => feed::refresh(api).await.map(|r| {
+                    if let Some(liked) = r.liked {
+                        let _ = tx.send(Event::Liked(Ok(liked)));
+                    }
+                    r.home
+                }),
                 Page::History => api.history().await,
                 Page::Playlist(id) => api.playlist_tracks(id).await,
                 Page::Album(id) => api.album_tracks(id).await,
@@ -903,19 +941,11 @@ impl App {
             self.spawn(async move { Event::Fetched(v.clone(), s(stream::open(v).await)) });
         }
 
+        let (v, thumb) = (vid.clone(), track.thumb.clone());
+        self.spawn(async move { Event::LyricsBg(v.clone(), rymplayer::colors::for_cover(thumb).await) });
         let v = vid.clone();
-        let dur = parse_duration(&track.duration);
         let api = self.api.clone();
-        self.spawn(async move {
-            let synced = lyrics::lrclib(track.title, track.artist, track.album, dur).await;
-            let found = match (synced, api) {
-                (Ok(Some(l)), _) => Some(l),
-                // LRCLIB has nothing (or is down): YouTube Music's own, unsynced lyrics.
-                (_, Some(api)) => api.lyrics(v.clone()).await.ok().flatten(),
-                (_, None) => None,
-            };
-            Event::Lyrics(v, Ok(found))
-        });
+        self.spawn(async move { Event::Lyrics(v, Ok(lyrics::for_track(api, track).await)) });
 
         if let Some(api) = self.api.clone() {
             // Fire and forget: keeps YouTube Music history in sync.
@@ -923,8 +953,12 @@ impl App {
         }
     }
 
+    /// The next song (and its lyrics) download while this one plays.
     fn prefetch_next(&self) {
         let next = self.current.and_then(|i| self.queue.get(i + 1));
+        if let Some(t) = next {
+            tokio::spawn(lyrics::prefetch(self.api.clone(), t.clone()));
+        }
         if let Some(t) = next
             && stream::cached(&t.video_id).is_none()
         {
@@ -977,18 +1011,30 @@ impl App {
     }
 
     fn toggle_like(&mut self) {
-        let (Some(t), Some(api)) = (self.now_playing(), self.api.clone()) else { return };
+        let (Some(t), Some(api)) = (self.now_playing().cloned(), self.api.clone()) else { return };
         let vid = t.video_id.clone();
         let like = !self.liked.contains(&vid);
-        if like {
-            self.liked.insert(vid.clone());
-        } else {
-            self.liked.remove(&vid);
+        self.liked.set(&vid, like);
+        // The Liked songs page follows at once.
+        if self.page == Page::Playlist(api::LIKED_ID.into()) {
+            if like {
+                if !self.tracks.iter().any(|x| x.video_id == vid) {
+                    self.tracks.insert(0, t.clone());
+                }
+            } else {
+                self.tracks.retain(|x| x.video_id != vid);
+            }
         }
         self.spawn(async move { Event::Rated(vid.clone(), like, s(api.rate(vid, like).await)) });
     }
 
     fn tick(&mut self) {
+        if self.logged_in() && self.likes_synced.elapsed() > SYNC_EVERY {
+            self.likes_synced = Instant::now();
+            if let Some(api) = self.api.clone() {
+                self.spawn(async move { Event::Liked(s(api.playlist_tracks(api::LIKED_ID.into()).await)) });
+            }
+        }
         let Some(a) = &mut self.audio else { return };
         self.pos = a.position();
         if self.loading || !a.finished() {

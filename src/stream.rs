@@ -4,9 +4,57 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
+
+/// A song's link, the headers its stream wants, its file type and length.
+type Found = (String, Vec<(String, String)>, String, Option<f32>);
+
+/// Links looked up before they're needed (the first songs of a page that just opened), so a tap
+/// starts the download at once instead of asking YouTube first. Links last hours; kept for one.
+const LINK_LIFE: Duration = Duration::from_secs(60 * 60);
+
+fn ahead() -> &'static Mutex<HashMap<String, (Found, Instant)>> {
+    static M: OnceLock<Mutex<HashMap<String, (Found, Instant)>>> = OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// A link looked up ahead for this song, if it's still fresh (taken: each is used once).
+fn take_ahead(video_id: &str) -> Option<Found> {
+    let mut m = ahead().lock().ok()?;
+    m.retain(|_, (_, at)| at.elapsed() < LINK_LIFE);
+    m.remove(video_id).map(|(f, _)| f)
+}
+
+/// Looks up the links of songs about to be tapped (the first few of a page), two at a time.
+/// Skipped with the yt-dlp source: each lookup is a whole yt-dlp run.
+pub async fn look_ahead(video_ids: Vec<String>) {
+    if SOURCE.load(Ordering::Relaxed) == 1 {
+        return;
+    }
+    static LIMIT: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    let limit = LIMIT.get_or_init(|| tokio::sync::Semaphore::new(2));
+    let wanted: Vec<String> = video_ids
+        .into_iter()
+        .filter(|id| !id.is_empty() && cached(id).is_none() && !ahead().lock().is_ok_and(|m| m.contains_key(id)))
+        .take(4)
+        .collect();
+    let mut jobs = tokio::task::JoinSet::new();
+    for id in wanted {
+        jobs.spawn(async move {
+            let Ok(_turn) = limit.acquire().await else { return };
+            if let Ok(found) = innertube_link(&id).await
+                && let Ok(mut m) = ahead().lock()
+            {
+                m.insert(id, (found, Instant::now()));
+            }
+        });
+    }
+    while jobs.join_next().await.is_some() {}
+}
 
 /// Connections a song downloads over at once, and the piece size in MB (0 = open: the song is
 /// split evenly over the connections). Set from the settings.
@@ -71,22 +119,27 @@ pub async fn open(video_id: String) -> Result<Playable> {
     }
     let dir = cache_dir();
     tokio::fs::create_dir_all(&dir).await?;
-    let start = |(url, headers, ext, secs): (String, Vec<(String, String)>, String, Option<f32>)| {
+    let start = |(url, headers, ext, secs): Found| {
         let save_to = dir.join(format!("{video_id}.{ext}"));
         if let Some(secs) = secs {
             let _ = std::fs::write(dir.join(format!("{video_id}.secs")), secs.to_string());
         }
         crate::arriving::Arriving::start(url, headers, ext, secs, save_to)
     };
+    // The link looked up ahead when there is one (a fresh lookup if it stopped working).
+    let quick = async {
+        if let Some(found) = take_ahead(&video_id)
+            && let Ok(a) = start(found).await
+        {
+            return Ok(a);
+        }
+        start(innertube_link(&video_id).await?).await
+    };
     let arriving = match SOURCE.load(Ordering::Relaxed) {
         1 => start(ytdlp_link(&video_id).await?).await?,
-        2 => start(innertube_link(&video_id).await?).await?,
+        2 => quick.await?,
         _ => {
-            let quick = match innertube_link(&video_id).await {
-                Ok(link) => start(link).await,
-                Err(e) => Err(e),
-            };
-            match quick {
+            match quick.await {
                 Ok(a) => a,
                 Err(e) => start(ytdlp_link(&video_id).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?).await?,
             }
@@ -96,7 +149,7 @@ pub async fn open(video_id: String) -> Result<Playable> {
 }
 
 /// The InnerTube link for a song with the header its stream wants, its file type and length.
-async fn innertube_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
+async fn innertube_link(video_id: &str) -> Result<Found> {
     let a = crate::innertube::audio(video_id).await?;
     Ok((a.url, vec![("User-Agent".to_string(), a.user_agent.to_string())], a.ext.to_string(), a.seconds))
 }
@@ -457,6 +510,29 @@ mod tests {
         let written = std::fs::read(&path).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(written == *data, "file matches ({} of {} bytes)", written.len(), data.len());
+    }
+
+    /// A link looked up ahead is used as is: the song opens without asking YouTube (local server only).
+    #[tokio::test]
+    async fn opens_with_a_link_looked_up_ahead() {
+        let data: std::sync::Arc<Vec<u8>> = std::sync::Arc::new((0..(1usize << 20)).map(|i| (i * 13 % 251) as u8).collect());
+        let url = serve(data.clone());
+        let id = format!("rym-ahead-test-{}", std::process::id());
+        ahead().lock().unwrap().insert(id.clone(), ((url, Vec::new(), "webm".into(), Some(1.0)), Instant::now()));
+        let opened = open(id.clone()).await.expect("opens from the link looked up ahead");
+        assert!(matches!(opened, Playable::Arriving(_)));
+        // Used once: gone from the looked-up links.
+        assert!(take_ahead(&id).is_none());
+        for _ in 0..100 {
+            if cached(&id).is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let file = cached(&id).expect("kept in the cache");
+        assert_eq!(std::fs::read(&file).unwrap().len(), data.len());
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(cache_dir().join(format!("{id}.secs")));
     }
 
 

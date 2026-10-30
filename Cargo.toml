@@ -18,12 +18,20 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 symphonia = { version = "0.6.1", default-features = false, features = ["mkv", "ogg", "isomp4", "aac", "opt-simd"] }
 symphonia-adapter-libopus = "0.3"
-tao = "0.37.2"
+# The Google sign-in window (feature "webview", on by default).
+tao = { version = "0.37.2", optional = true }
 tokio = { version = "1.54.1", features = ["full"] }
-wry = "0.57.1"
+wry = { version = "0.57.1", optional = true }
 # The YouTube Music API library (its crates.io name is ytmapi-rs).
 music_api = { package = "ytmapi-rs", version = "0.3.3" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# The GTK 4 window app (needs GTK 4 to build): `cargo build --release --features gtk-ui --bin RymPlayer-GTK`.
+gtk = { package = "gtk4", version = "0.11.5", optional = true, features = ["v4_12"] }
+
+[features]
+default = ["webview"]
+webview = ["dep:wry", "dep:tao"]
+gtk-ui = ["dep:gtk"]
 
 [profile.release]
 # Smallest files: optimize for size, whole-program LTO, no unwinding tables, no symbols.
@@ -42,8 +50,13 @@ name = "RyM"
 path = "src/main.rs"
 
 [[bin]]
-name = "RymPlayer-GUI"
+name = "RyM-Legacy-Player"
 path = "src/bin/gui/main.rs"
+
+[[bin]]
+name = "RymPlayer-GTK"
+path = "src/bin/gtk/main.rs"
+required-features = ["gtk-ui"]
 
 [build-dependencies]
 # Puts each program's icon inside its .exe (Windows).

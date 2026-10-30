@@ -16,6 +16,8 @@ pub const START_AFTER: usize = 128 << 10;
 /// The first request is small so sound starts sooner; later ones are bigger.
 const FIRST_RANGE: u64 = 256 << 10;
 const RANGE: u64 = 4 << 20;
+/// A link that sends nothing for this long is given up on (the caller tries another way).
+const FIRST_BYTES_WITHIN: Duration = Duration::from_secs(12);
 
 struct Shared {
     data: Mutex<Vec<u8>>,
@@ -77,8 +79,12 @@ impl Arriving {
                 }
             }
         });
-        // Wait for the start of the song (or the end, or a failure).
+        // Wait for the start of the song (or the end, or a failure), up to FIRST_BYTES_WITHIN.
+        let asked = std::time::Instant::now();
         loop {
+            if asked.elapsed() > FIRST_BYTES_WITHIN && !shared.done.load(Ordering::Acquire) {
+                return Err(anyhow!("no audio arrived in {} s", FIRST_BYTES_WITHIN.as_secs()));
+            }
             let have = shared.data.lock().unwrap().len();
             if have >= START_AFTER || shared.done.load(Ordering::Acquire) {
                 if have == 0 {
@@ -143,7 +149,14 @@ async fn fetch(url: &str, headers: &[(String, String)], shared: &Shared) -> Resu
 
 fn http() -> &'static reqwest::Client {
     static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    C.get_or_init(|| reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().expect("http client"))
+    // A download that stops sending for 20 s fails instead of waiting forever.
+    C.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(20))
+            .build()
+            .expect("http client")
+    })
 }
 
 /// Reads what has arrived; waits when it's ahead of the download.

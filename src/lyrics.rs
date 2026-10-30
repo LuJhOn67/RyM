@@ -1,9 +1,18 @@
 //! Lyrics: LRCLIB (synced when available), YouTube Music's own as a fallback.
+//!
+//! Fast on purpose: all LRCLIB queries and YouTube Music are asked at once (the best answer wins
+//! as soon as the better ones are in), answers are kept on disk so a song heard before shows its
+//! lyrics at once, and the apps fetch the next song's lyrics while the current one plays.
+
+use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default)]
+use crate::api::{Api, Track};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Lyrics {
     /// (start seconds, line). Empty when only plain lyrics exist.
     pub synced: Vec<(f32, String)>,
@@ -48,7 +57,7 @@ async fn get_json<T: serde::de::DeserializeOwned>(client: &reqwest::Client, url:
             return Ok(None);
         }
         if attempt == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            tokio::time::sleep(Duration::from_millis(400)).await;
         }
     }
     Ok(None)
@@ -77,8 +86,79 @@ fn first_artist(artist: &str) -> &str {
     artist[..cut].trim()
 }
 
+/// One client for every lookup: its connection to LRCLIB stays open between songs.
+fn client() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| reqwest::Client::builder().user_agent(UA).timeout(Duration::from_secs(10)).build().expect("http client"))
+}
+
+/// A song's lyrics: from the disk if found before, else LRCLIB and YouTube Music at once
+/// (LRCLIB's preferred: it has timing). `None` when neither has any.
+pub async fn for_track(api: Option<Api>, t: Track) -> Option<Lyrics> {
+    if let Some(saved) = cached(&t.video_id) {
+        return saved;
+    }
+    let duration = crate::parse_duration(&t.duration);
+    let ytm = {
+        let (api, vid) = (api.clone(), t.video_id.clone());
+        tokio::spawn(async move {
+            match api {
+                Some(api) => api.lyrics(vid).await.ok().flatten(),
+                None => None,
+            }
+        })
+    };
+    let found = match lrclib(t.title.clone(), t.artist.clone(), t.album.clone(), duration).await {
+        Ok(Some(l)) => {
+            ytm.abort();
+            Some(l)
+        }
+        Ok(None) => ytm.await.ok().flatten(),
+        // LRCLIB down: don't remember "no lyrics", it may have them later.
+        Err(_) => return ytm.await.ok().flatten(),
+    };
+    keep(&t.video_id, &found);
+    found
+}
+
+/// Fetches a song's lyrics into the disk cache (the next song, while this one plays).
+pub async fn prefetch(api: Option<Api>, t: Track) {
+    if cached(&t.video_id).is_none() {
+        let _ = for_track(api, t).await;
+    }
+}
+
+fn cache_path(video_id: &str) -> PathBuf {
+    crate::data_dir().join("lyrics").join(format!("{video_id}.json"))
+}
+
+/// `Some(Some)`: saved lyrics; `Some(None)`: looked up lately and there were none; `None`: not known.
+fn cached(video_id: &str) -> Option<Option<Lyrics>> {
+    let path = cache_path(video_id);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let saved: Option<Lyrics> = serde_json::from_str(&text).ok()?;
+    if saved.is_none() {
+        // "None" is asked again after a day: lyrics get added to LRCLIB all the time.
+        let age = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?.elapsed().ok()?;
+        if age > Duration::from_secs(24 * 60 * 60) {
+            return None;
+        }
+    }
+    Some(saved)
+}
+
+fn keep(video_id: &str, found: &Option<Lyrics>) {
+    let path = cache_path(video_id);
+    if let (Some(dir), Ok(json)) = (path.parent(), serde_json::to_string(found)) {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// LRCLIB: the exact match and three looser searches, all asked at once. Answers are taken in
+/// that order of preference, and the first synced one wins as soon as the better queries are in.
 pub async fn lrclib(title: String, artist: String, album: String, duration: Option<f32>) -> Result<Option<Lyrics>> {
-    let client = reqwest::Client::builder().user_agent(UA).build()?;
+    let client = client();
     let mut url = reqwest::Url::parse("https://lrclib.net/api/get")?;
     url.query_pairs_mut()
         .append_pair("track_name", &title)
@@ -89,16 +169,6 @@ pub async fn lrclib(title: String, artist: String, album: String, duration: Opti
     if let Some(d) = duration {
         url.query_pairs_mut().append_pair("duration", &format!("{}", d.round() as u32));
     }
-    let mut fallback = None;
-    if let Some(entry) = get_json::<LrcLibEntry>(&client, url).await? {
-        let l = entry.into_lyrics();
-        if l.is_usable() && !l.synced.is_empty() {
-            return Ok(Some(l));
-        }
-        fallback = l.is_usable().then_some(l);
-    }
-
-    // No good exact match: search with looser and looser queries, stop at the first synced hit.
     let (clean, first) = (clean_title(&title), first_artist(&artist).to_string());
     let mut queries = vec![
         vec![("track_name", title.clone()), ("artist_name", artist.clone())],
@@ -106,19 +176,45 @@ pub async fn lrclib(title: String, artist: String, album: String, duration: Opti
         vec![("q", format!("{clean} {first}"))],
     ];
     queries.dedup();
-    for q in queries {
+
+    let mut jobs = tokio::task::JoinSet::new();
+    jobs.spawn(async move {
+        let l = get_json::<LrcLibEntry>(client, url).await?.map(LrcLibEntry::into_lyrics).filter(Lyrics::is_usable);
+        Ok::<_, anyhow::Error>((0, l))
+    });
+    for (i, q) in queries.into_iter().enumerate() {
         let mut url = reqwest::Url::parse("https://lrclib.net/api/search")?;
         for (k, v) in &q {
             url.query_pairs_mut().append_pair(k, v);
         }
-        let Some(hits) = get_json::<Vec<LrcLibEntry>>(&client, url).await? else { continue };
-        match best_hit(hits, duration) {
-            Some(l) if !l.synced.is_empty() => return Ok(Some(l)),
-            Some(l) if fallback.is_none() => fallback = Some(l),
-            _ => {}
+        jobs.spawn(async move { Ok((i + 1, get_json::<Vec<LrcLibEntry>>(client, url).await?.and_then(|hits| best_hit(hits, duration)))) });
+    }
+    let total = jobs.len();
+    // answers[i]: None = still waiting, Some(x) = query i answered x.
+    let mut answers: Vec<Option<Option<Lyrics>>> = vec![None; total];
+    let mut failed = 0;
+    while let Some(done) = jobs.join_next().await {
+        match done {
+            Ok(Ok((i, l))) => answers[i] = Some(l),
+            _ => failed += 1,
+        }
+        // The best synced answer whose better-placed queries have all answered.
+        for a in &answers {
+            match a {
+                Some(Some(l)) if !l.synced.is_empty() => {
+                    jobs.abort_all();
+                    return Ok(Some(l.clone()));
+                }
+                Some(_) => continue,
+                None => break,
+            }
         }
     }
-    Ok(fallback)
+    if failed == total {
+        anyhow::bail!("LRCLIB didn't answer");
+    }
+    // No synced lyrics anywhere: the best plain ones.
+    Ok(answers.into_iter().flatten().flatten().next())
 }
 
 /// Prefers synced lyrics, then the closest duration (within 10 s).

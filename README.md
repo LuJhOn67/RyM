@@ -1,13 +1,15 @@
 # RymPlayer
 
-A light YouTube Music player written in Rust, in two flavors from one shared core:
+A light YouTube Music player written in Rust, from one shared core:
 
-- **RymPlayer-GUI**: a windowed app with light and dark themes (including YouTube Music and
-  Spotify looks), a background that takes a soft shade of the playing song's cover, animated
-  synced lyrics, a right-click song menu, and software rendering that keeps RAM low.
+- **RymPlayer-GTK**: the GTK 4 window app (Windows and Linux): icon rail, home shelves with
+  "New for you" songs on every refresh, song lists with covers, lyrics on the cover's color,
+  drawn on the graphics card.
+- **RyM-Legacy-Player**: the older window app (iced), with light and dark themes and a
+  background that takes a soft shade of the playing song's cover.
 - **RyM**: the same player in the terminal.
 
-An Android app (Kotlin + Jetpack Compose) is in `android/` and in early development.
+An Android app (Kotlin + Jetpack Compose) is in `android/`.
 
 - Your YouTube Music account: liked songs, library playlists, likes and listening history stay in sync
 - **For you**: your YouTube Music home feed, with its playlists, albums and mixes
@@ -29,7 +31,7 @@ Nothing else to install for playback: audio comes straight from YouTube's player
 
 ## Use
 
-Download `RymPlayer-GUI.exe` (windowed) or `RyM.exe` (terminal) from [Releases](../../releases) and run it. Press `g` to sign in with Google,
+Download the `RyM-GTK` folder (window app), `RyM-Legacy-Player.exe` (older window app) or `RyM.exe` (terminal) from [Releases](../../releases) and run it. Press `g` to sign in with Google,
 or `s` to browse without an account.
 
 | Key | Action |

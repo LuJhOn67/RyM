@@ -131,6 +131,8 @@ pub enum Message {
     Prev,
     Seek(f32),
     SeekDone,
+    /// A lyrics line was clicked: jump to where it's sung.
+    SeekLyric(f32),
     Volume(f32),
     Tick,
     Radio(Result<Vec<Track>, String>),
@@ -138,6 +140,13 @@ pub enum Message {
     Lyrics(String, Option<Lyrics>),
     Like(Track),
     Rated(String, bool, Result<(), String>),
+    /// A fresh home feed and the liked songs read on the way.
+    Refreshed(Result<(Vec<Track>, Option<Vec<Track>>), String>),
+    /// New home feed (new songs on top) and the liked songs again.
+    Refresh,
+    /// Time to re-read the liked songs (likes made on the phone show here).
+    SyncLikes,
+    Liked(Result<Vec<Track>, String>),
 
     Image(String, Option<Thumb>),
     ToggleNowPlaying,
@@ -182,6 +191,16 @@ pub enum Message {
     Dislike(Track),
     Disliked(String, bool, Result<(), String>),
     Ignore,
+}
+
+fn covers_http() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| reqwest::Client::builder().timeout(Duration::from_secs(20)).build().expect("http client"))
+}
+
+fn covers_limit() -> &'static tokio::sync::Semaphore {
+    static S: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    S.get_or_init(|| tokio::sync::Semaphore::new(6))
 }
 
 fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
@@ -268,7 +287,7 @@ pub struct Gui {
     pub tracks: Vec<Track>,
     pub search: String,
     pub playlists: Vec<Playlist>,
-    pub liked: HashSet<String>,
+    pub liked: rymplayer::likes::Likes,
 
     pub queue: Vec<Track>,
     pub current: Option<usize>,
@@ -345,7 +364,7 @@ impl Gui {
             tracks: Vec::new(),
             search: String::new(),
             playlists: Vec::new(),
-            liked: HashSet::new(),
+            liked: rymplayer::likes::Likes::default(),
             queue: Vec::new(),
             current: None,
             loading: false,
@@ -418,8 +437,8 @@ impl Gui {
 
     fn title(&self) -> String {
         match self.now_playing() {
-            Some(t) => format!("{} · {} — RymPlayer", t.title, t.artist),
-            None => "RymPlayer".into(),
+            Some(t) => format!("{} · {} — RyM Legacy Player", t.title, t.artist),
+            None => "RyM Legacy Player".into(),
         }
     }
 
@@ -436,8 +455,14 @@ impl Gui {
         // each time the mouse moves. Right-click positions come from `right_click::tracker`.
         let mut subs = vec![iced::event::listen_with(|event, _status, _window| match event {
             iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key: iced::keyboard::Key::Named(iced::keyboard::key::Named::F5), .. }) => {
+                Some(Message::Refresh)
+            }
             _ => None,
         })];
+        if self.logged_in() {
+            subs.push(iced::time::every(rymplayer::likes::SYNC_EVERY).map(|_| Message::SyncLikes));
+        }
         if self.current.is_some() {
             subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
@@ -551,7 +576,10 @@ impl Gui {
                 {
                     let url = url.clone();
                     async move {
-                        let r = reqwest::get(&url).await.ok()?.error_for_status().ok()?;
+                        // One shared connection pool, a few covers at a time: a long playlist's
+                        // covers shouldn't hold up the song that's starting.
+                        let _turn = covers_limit().acquire().await.ok()?;
+                        let r = covers_http().get(&url).send().await.ok()?.error_for_status().ok()?;
                         let bytes = r.bytes().await.ok()?.to_vec();
                         let tint = px == ROW_PX;
                         tokio::task::spawn_blocking(move || Thumb::new(bytes, tint)).await.ok().flatten()
@@ -596,11 +624,8 @@ impl Gui {
                 self.api = Some(api.clone());
                 let mut tasks = vec![self.open(Page::Home, "For you".into())];
                 if user {
+                    // Liked songs come with the home feed, so hearts show everywhere.
                     tasks.push(Task::perform(api.clone().library_playlists(), |r| Message::Playlists(s(r))));
-                    // Liked songs, so hearts show everywhere.
-                    tasks.push(Task::perform(api.playlist_tracks(api::LIKED_ID.into()), |r| {
-                        Message::Loaded(Page::Playlist(api::LIKED_ID.into()), s(r))
-                    }));
                 }
                 return Task::batch(tasks);
             }
@@ -650,7 +675,7 @@ impl Gui {
                 if page == Page::Playlist(api::LIKED_ID.into())
                     && let Ok(t) = &result
                 {
-                    self.liked.extend(t.iter().map(|t| t.video_id.clone()));
+                    self.liked.sync(t.iter().map(|t| t.video_id.clone()));
                 }
                 if page != self.page {
                     return Task::none();
@@ -668,7 +693,9 @@ impl Gui {
                         let px = if self.page == Page::Home { CARD_PX } else { ROW_PX };
                         let wanted: Vec<_> = self.tracks.iter().map(|t| t.thumb.clone()).collect();
                         let header = self.tracks.first().map(|t| t.thumb.clone());
-                        let mut tasks = vec![self.want_images(wanted.iter().map(|u| (u, px)))];
+                        // The first songs' links are looked up now, so a tap starts at once.
+                        let ids = self.tracks.iter().filter(|t| t.link.is_none()).map(|t| t.video_id.clone()).collect();
+                        let mut tasks = vec![Task::perform(stream::look_ahead(ids), |_| Message::Ignore), self.want_images(wanted.iter().map(|u| (u, px)))];
                         if let Some(h) = &header {
                             tasks.push(self.want_images([(h, CARD_PX)]));
                         }
@@ -694,6 +721,9 @@ impl Gui {
 
             Message::PlayRow(i) => {
                 let Some(t) = self.tracks.get(i).cloned() else { return Task::none() };
+                if self.page == Page::Home {
+                    rymplayer::feed::opened(&t);
+                }
                 return match t.link {
                     Some(Link::Playlist(id)) => self.open(Page::Playlist(id), t.title),
                     Some(Link::Album(id)) => self.open(Page::Album(id), t.title),
@@ -704,6 +734,9 @@ impl Gui {
             Message::PlayAll => return self.play_list(0),
             Message::PlayQueue(i) => return self.play(i),
             Message::PlaySong(t) => {
+                if self.page == Page::Home {
+                    rymplayer::feed::opened(&t);
+                }
                 self.queue = vec![t];
                 let play = self.play(0);
                 return Task::batch([play, self.continue_with_radio()]);
@@ -782,6 +815,10 @@ impl Gui {
                 }
             }
             Message::Seek(v) => self.seeking = Some(v),
+            Message::SeekLyric(v) => {
+                self.seeking = Some(v);
+                return self.update(Message::SeekDone);
+            }
             Message::SeekDone => {
                 if let (Some(v), Some(a)) = (self.seeking.take(), &self.audio)
                     && a.is_loaded()
@@ -834,23 +871,54 @@ impl Gui {
                 let Some(api) = self.api.clone() else { return Task::none() };
                 let vid = t.video_id.clone();
                 let like = !self.liked.contains(&vid);
+                self.liked.set(&vid, like);
                 if like {
-                    self.liked.insert(vid.clone());
                     self.disliked.remove(&vid);
-                } else {
-                    self.liked.remove(&vid);
+                }
+                // The Liked Music page follows at once.
+                if self.page == Page::Playlist(api::LIKED_ID.into()) {
+                    if like {
+                        if !self.tracks.iter().any(|x| x.video_id == vid) {
+                            self.tracks.insert(0, t.clone());
+                        }
+                    } else {
+                        self.tracks.retain(|x| x.video_id != vid);
+                    }
                 }
                 return Task::perform(api.rate(vid.clone(), like), move |r| Message::Rated(vid.clone(), like, s(r)));
             }
             Message::Rated(vid, like, Err(e)) => {
-                if like {
-                    self.liked.remove(&vid);
-                } else {
-                    self.liked.insert(vid);
-                }
+                self.liked.set(&vid, !like);
                 self.status = format!("Like failed: {e}");
             }
             Message::Rated(..) => {}
+            Message::Refreshed(result) => {
+                let result = result.map(|(home, liked)| {
+                    if let Some(l) = liked {
+                        self.liked.sync(l.iter().map(|t| t.video_id.clone()));
+                    }
+                    home
+                });
+                return self.update(Message::Loaded(Page::Home, result));
+            }
+            Message::Refresh => {
+                if self.api.is_none() {
+                    return Task::none();
+                }
+                self.now_playing_open = false;
+                return self.open(Page::Home, "For you".into());
+            }
+            Message::SyncLikes => {
+                let Some(api) = self.api.clone().filter(Api::logged_in) else { return Task::none() };
+                return Task::perform(api.playlist_tracks(api::LIKED_ID.into()), |r| Message::Liked(s(r)));
+            }
+            Message::Liked(Ok(t)) => {
+                self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                if self.page == Page::Playlist(api::LIKED_ID.into()) && !self.busy {
+                    self.tracks = t;
+                }
+            }
+            Message::Liked(Err(_)) => {}
 
             Message::Image(url, Some(t)) => {
                 self.images.insert(url, t);
@@ -1034,7 +1102,7 @@ impl Gui {
                 let mut tasks = Vec::new();
                 if on {
                     self.disliked.insert(vid.clone());
-                    self.liked.remove(&vid);
+                    self.liked.set(&vid, false);
                     // Like YouTube Music: a thumbs-down on the playing song skips it.
                     if self.now_playing().map(|n| &n.video_id) == Some(&vid) {
                         tasks.push(self.next());
@@ -1068,6 +1136,12 @@ impl Gui {
         self.busy = true;
         if !keep {
             self.tracks.clear();
+        }
+        if page == Page::Home {
+            return Task::perform(
+                async move { rymplayer::feed::refresh(api).await.map(|r| (r.home, r.liked)) },
+                |r| Message::Refreshed(s(r)),
+            );
         }
         Task::perform(
             {
@@ -1135,16 +1209,7 @@ impl Gui {
             {
                 let t = track.clone();
                 let api = api.clone();
-                async move {
-                    let dur = parse_duration(&t.duration);
-                    match lyrics::lrclib(t.title, t.artist, t.album, dur).await {
-                        Ok(Some(l)) => Some(l),
-                        _ => match api {
-                            Some(api) => api.lyrics(t.video_id).await.ok().flatten(),
-                            None => None,
-                        },
-                    }
-                }
+                lyrics::for_track(api, t)
             },
             {
                 let vid = vid.clone();
@@ -1180,13 +1245,14 @@ impl Gui {
         Task::perform(api.radio(vid), |r| Message::Radio(s(r)))
     }
 
+    /// The next song (and its lyrics) download while this one plays.
     fn prefetch_next(&self) -> Task<Message> {
-        match self.current.and_then(|i| self.queue.get(i + 1)) {
-            Some(t) if stream::cached(&t.video_id).is_none() => {
-                Task::perform(stream::fetch(t.video_id.clone()), |_| Message::Ignore)
-            }
-            _ => Task::none(),
+        let Some(t) = self.current.and_then(|i| self.queue.get(i + 1)) else { return Task::none() };
+        let words = Task::perform(lyrics::prefetch(self.api.clone(), t.clone()), |_| Message::Ignore);
+        if stream::cached(&t.video_id).is_some() {
+            return words;
         }
+        Task::batch([words, Task::perform(stream::fetch(t.video_id.clone()), |_| Message::Ignore)])
     }
 
     fn add_to(&mut self, p: Playlist, video_id: String) -> Task<Message> {
@@ -1203,7 +1269,7 @@ async fn download(t: Track) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod shots {
-    //! Renders screens to PNG without opening a window: `cargo test --bin RymPlayer-GUI -- --ignored`.
+    //! Renders screens to PNG without opening a window: `cargo test --bin RyM-Legacy-Player -- --ignored`.
     //! Output lands in `target/gui-shots/`.
 
     use super::*;
@@ -1245,6 +1311,47 @@ mod shots {
         }
     }
 
+    /// The lyrics page alone, offline: a made-up song with a red cover, the third line being sung.
+    /// `cargo test --bin RyM-Legacy-Player lyrics_shot -- --ignored` (PNG in target/gui-shots).
+    #[test]
+    #[ignore]
+    fn lyrics_shot() {
+        let mut gui = Gui::empty();
+        let url = "https://lh3.googleusercontent.com/fake=w60-h60".to_string();
+        let mut png = Vec::new();
+        ::image::RgbaImage::from_pixel(32, 32, ::image::Rgba([200, 40, 50, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png)
+            .unwrap();
+        let mut thumb = Thumb::new(png, true).expect("thumb");
+        thumb.loaded = long_ago();
+        gui.images.insert(api::thumb_sized(&url, ROW_PX), thumb);
+        gui.queue = vec![Track {
+            video_id: "x".into(),
+            title: "City Lights".into(),
+            artist: "Some Band".into(),
+            album: String::new(),
+            duration: "3:30".into(),
+            thumb: Some(url),
+            album_id: None,
+            artist_id: None,
+            link: None,
+        }];
+        gui.current = Some(0);
+        gui.pos = 71.0;
+        gui.lyrics = Some(Lyrics {
+            synced: lyrics::parse_lrc(
+                "[00:58.00]Under the neon, under the rain\n[01:04.00]Every street sings it again\n[01:10.00]I hear the city calling my name\n[01:16.00]Running till the morning light\n[01:22.00]Nothing ever feels the same\n[01:28.00]Hold on, hold on tonight\n[01:34.00]We were young and we were wild\n[01:40.00]Dancing on the edge of time",
+            ),
+            plain: Vec::new(),
+            source: "LRCLIB".into(),
+        });
+        gui.lyric_changed = long_ago();
+        gui.now_playing_open = true;
+        gui.tab = Tab::Lyrics;
+        gui.config.gui_theme = 3;
+        shot(&gui, "lyrics-offline");
+    }
+
     /// Uses the signed-in session and real data; only counts are printed.
     #[tokio::test]
     #[ignore]
@@ -1261,7 +1368,7 @@ mod shots {
         gui.tracks = home;
 
         let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
-        gui.liked = liked.iter().map(|t| t.video_id.clone()).collect();
+        gui.liked.sync(liked.iter().map(|t| t.video_id.clone()));
         fetch_images(&mut gui, liked.iter().take(30).map(|t| (t.thumb.clone(), ROW_PX)).collect()).await;
         fetch_images(&mut gui, liked.iter().take(1).map(|t| (t.thumb.clone(), CARD_PX)).collect()).await;
         fetch_images(&mut gui, liked.iter().take(1).map(|t| (t.thumb.clone(), ART_PX)).collect()).await;
@@ -1388,7 +1495,7 @@ mod queue_tests {
 
 #[cfg(test)]
 mod frame_cost {
-    //! How long one full software-rendered frame takes: `cargo test --release --bin RymPlayer-GUI frame_cost -- --ignored --nocapture`.
+    //! How long one full software-rendered frame takes: `cargo test --release --bin RyM-Legacy-Player frame_cost -- --ignored --nocapture`.
 
     use super::*;
     use iced_test::simulator::Simulator;
