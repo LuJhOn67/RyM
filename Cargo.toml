@@ -26,8 +26,11 @@ music_api = { package = "ytmapi-rs", version = "0.3.3" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [profile.release]
-lto = "thin"
+# Smallest files: optimize for size, whole-program LTO, no unwinding tables, no symbols.
+opt-level = "z"
+lto = true
 codegen-units = 1
+panic = "abort"
 strip = true
 
 [lib]
