@@ -11,6 +11,18 @@ use ratatui::widgets::{
 use crate::api::Link;
 use crate::config::{BarPlace, Config, LyricsPlace, SETTINGS, Side, Theme};
 use crate::{App, Focus, Input, Mode, NavItem, Page, fmt_time, lyrics};
+use rymplayer::i18n;
+
+/// Interface text in the app's language, ready to print.
+fn t(en: &'static str) -> String {
+    show(i18n::tr(en))
+}
+
+/// Any text (song titles, lyrics, messages) ready to print: Windows terminals don't lay out
+/// Arabic themselves, so its letters are joined and put in visual order here.
+pub fn show(s: &str) -> String {
+    if cfg!(windows) { i18n::for_terminal(s) } else { s.to_string() }
+}
 
 /// First row of the add-to-playlist picker.
 pub const NEW_PLAYLIST_ROW: &str = "＋ New playlist";
@@ -50,12 +62,12 @@ fn cursor_style(th: &Theme, focused: bool) -> Style {
     }
 }
 
-fn pane<'a>(th: &Theme, title: &'a str, focused: bool) -> Block<'a> {
+fn pane(th: &Theme, title: &str, focused: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(if focused { th.focus } else { th.faint }))
-        .title(Span::styled(format!(" {title} "), Style::new().fg(th.text).bold()))
+        .title(Span::styled(format!(" {} ", show(title)), Style::new().fg(th.text).bold()))
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -70,28 +82,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn draw_login(f: &mut Frame, app: &App) {
     let th = app.config.theme();
-    let area = centered(f.area(), 64, 13);
+    let area = centered(f.area(), 64, 14);
     let key = |k: &'static str| format!("  {k} ").fg(th.accent).bold();
     let mut lines = vec![
         Line::from("RymPlayer".fg(th.accent).bold()),
-        Line::from("YouTube Music in your terminal".fg(th.dim)),
+        Line::from(t("YouTube Music in your terminal").fg(th.dim)),
         Line::from(""),
-        Line::from(vec![key("g"), "Sign in with Google (opens a sign-in window)".fg(th.text)]),
-        Line::from(vec![key("c"), "Paste a browser cookie".fg(th.text)]),
-        Line::from(vec![key("s"), "Continue without an account".fg(th.text)]),
-        Line::from(vec![key("q"), "Quit".fg(th.text)]),
+        Line::from(vec![key("g"), t("Sign in with Google (opens a sign-in window)").fg(th.text)]),
+        Line::from(vec![key("c"), t("Paste a browser cookie").fg(th.text)]),
+        Line::from(vec![key("s"), t("Continue without an account").fg(th.text)]),
+        Line::from(vec![key("m"), t("Songs on this device (no account needed)").fg(th.text)]),
+        Line::from(vec![key("q"), t("Quit").fg(th.text)]),
         Line::from(""),
     ];
     if app.input == Some(Input::Cookie) {
         let shown = if app.buffer.is_empty() {
-            "paste with Ctrl+V, then Enter (Esc cancels)".to_string()
+            t("paste with Ctrl+V, then Enter (Esc cancels)")
         } else {
             format!("{} characters pasted, press Enter", app.buffer.chars().count())
         };
         lines.push(Line::from(vec!["Cookie: ".fg(th.text).bold(), shown.fg(th.dim)]));
     }
-    lines.push(Line::from(app.status.clone().fg(th.dim)));
-    f.render_widget(Paragraph::new(lines).block(pane(th, "Sign in", true)), area);
+    lines.push(Line::from(show(&app.status).fg(th.dim)));
+    f.render_widget(Paragraph::new(lines).block(pane(th, i18n::tr("Sign in"), true)), area);
 }
 
 fn draw_main(f: &mut Frame, app: &mut App) {
@@ -164,7 +177,7 @@ fn draw_main(f: &mut Frame, app: &mut App) {
         let area = centered(f.area(), 56, 3);
         popup_bg(f, th, area);
         let text = Line::from(vec![app.buffer.as_str().fg(th.text), "█".fg(th.accent)]);
-        f.render_widget(Paragraph::new(text).block(pane(th, "New playlist name (Enter / Esc)", true)), area);
+        f.render_widget(Paragraph::new(text).block(pane(th, i18n::tr("New playlist name (Enter / Esc)"), true)), area);
     }
 }
 
@@ -183,8 +196,8 @@ fn draw_picker(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
     let area = centered(f.area(), 52, h);
     popup_bg(f, th, area);
     let song = app.pick_target().map(|t| t.title.clone()).unwrap_or_default();
-    let title = format!("Add \"{song}\" to");
-    let block = pane(th, &title, true).title_bottom(Line::from(" Enter add  Esc close ".fg(th.dim)));
+    let title = format!("{}: {song}", i18n::tr("Add to playlist"));
+    let block = pane(th, &title, true).title_bottom(Line::from(format!(" {} ", t("Enter add  Esc close")).fg(th.dim)));
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.areas.popup = area;
@@ -194,7 +207,7 @@ fn draw_picker(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
         let r = Rect::new(inner.x, inner.y + row as u16, inner.width, 1);
         let style = if i == sel { cursor_style(th, true) } else { Style::new() };
         let color = if i == 0 { th.accent } else { th.text };
-        f.render_widget(Paragraph::new(Line::from(format!(" {name}").fg(color))).style(style), r);
+        f.render_widget(Paragraph::new(Line::from(format!(" {}", show(name)).fg(color))).style(style), r);
         app.areas.buttons.push((r, Click::Pick(i)));
     }
 }
@@ -209,7 +222,7 @@ fn draw_top(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let logo = "RymPlayer";
     f.render_widget(Paragraph::new(logo.fg(th.accent).bold()), Rect::new(x, y, logo.len() as u16, 1));
     x += logo.len() as u16 + 3;
-    let buttons = [("★ For you", Click::ForYou, Page::ForYou), ("⏱ History", Click::History, Page::History)];
+    let buttons = [(t("★ For you"), Click::ForYou, Page::ForYou), (t("⏱ History"), Click::History, Page::History)];
     for (label, click, page) in buttons {
         let w = label.chars().count() as u16;
         if x + w > left.x + left.width {
@@ -229,7 +242,7 @@ fn draw_top(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let text = if active {
         Line::from(vec![app.buffer.as_str().fg(th.text), "█".fg(th.accent)])
     } else {
-        Line::from(vec![" ".into(), "Search songs, artists...".fg(th.faint), "  /".fg(th.faint)])
+        Line::from(vec![" ".into(), t("Search songs, artists...").fg(th.faint), "  /".fg(th.faint)])
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -238,10 +251,10 @@ fn draw_top(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(text).block(block), search);
     app.areas.buttons.push((search, Click::Search));
 
-    let label = "⚙ Settings ,";
+    let label = t("⚙ Settings ,");
     let r = Rect::new(right.x + right.width.saturating_sub(label.chars().count() as u16 + 1), y, label.chars().count() as u16, 1);
     let style = if app.settings.is_some() { Style::new().fg(th.accent).bold() } else { Style::new().fg(th.dim) };
-    f.render_widget(Paragraph::new(Span::styled(label, style)), r);
+    f.render_widget(Paragraph::new(Span::styled(label.clone(), style)), r);
     app.areas.buttons.push((r, Click::Settings));
 }
 
@@ -250,18 +263,19 @@ fn draw_nav(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         .nav
         .iter()
         .map(|item| match item {
-            NavItem::ForYou => ListItem::new(Line::from(vec!["★ ".fg(th.accent), "For you".fg(th.text)])),
-            NavItem::History => ListItem::new(Line::from(vec!["⏱ ".fg(th.accent), "History".fg(th.text)])),
-            NavItem::NewPlaylist => ListItem::new(Line::from(vec!["＋ ".fg(th.accent), "New playlist".fg(th.dim)])),
+            NavItem::ForYou => ListItem::new(Line::from(vec!["★ ".fg(th.accent), t("For you").fg(th.text)])),
+            NavItem::History => ListItem::new(Line::from(vec!["⏱ ".fg(th.accent), t("History").fg(th.text)])),
+            NavItem::Local => ListItem::new(Line::from(vec!["♫ ".fg(th.accent), t("On this device").fg(th.text)])),
+            NavItem::NewPlaylist => ListItem::new(Line::from(vec!["＋ ".fg(th.accent), t("New playlist").fg(th.dim)])),
             NavItem::Playlist(p) if p.id == crate::api::LIKED_ID => {
-                ListItem::new(Line::from(vec!["♥ ".fg(th.accent), p.title.clone().fg(th.text)]))
+                ListItem::new(Line::from(vec!["♥ ".fg(th.accent), t("Liked songs").fg(th.text)]))
             }
-            NavItem::Playlist(p) => ListItem::new(p.title.clone().fg(th.text)),
+            NavItem::Playlist(p) => ListItem::new(show(&p.title).fg(th.text)),
         })
         .collect();
     let focused = app.focus == Focus::Nav;
     let list = List::new(items)
-        .block(pane(th, "Library", focused))
+        .block(pane(th, i18n::tr("Library"), focused))
         .highlight_style(cursor_style(th, focused))
         .highlight_symbol(if focused { "▶ " } else { "› " })
         .highlight_spacing(HighlightSpacing::Always);
@@ -291,9 +305,9 @@ fn draw_tracks(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
                 } else {
                     Cell::from(format!("{}", i + 1)).fg(th.dim)
                 },
-                Cell::from(t.title.clone()).style(title_style),
-                Cell::from(t.artist.clone()).fg(th.dim),
-                Cell::from(t.album.clone()).fg(th.dim),
+                Cell::from(show(&t.title)).style(title_style),
+                Cell::from(show(&t.artist)).fg(th.dim),
+                Cell::from(show(&t.album)).fg(th.dim),
                 Cell::from(mark).fg(th.accent),
                 Cell::from(time).fg(th.dim),
             ])
@@ -310,18 +324,18 @@ fn draw_tracks(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let focused = app.focus == Focus::Tracks;
     let mut block = pane(th, &app.page_title, focused);
     if app.busy {
-        block = block.title_bottom(Line::from(" Loading... ".fg(th.dim)));
+        block = block.title_bottom(Line::from(format!(" {} ", t("Loading...")).fg(th.dim)));
     } else if !app.status.is_empty() {
-        block = block.title_bottom(Line::from(format!(" {} ", app.status).fg(th.accent)));
+        block = block.title_bottom(Line::from(format!(" {} ", show(&app.status)).fg(th.accent)));
     } else if app.tracks.is_empty() {
-        block = block.title_bottom(Line::from(" Press / to search ".fg(th.dim)));
+        block = block.title_bottom(Line::from(format!(" {} ", t("Press / to search")).fg(th.dim)));
     }
     let third = match app.page {
-        Page::ForYou => "Section",
-        Page::History => "When",
-        _ => "Album",
+        Page::ForYou => t("Section"),
+        Page::History => t("When"),
+        _ => t("Album"),
     };
-    let header = Row::new(["#", "Title", "Artist", third, "", "Time"])
+    let header = Row::new(["#".to_string(), t("Title"), t("Artist"), third, String::new(), t("Time")])
         .style(Style::new().fg(th.dim).add_modifier(Modifier::BOLD));
     let table = Table::new(rows, widths)
         .header(header)
@@ -345,7 +359,7 @@ fn draw_lyrics(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             let cur = lyrics::current_line(&l.synced, app.pos);
             let mut lines = Vec::new();
             for (i, (_, text)) in l.synced.iter().enumerate() {
-                let text = if text.is_empty() { "♪".to_string() } else { text.clone() };
+                let text = if text.is_empty() { "♪".to_string() } else { show(text) };
                 lines.push(match cur {
                     Some(c) if c == i => Line::from(text.bold().fg(now)),
                     Some(c) if i < c => Line::from(text.bold().fg(sung)),
@@ -358,22 +372,22 @@ fn draw_lyrics(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             (lines, scroll)
         }
         Some(l) => {
-            let mut lines = vec![Line::from("These lyrics aren't synced to the song".italic().fg(sung)), Line::default()];
-            lines.extend(l.plain.iter().map(|t| Line::from(t.clone().bold().fg(now))));
+            let mut lines = vec![Line::from(t("These lyrics aren't synced to the song").italic().fg(sung)), Line::default()];
+            lines.extend(l.plain.iter().map(|line| Line::from(show(line).bold().fg(now))));
             (lines, 0)
         }
-        None => (vec![Line::from(app.lyrics_status.clone().fg(sung))], 0),
+        None => (vec![Line::from(show(&app.lyrics_status).fg(sung))], 0),
     };
-    let mut block = pane(th, "Lyrics", false).style(Style::new().bg(rgb(bg)));
+    let mut block = pane(th, i18n::tr("Lyrics"), false).style(Style::new().bg(rgb(bg)));
     if let Some(l) = &app.lyrics {
-        block = block.title_bottom(Line::from(format!(" Lyrics from {} ", l.source).fg(sung)));
+        block = block.title_bottom(Line::from(format!(" {} ", show(&format!("{} {}", i18n::tr("Lyrics from"), l.source))).fg(sung)));
     }
     let align = if app.config.lyrics_centered { Alignment::Center } else { Alignment::Left };
     f.render_widget(Paragraph::new(lines).block(block).alignment(align).scroll((scroll, 0)), area);
 }
 
 fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
-    let block = pane(th, "Now playing", false);
+    let block = pane(th, i18n::tr("Now playing"), false);
     let inner = block.inner(area);
     f.render_widget(block, area);
     let [info, gauge, help] = Layout::vertical([Constraint::Length(1); 3]).areas(inner);
@@ -388,11 +402,11 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let mut spans = match app.now_playing() {
         Some(t) => vec![
             format!(" {icon} ").fg(th.accent).bold(),
-            t.title.clone().fg(th.text).bold(),
+            show(&t.title).fg(th.text).bold(),
             "  ".into(),
-            t.artist.clone().fg(th.dim),
+            show(&t.artist).fg(th.dim),
         ],
-        None => vec![" Nothing playing".fg(th.dim)],
+        None => vec![format!(" {}", t("Nothing playing")).fg(th.dim)],
     };
     if let Some(t) = app.now_playing()
         && app.liked.contains(&t.video_id)
@@ -400,7 +414,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         spans.push("  ♥".fg(th.accent));
     }
     if app.loading {
-        spans.push("  downloading...".fg(th.dim));
+        spans.push(format!("  {}", t("downloading...")).fg(th.dim));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), info);
 
@@ -421,7 +435,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     if !app.config.help {
         return;
     }
-    let vol = format!("vol {:.0}%", app.volume * 100.0);
+    let vol = format!("{} {:.0}%", t("vol"), app.volume * 100.0);
     let keys = [
         ("space", "pause"),
         ("n/p", "next/prev"),
@@ -440,6 +454,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     ];
     let mut help_spans = Vec::new();
     for (k, v) in keys {
+        let v = if v == vol { vol.clone() } else { show(i18n::tr(word(v))) };
         help_spans.push(format!(" {k} ").fg(th.accent));
         help_spans.push(format!("{v} ").fg(th.dim));
     }
@@ -450,8 +465,8 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
     let h = SETTINGS.len() as u16 + 6;
     let area = centered(f.area(), 58, h);
     popup_bg(f, th, area);
-    let block = pane(th, "Settings", true)
-        .title_bottom(Line::from(" ↑↓ choose  ←→ change  click to change  Esc close ".fg(th.dim)));
+    let block = pane(th, i18n::tr("Settings"), true)
+        .title_bottom(Line::from(format!(" {} ", t("↑↓ choose  ←→ change  click to change  Esc close")).fg(th.dim)));
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.areas.popup = area;
@@ -467,8 +482,8 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
     for (i, s) in SETTINGS.iter().enumerate() {
         let r = Rect::new(inner.x, inner.y + 2 + i as u16, inner.width, 1);
         let selected = i == sel;
-        let value = app.config.value(*s);
-        let label = format!(" {:<16}", Config::label(*s));
+        let value = show(&app.config.value(*s));
+        let label = format!(" {:<20}", show(Config::label(*s)));
         let line = Line::from(vec![
             label.fg(th.text),
             "‹ ".fg(th.faint),
@@ -479,6 +494,14 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
         f.render_widget(Paragraph::new(line).style(style), r);
         app.areas.buttons.push((r, Click::Setting(i)));
     }
+}
+
+/// The key hints' words as the static text the translations are keyed on.
+fn word(v: &str) -> &'static str {
+    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "switch", "settings", "quit"]
+        .into_iter()
+        .find(|w| *w == v)
+        .unwrap_or("")
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -507,6 +530,20 @@ mod tests {
     fn app() -> App {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(tx)
+    }
+
+    /// The main screen in Arabic, printed: `cargo test --bin RyM arabic_screen -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn arabic_screen() {
+        rymplayer::i18n::set_arabic(true);
+        let mut a = main_app();
+        a.tracks[0].title = "أغنية عربية".into();
+        a.tracks[0].artist = "فنان".into();
+        let out = render(&mut a, 120, 24);
+        rymplayer::i18n::set_arabic(false);
+        println!("{out}");
+        assert!(out.contains(&show("الرئيسية")) || out.contains(&show("المكتبة")));
     }
 
     fn main_app() -> App {
@@ -577,7 +614,7 @@ mod tests {
         let out = render(&mut a, 140, 30);
         println!("{out}");
         assert_eq!(a.config.theme().name, "YouTube Music");
-        assert!(out.contains("Add \"Song number 2\" to"));
+        assert!(out.contains("Add to playlist: Song number 2"));
         assert!(out.contains("New playlist"));
         assert!(out.contains("Night drive"));
         // The theme paints its own background.

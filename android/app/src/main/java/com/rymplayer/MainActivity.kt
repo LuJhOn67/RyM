@@ -93,10 +93,14 @@ fun RymApp(vm: AppViewModel) {
         vm.status = ""
         vm.player.message = ""
     }
-    when (vm.signedIn) {
-        null -> Loading()
-        false -> LoginScreen(vm)
-        true -> Main(vm)
+    // Arabic reads right to left: the whole layout turns around.
+    val direction = if (I18n.arabic) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction) {
+        when (vm.signedIn) {
+            null -> Loading()
+            false -> LoginScreen(vm)
+            true -> Main(vm)
+        }
     }
 }
 
@@ -111,7 +115,7 @@ private fun Main(vm: AppViewModel) {
                 Column {
                     MiniPlayer(vm, tint)
                     NavigationBar(containerColor = Color(0xFF111114)) {
-                        val tabs = listOf(Triple(Screen.Home, "Home", Icons.Default.Home), Triple(Screen.Search, "Search", Icons.Default.Search), Triple(Screen.Library, "Library", Icons.Default.LibraryMusic))
+                        val tabs = listOf(Triple(Screen.Home, tr("Home"), Icons.Default.Home), Triple(Screen.Search, tr("Search"), Icons.Default.Search), Triple(Screen.Library, tr("Library"), Icons.Default.LibraryMusic))
                         for ((screen, label, icon) in tabs) {
                             NavigationBarItem(vm.tab == screen && vm.stack.isEmpty(), { vm.selectTab(screen) }, { Icon(icon, label) }, label = { Text(label) })
                         }

@@ -9,6 +9,7 @@ use crossterm::event::{
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use rymplayer::i18n::tr;
 use rymplayer::likes::{Likes, SYNC_EVERY};
 use rymplayer::{api, audio, config, cookie_path, data_dir, feed, fmt_time, login, lyrics, parse_duration, stream};
 
@@ -60,6 +61,8 @@ enum Input {
 #[derive(Debug, Clone, PartialEq)]
 enum Page {
     ForYou,
+    /// Songs on this device (the Music folder).
+    Local,
     History,
     Search,
     Playlist(String),
@@ -72,6 +75,7 @@ enum Page {
 #[derive(Debug, Clone)]
 enum NavItem {
     ForYou,
+    Local,
     History,
     NewPlaylist,
     Playlist(Playlist),
@@ -173,7 +177,7 @@ impl App {
             nav: vec![NavItem::ForYou],
             nav_state: ListState::default().with_selected(Some(0)),
             page: Page::Search,
-            page_title: "Search".into(),
+            page_title: tr("Search").into(),
             tracks: Vec::new(),
             track_state: TableState::default(),
             queue: Vec::new(),
@@ -201,6 +205,7 @@ impl App {
     /// Opens the audio device and signs in with a saved session, if any.
     fn start(&mut self) {
         self.config = Config::load();
+        rymplayer::i18n::set_arabic(self.config.arabic);
         stream::use_source(self.config.source);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
@@ -209,18 +214,18 @@ impl App {
                 a.set_volume(self.volume);
                 self.audio = Some(a);
             }
-            Err(e) => self.status = format!("No audio device: {e}"),
+            Err(e) => self.status = format!("{}: {e}", tr("No audio device")),
         }
         if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
             self.busy = true;
-            self.status = "Signing in...".into();
+            self.status = tr("Signing in...").into();
             // The last home feed shows at once while signing in; the fresh one replaces it.
             let saved = rymplayer::page_cache::load_home();
             if !saved.is_empty() {
                 self.mode = Mode::Main;
                 self.rebuild_nav(Vec::new());
                 self.page = Page::ForYou;
-                self.page_title = "For you".into();
+                self.page_title = tr("For you").into();
                 self.track_state.select(Some(0));
                 self.tracks = saved;
             }
@@ -285,7 +290,7 @@ impl App {
                 }
                 self.rebuild_nav(Vec::new());
                 self.likes_synced = Instant::now();
-                self.open(Page::ForYou, "For you".into());
+                self.open(Page::ForYou, tr("For you").into());
             }
             Event::Radio(result) => {
                 self.radio_pending = false;
@@ -296,7 +301,7 @@ impl App {
                             .filter(|t| !self.queue.iter().any(|q| q.video_id == t.video_id))
                             .collect();
                         if fresh.is_empty() {
-                            self.status = "Radio has nothing new to play".into();
+                            self.status = tr("Radio has nothing new to play").into();
                             return;
                         }
                         self.queue.extend(fresh);
@@ -308,14 +313,14 @@ impl App {
             Event::LoggedIn(Err(e)) => {
                 self.busy = false;
                 self.mode = Mode::Login;
-                self.status = format!("Sign-in failed: {e}");
+                self.status = format!("{}: {e}", tr("Sign-in failed"));
             }
             Event::Playlists(Ok(p)) => self.rebuild_nav(p),
             Event::Playlists(Err(e)) if e.contains("signed out") => {
                 // The saved session is dead: send the user to sign in again.
                 self.mode = Mode::Login;
                 self.busy = false;
-                self.status = "Google ended your session. Press g to sign in again.".into();
+                self.status = tr("Google ended your session. Press g to sign in again.").into();
             }
             Event::Playlists(Err(e)) => self.status = format!("Playlists: {e}"),
             Event::Tracks(page, result) => {
@@ -353,13 +358,13 @@ impl App {
                         match rymplayer::vlc::play(&exe, &url, &headers, &format!("{} - {}", t.artist, t.title)) {
                             Ok(child) => {
                                 self.vlc = Some(child);
-                                self.status = "Playing in VLC".into();
+                                self.status = tr("Playing in VLC").into();
                             }
                             Err(e) => self.status = format!("VLC: {e}"),
                         }
                     }
-                    (Err(e), _) => self.status = format!("Can't play: {e}"),
-                    (_, None) => self.status = "VLC isn't installed".into(),
+                    (Err(e), _) => self.status = format!("{}: {e}", tr("Can't play")),
+                    (_, None) => self.status = tr("VLC isn't installed").into(),
                 }
             }
             Event::Fetched(vid, result) => {
@@ -375,7 +380,7 @@ impl App {
                         if let Some(a) = &mut self.audio {
                             match a.play(&song, known) {
                                 Ok(()) => self.status.clear(),
-                                Err(e) => self.status = format!("Can't play: {e}"),
+                                Err(e) => self.status = format!("{}: {e}", tr("Can't play")),
                             }
                         }
                         self.prefetch_next();
@@ -385,9 +390,9 @@ impl App {
                         if self.failures >= 3 {
                             // Something is wrong for every song (YouTube, the connection, yt-dlp): stop and say why.
                             self.failures = 0;
-                            self.status = format!("Stopped after 3 songs failed: {e}");
+                            self.status = format!("{}: {e}", tr("Stopped after 3 songs failed"));
                         } else {
-                            self.status = format!("Skipped, download failed: {e}");
+                            self.status = format!("{}: {e}", tr("Skipped, download failed"));
                             self.next();
                         }
                     }
@@ -407,14 +412,14 @@ impl App {
                         self.lyrics = Some(l);
                         self.lyrics_status.clear();
                     }
-                    Ok(None) => self.lyrics_status = "No lyrics found".into(),
-                    Err(e) => self.lyrics_status = format!("Lyrics: {e}"),
+                    Ok(None) => self.lyrics_status = tr("No lyrics found").into(),
+                    Err(e) => self.lyrics_status = format!("{}: {e}", tr("Lyrics")),
                 }
             }
             Event::Rated(vid, like, Err(e)) => {
                 // Roll back the optimistic toggle.
                 self.liked.set(&vid, !like);
-                self.status = format!("Like failed: {e}");
+                self.status = format!("{}: {e}", tr("Like failed"));
             }
             Event::Liked(Ok(t)) => {
                 self.liked.sync(t.iter().map(|t| t.video_id.clone()));
@@ -434,21 +439,21 @@ impl App {
                 self.playlists.insert(0, p);
                 self.rebuild_nav(self.playlists.clone());
             }
-            Event::Created(Err(e), _) => self.status = format!("Couldn't create the playlist: {e}"),
+            Event::Created(Err(e), _) => self.status = format!("{}: {e}", tr("Couldn't create the playlist")),
             Event::Added(title, Ok(())) => self.status = format!("Added to \"{title}\""),
             Event::Added(title, Err(e)) => self.status = format!("Couldn't add to \"{title}\": {e}"),
-            Event::Downloaded(Ok(p)) => self.status = format!("Saved to {}", p.display()),
-            Event::Downloaded(Err(e)) => self.status = format!("Download failed: {e}"),
+            Event::Downloaded(Ok(p)) => self.status = format!("{} {}", tr("Saved to"), p.display()),
+            Event::Downloaded(Err(e)) => self.status = format!("{}: {e}", tr("Download failed")),
         }
     }
 
     fn rebuild_nav(&mut self, playlists: Vec<Playlist>) {
         self.playlists = playlists.clone();
-        let mut nav = vec![NavItem::ForYou];
+        let mut nav = vec![NavItem::ForYou, NavItem::Local];
         if self.logged_in() {
             nav.push(NavItem::History);
             nav.push(NavItem::NewPlaylist);
-            nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: "Liked songs".into(), thumb: None }));
+            nav.push(NavItem::Playlist(Playlist { id: api::LIKED_ID.into(), title: tr("Liked songs").into(), thumb: None }));
         }
         nav.extend(playlists.into_iter().map(NavItem::Playlist));
         self.nav = nav;
@@ -491,9 +496,16 @@ impl App {
                 KeyCode::Char('q') => return false,
                 KeyCode::Char('g') if !self.busy => self.google_login(),
                 KeyCode::Char('c') if !self.busy => self.input = Some(Input::Cookie),
+                KeyCode::Char('m') if !self.busy => {
+                    // Songs on this device, no account or internet needed.
+                    self.mode = Mode::Main;
+                    self.rebuild_nav(Vec::new());
+                    self.nav_state.select(Some(1));
+                    self.open(Page::Local, tr("On this device").into());
+                }
                 KeyCode::Char('s') if !self.busy => {
                     self.busy = true;
-                    self.status = "Connecting...".into();
+                    self.status = tr("Connecting...").into();
                     self.spawn(async { Event::LoggedIn(s(Api::guest().await)) });
                 }
                 _ => {}
@@ -511,7 +523,7 @@ impl App {
                 self.focus = if self.focus == Focus::Nav { Focus::Tracks } else { Focus::Nav };
             }
             KeyCode::Char(',') => self.settings = Some(0),
-            KeyCode::Char('h') => self.open(Page::History, "History".into()),
+            KeyCode::Char('h') => self.open(Page::History, tr("History").into()),
             KeyCode::Char('a') => self.open_picker(),
             KeyCode::Char('N') => self.new_playlist(None),
             KeyCode::Char(' ') => {
@@ -532,7 +544,7 @@ impl App {
             KeyCode::Char('d') => self.download(),
             // Refresh: a new home feed (new songs on top) and the liked songs again.
             KeyCode::F(5) | KeyCode::Char('u') => {
-                self.open(Page::ForYou, "For you".into());
+                self.open(Page::ForYou, tr("For you").into());
                 self.focus = Focus::Tracks;
             }
             // Like YouTube: 0-9 jump to 0%..90% of the song.
@@ -576,7 +588,7 @@ impl App {
             }
             Input::Cookie => {
                 self.busy = true;
-                self.status = "Signing in...".into();
+                self.status = tr("Signing in...").into();
                 let _ = std::fs::create_dir_all(data_dir());
                 let _ = std::fs::write(cookie_path(), &text);
                 self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(text).await)) });
@@ -586,7 +598,7 @@ impl App {
 
     fn google_login(&mut self) {
         self.busy = true;
-        self.status = "Finish signing in in the Google window...".into();
+        self.status = tr("Finish signing in in the Google window...").into();
         self.spawn(async {
             let r = async {
                 let cookie = login::sign_in().await?;
@@ -634,8 +646,9 @@ impl App {
             Focus::Nav => {
                 let Some(item) = self.nav_state.selected().and_then(|i| self.nav.get(i)).cloned() else { return };
                 match item {
-                    NavItem::ForYou => self.open(Page::ForYou, "For you".into()),
-                    NavItem::History => self.open(Page::History, "History".into()),
+                    NavItem::ForYou => self.open(Page::ForYou, tr("For you").into()),
+                    NavItem::Local => self.open(Page::Local, tr("On this device").into()),
+                    NavItem::History => self.open(Page::History, tr("History").into()),
                     NavItem::NewPlaylist => {
                         self.new_playlist(None);
                         return;
@@ -670,6 +683,23 @@ impl App {
     }
 
     fn open(&mut self, page: Page, title: String) {
+        if page == Page::Local {
+            // No account or internet needed: the files are read off the UI thread.
+            self.page = Page::Local;
+            self.page_title = title;
+            self.busy = true;
+            self.tracks.clear();
+            self.track_state.select(None);
+            self.status = tr("Looking for songs on this device...").into();
+            let folders = rymplayer::local::folders(&self.config.local_folders);
+            self.spawn(async move {
+                let found = tokio::task::spawn_blocking(move || rymplayer::local::scan(&folders)).await;
+                Event::Tracks(Page::Local, found.map_err(|e| e.to_string()).and_then(|t| {
+                    if t.is_empty() { Err(tr("No songs found in your Music folder").to_string()) } else { Ok(t) }
+                }))
+            });
+            return;
+        }
         let Some(api) = self.api.clone() else { return };
         // The saved home feed stays on screen until the fresh one arrives.
         let keep = page == Page::ForYou && self.page == Page::ForYou && !self.tracks.is_empty();
@@ -694,7 +724,7 @@ impl App {
                 Page::Album(id) => api.album_tracks(id).await,
                 Page::Mix(id) => api.mix_tracks(id).await,
                 Page::Radio(vid) => api.radio(vid).await,
-                Page::Search => Ok(Vec::new()),
+                Page::Search | Page::Local => Ok(Vec::new()),
             };
             Event::Tracks(page, s(r))
         });
@@ -708,6 +738,10 @@ impl App {
             .flatten()
             .filter(|t| t.link.is_none());
         let Some(t) = selected.or(self.now_playing()).cloned() else { return };
+        if rymplayer::local::is_local(&t.video_id) {
+            self.status = tr("This song is already on your device").into();
+            return;
+        }
         self.status = format!("Downloading \"{}\"...", t.title);
         self.spawn(async move { Event::Downloaded(s(stream::save_to_music(&t.video_id, &t.artist, &t.title).await)) });
     }
@@ -718,6 +752,10 @@ impl App {
             .flatten()
             .filter(|t| t.link.is_none());
         let Some(seed) = selected.or(self.now_playing()).cloned() else { return };
+        if rymplayer::local::is_local(&seed.video_id) {
+            self.status = tr("Radio is for YouTube Music songs").into();
+            return;
+        }
         let page = Page::Radio(seed.video_id);
         self.play_when_loaded = Some(page.clone());
         self.open(page, format!("Radio: {}", seed.title));
@@ -726,11 +764,11 @@ impl App {
     /// Queue ran out: keep going with YouTube Music's radio for the last song.
     fn continue_with_radio(&mut self) {
         let (Some(api), Some(vid)) = (self.api.clone(), self.now_playing().map(|t| t.video_id.clone())) else { return };
-        if self.radio_pending {
+        if self.radio_pending || rymplayer::local::is_local(&vid) {
             return;
         }
         self.radio_pending = true;
-        self.status = "Queue finished, continuing with radio...".into();
+        self.status = tr("Queue finished, continuing with radio...").into();
         self.spawn(async move { Event::Radio(s(api.radio(vid).await)) });
     }
 
@@ -774,7 +812,7 @@ impl App {
     /// `a`: add the selected song (or the playing one) to a playlist.
     fn open_picker(&mut self) {
         if !self.logged_in() {
-            self.status = "Sign in to add songs to playlists".into();
+            self.status = tr("Sign in to add songs to playlists").into();
             return;
         }
         let selected = (self.focus == Focus::Tracks)
@@ -810,7 +848,7 @@ impl App {
     /// Asks for a name; the playlist is made on Enter, with `song` in it if given.
     fn new_playlist(&mut self, song: Option<Track>) {
         if !self.logged_in() {
-            self.status = "Sign in to make playlists".into();
+            self.status = tr("Sign in to make playlists").into();
             return;
         }
         self.pick_song = song;
@@ -826,8 +864,8 @@ impl App {
 
     fn button(&mut self, click: ui::Click) {
         match click {
-            ui::Click::ForYou => self.open(Page::ForYou, "For you".into()),
-            ui::Click::History => self.open(Page::History, "History".into()),
+            ui::Click::ForYou => self.open(Page::ForYou, tr("For you").into()),
+            ui::Click::History => self.open(Page::History, tr("History").into()),
             ui::Click::Search => {
                 self.input = Some(Input::Search);
                 self.buffer.clear();
@@ -921,7 +959,7 @@ impl App {
         self.current = Some(i);
         self.pos = 0.0;
         self.lyrics = None;
-        self.lyrics_status = "Loading lyrics...".into();
+        self.lyrics_status = tr("Loading lyrics...").into();
         self.loading = true;
         if let Some(a) = &mut self.audio {
             a.stop();
@@ -930,9 +968,9 @@ impl App {
         let vid = track.video_id.clone();
         let v = vid.clone();
         // "Play songs in: VLC" with VLC installed: the song opens there instead.
-        let in_vlc = self.config.play_in_vlc && rymplayer::vlc::find().is_some();
+        let in_vlc = self.config.play_in_vlc && rymplayer::vlc::find().is_some() && !rymplayer::local::is_local(&vid);
         if self.config.play_in_vlc && !in_vlc {
-            self.status = "VLC isn't installed: playing here".into();
+            self.status = tr("VLC isn't installed: playing here").into();
         }
         if in_vlc {
             self.spawn(async move { Event::InVlc(v.clone(), s(stream::link(&v).await)) });
@@ -947,7 +985,9 @@ impl App {
         let api = self.api.clone();
         self.spawn(async move { Event::Lyrics(v, Ok(lyrics::for_track(api, track).await)) });
 
-        if let Some(api) = self.api.clone() {
+        if let Some(api) = self.api.clone()
+            && !rymplayer::local::is_local(&vid)
+        {
             // Fire and forget: keeps YouTube Music history in sync.
             tokio::spawn(api.report_play(vid));
         }
@@ -1012,6 +1052,10 @@ impl App {
 
     fn toggle_like(&mut self) {
         let (Some(t), Some(api)) = (self.now_playing().cloned(), self.api.clone()) else { return };
+        if rymplayer::local::is_local(&t.video_id) {
+            self.status = tr("Likes are for YouTube Music songs").into();
+            return;
+        }
         let vid = t.video_id.clone();
         let like = !self.liked.contains(&vid);
         self.liked.set(&vid, like);

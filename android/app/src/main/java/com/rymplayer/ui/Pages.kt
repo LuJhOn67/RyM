@@ -1,5 +1,7 @@
 package com.rymplayer.ui
 
+import com.rymplayer.I18n
+import com.rymplayer.tr
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
@@ -88,7 +91,7 @@ fun Modifier.appear(key: Any, delayMs: Int = 0): Modifier {
 fun HomePage(vm: AppViewModel) {
     if (vm.home.isEmpty()) {
         if (vm.homeLoading) Loading() else Box(Modifier.fillMaxSize(), Alignment.Center) {
-            TextButton(vm::loadHome) { Text("Nothing here yet. Tap to retry") }
+            TextButton(vm::loadHome) { Text(tr("Nothing here yet. Tap to retry")) }
         }
         return
     }
@@ -97,7 +100,7 @@ fun HomePage(vm: AppViewModel) {
     // Pull down for a fresh feed.
     androidx.compose.material3.pulltorefresh.PullToRefreshBox(isRefreshing = vm.homeLoading, onRefresh = vm::loadHome) {
     LazyColumn(contentPadding = pagePadding) {
-        item { Title("For you", Modifier.padding(top = 8.dp)) }
+        item { Title(tr("For you"), Modifier.padding(top = 8.dp)) }
         itemsIndexed(sections, key = { _, s -> s.first }) { i, (name, items) ->
             Column(Modifier.appear(name, 60 * i.coerceAtMost(6))) {
                 Text(name, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 10.dp))
@@ -123,11 +126,11 @@ private fun HomeCard(vm: AppViewModel, t: Track) {
 @Composable
 fun SearchPage(vm: AppViewModel) {
     Column(Modifier.fillMaxSize()) {
-        Title("Search")
+        Title(tr("Search"))
         OutlinedTextField(
             value = vm.query,
             onValueChange = { vm.query = it },
-            placeholder = { Text("Songs, artists, albums") },
+            placeholder = { Text(tr("Songs, artists, albums")) },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
@@ -143,11 +146,19 @@ fun LibraryPage(vm: AppViewModel) {
     var naming by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     LazyColumn(contentPadding = pagePadding) {
-        item { Title("Library") }
+        item { Title(tr("Library")) }
         item {
             LibraryRow(
-                "Download quality: " + if (vm.downloadBest) "Best" else "Fast",
-                if (vm.downloadBest) "yt-dlp with your account, 256 kbps for Premium, slower" else "About 160 kbps, in seconds · tap to change",
+                tr("Language") + ": " + if (I18n.arabic) "العربية" else "English",
+                tr("The words in the app · tap to change"),
+                Brush.linearGradient(listOf(Color(0xFF2D9CFF), Color(0xFF8E44FF))),
+                Icons.Default.Language,
+            ) { vm.toggleArabic() }
+        }
+        item {
+            LibraryRow(
+                tr("Download quality") + ": " + (if (vm.downloadBest) tr("Best") else tr("Fast")),
+                if (vm.downloadBest) tr("yt-dlp with your account, 256 kbps for Premium, slower") else tr("About 160 kbps, in seconds · tap to change"),
                 Brush.linearGradient(listOf(Color(0xFF8E44FF), Color(0xFF2878D0))),
                 Icons.Default.Download,
             ) { vm.toggleDownloadQuality() }
@@ -155,8 +166,8 @@ fun LibraryPage(vm: AppViewModel) {
         if (com.rymplayer.playback.Vlc.installed(context)) {
             item {
                 LibraryRow(
-                    "Play songs in: " + if (vm.playInVlc) "VLC" else "RyM",
-                    if (vm.playInVlc) "Each song opens in VLC · tap to play here" else "The built-in player · tap to use VLC",
+                    tr("Play songs in") + ": " + if (vm.playInVlc) "VLC" else "RyM",
+                    if (vm.playInVlc) tr("Each song opens in VLC · tap to play here") else tr("The built-in player · tap to use VLC"),
                     Brush.linearGradient(listOf(Color(0xFFFF8800), Color(0xFFFF5500))),
                     Icons.Default.PlayArrow,
                 ) { vm.togglePlayInVlc() }
@@ -164,38 +175,38 @@ fun LibraryPage(vm: AppViewModel) {
         }
         item {
             LibraryRow(
-                "Download connections: ${vm.connections}",
-                "How many at once (1-16); more use more of your line · tap to change",
+                "${tr("Download connections")}: ${vm.connections}",
+                tr("How many at once (1-16); more use more of your line · tap to change"),
                 Brush.linearGradient(listOf(Color(0xFF2878D0), Color(0xFF19B6A5))),
                 Icons.Default.Download,
             ) { vm.nextConnections() }
         }
         item {
             LibraryRow(
-                "Download piece size: " + if (vm.pieceMb == 0) "Open" else "${vm.pieceMb} MB",
-                if (vm.pieceMb == 0) "No fixed size: the song is split evenly over the connections" else "Each connection fetches ${vm.pieceMb} MB at a time · tap to change",
+                tr("Download piece size") + ": " + if (vm.pieceMb == 0) tr("Open") else "${vm.pieceMb} MB",
+                if (vm.pieceMb == 0) tr("No fixed size: the song is split evenly over the connections") else "${tr("Each connection fetches")} ${vm.pieceMb} MB ${tr("at a time · tap to change")}",
                 Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF8E44FF))),
                 Icons.Default.Download,
             ) { vm.nextPieceSize() }
         }
         item {
-            LibraryRow("Downloads", "Saved on this phone, play without internet", Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
-                vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", "Downloads"))
+            LibraryRow(tr("Downloads"), tr("Saved on this phone, play without internet"), Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
+                vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", tr("Downloads")))
             }
         }
         if (vm.api.signedIn) {
             item {
-                LibraryRow("Liked Music", "Auto playlist", Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.Default.Favorite) {
-                    vm.open(Screen.Songs(Screen.Kind.Playlist, LIKED_ID, "Liked Music"))
+                LibraryRow(tr("Liked Music"), tr("Auto playlist"), Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.Default.Favorite) {
+                    vm.open(Screen.Songs(Screen.Kind.Playlist, LIKED_ID, tr("Liked Music")))
                 }
             }
             item {
-                LibraryRow("History", "What you played", Brush.linearGradient(listOf(Color(0xFF2D9CFF), Color(0xFF00C2A8))), Icons.Default.History) {
-                    vm.open(Screen.Songs(Screen.Kind.History, "history", "History"))
+                LibraryRow(tr("History"), tr("What you played"), Brush.linearGradient(listOf(Color(0xFF2D9CFF), Color(0xFF00C2A8))), Icons.Default.History) {
+                    vm.open(Screen.Songs(Screen.Kind.History, "history", tr("History")))
                 }
             }
             item {
-                LibraryRow("New playlist", "", Brush.linearGradient(listOf(Color(0xFF3A3A42), Color(0xFF3A3A42))), Icons.AutoMirrored.Filled.PlaylistAdd) { naming = true }
+                LibraryRow(tr("New playlist"), "", Brush.linearGradient(listOf(Color(0xFF3A3A42), Color(0xFF3A3A42))), Icons.AutoMirrored.Filled.PlaylistAdd) { naming = true }
             }
             items(vm.playlists) { p ->
                 Row(
@@ -206,19 +217,19 @@ fun LibraryPage(vm: AppViewModel) {
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(p.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("Playlist", color = Dim, fontSize = 13.sp)
+                        Text(tr("Playlist"), color = Dim, fontSize = 13.sp)
                     }
                 }
             }
         } else {
-            item { Text("Sign in to see your playlists", color = Dim, modifier = Modifier.padding(16.dp)) }
+            item { Text(tr("Sign in to see your playlists"), color = Dim, modifier = Modifier.padding(16.dp)) }
         }
         // Account: sign out, or sign in when browsing without an account (both show the sign-in screen).
         item {
             if (vm.api.signedIn) {
-                LibraryRow("Sign out", "Use another account or none", Brush.linearGradient(listOf(Color(0xFF3A3A42), Color(0xFF3A3A42))), Icons.AutoMirrored.Filled.Logout) { vm.signOut() }
+                LibraryRow(tr("Sign out"), tr("Use another account or none"), Brush.linearGradient(listOf(Color(0xFF3A3A42), Color(0xFF3A3A42))), Icons.AutoMirrored.Filled.Logout) { vm.signOut() }
             } else {
-                LibraryRow("Sign in with Google", "Your playlists, likes and history", Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.AutoMirrored.Filled.Login) { vm.signOut() }
+                LibraryRow(tr("Sign in with Google"), tr("Your playlists, likes and history"), Brush.linearGradient(listOf(Color(0xFFFF2D55), Color(0xFF8E44FF))), Icons.AutoMirrored.Filled.Login) { vm.signOut() }
             }
         }
     }
@@ -250,24 +261,24 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
             Column(Modifier.fillMaxWidth().padding(16.dp).appear(page), horizontalAlignment = Alignment.CenterHorizontally) {
                 Cover(tracks.firstOrNull()?.thumb, 200.dp, 480, 12.dp)
                 Spacer(Modifier.height(14.dp))
-                Text(page.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(tr(page.title), fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text("${songs.size} songs", color = Dim, fontSize = 13.sp)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button({ vm.playFrom(tracks, tracks.indexOfFirst { it.link == null }.coerceAtLeast(0)) }, enabled = songs.isNotEmpty()) {
                         Icon(Icons.Default.PlayArrow, null)
                         Spacer(Modifier.width(6.dp))
-                        Text("Play")
+                        Text(tr("Play"))
                     }
                     OutlinedButton({ vm.playFrom(songs.shuffled(), 0) }, enabled = songs.isNotEmpty(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) {
                         Icon(Icons.Default.Shuffle, null)
                         Spacer(Modifier.width(6.dp))
-                        Text("Shuffle")
+                        Text(tr("Shuffle"))
                     }
                 }
             }
         }
-        if (tracks.isEmpty()) item { Text(vm.status.ifEmpty { "Nothing here" }, color = Dim, modifier = Modifier.padding(16.dp)) }
+        if (tracks.isEmpty()) item { Text(vm.status.ifEmpty { tr("Nothing here") }, color = Dim, modifier = Modifier.padding(16.dp)) }
         itemsIndexed(tracks) { i, t ->
             val onClick = { if (t.link != null) vm.openLink(t) else vm.playFrom(tracks, i) }
             SongRow(vm, t, current == t.videoId && t.videoId.isNotEmpty(), onClick)

@@ -89,8 +89,11 @@ pub fn cache_dir() -> PathBuf {
     crate::data_dir().join("cache")
 }
 
-/// Already-downloaded file for this video, if any.
+/// Already-downloaded file for this video, if any (a song on this device is its own file).
 pub fn cached(video_id: &str) -> Option<PathBuf> {
+    if let Some(p) = crate::local::path_of(video_id) {
+        return p.is_file().then_some(p);
+    }
     let dir = cache_dir();
     ["webm", "m4a", "opus", "mp4"]
         .iter()

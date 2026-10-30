@@ -8,6 +8,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Background, Border, Color, Element, Fill, FillPortion, Font, Length, font};
 
+use rymplayer::i18n::tr;
 use rymplayer::api::{self, Link, Track};
 use rymplayer::{fmt_time, lyrics};
 
@@ -79,15 +80,15 @@ impl Gui {
     }
 
     fn login(&self, p: Palette) -> Element<'_, Message> {
-        let mut google = button(line("Sign in with Google", 16, BOLD, p.pill_text)).padding([12, 28]).style(style::pill(p));
-        let mut guest = button(line("Continue without an account", 14, SEMI, p.text)).padding([10, 22]).style(style::chip(p));
+        let mut google = button(line(tr("Sign in with Google"), 16, BOLD, p.pill_text)).padding([12, 28]).style(style::pill(p));
+        let mut guest = button(line(tr("Continue without an account"), 14, SEMI, p.text)).padding([10, 22]).style(style::chip(p));
         if !self.busy {
             google = google.on_press(Message::SignIn);
             guest = guest.on_press(Message::Guest);
         }
         let card = column![
             self.logo(p, 34),
-            text("YouTube Music, your way").size(16).color(p.dim),
+            text(tr("YouTube Music, your way")).size(16).color(p.dim),
             space().height(8),
             google,
             guest,
@@ -127,25 +128,25 @@ impl Gui {
             tooltip(b, container(line(label, 13, SEMI, p.text)).padding([5, 10]).style(style::card_bg(p.menu, 6.0)), tooltip::Position::Right)
         };
         let logo = container(icon(Icon::Play, 16.0, Color::WHITE)).padding(8).style(style::card_bg(p.accent, 999.0));
-        let mut col = column![container(logo).padding([18, 0]), item(Icon::Home, "For you", Page::Home, "For you")]
+        let mut col = column![container(logo).padding([18, 0]), item(Icon::Home, tr("For you"), Page::Home, tr("For you"))]
             .spacing(8)
             .align_x(Alignment::Center);
-        col = col.push(item(Icon::Search, "Search", Page::Search(self.search.clone()), "Search"));
+        col = col.push(item(Icon::Search, tr("Search"), Page::Search(self.search.clone()), tr("Search")));
         if self.logged_in() {
             col = col
-                .push(item(Icon::Heart, "Liked music", Page::Playlist(api::LIKED_ID.into()), "Liked Music"))
-                .push(item(Icon::Library, "Library", Page::Library, "Library"))
-                .push(item(Icon::History, "History", Page::History, "History"));
+                .push(item(Icon::Heart, tr("Liked music"), Page::Playlist(api::LIKED_ID.into()), tr("Liked Music")))
+                .push(item(Icon::Library, tr("Library"), Page::Library, tr("Library")))
+                .push(item(Icon::History, tr("History"), Page::History, tr("History")));
         }
         col.push(space().height(Fill))
-            .push(item(Icon::Settings, "Settings", Page::Settings, "Settings"))
+            .push(item(Icon::Settings, tr("Settings"), Page::Settings, tr("Settings")))
             .push(space().height(12))
             .width(Fill)
             .into()
     }
 
     fn top_bar(&self, p: Palette) -> Element<'_, Message> {
-        let input = text_input("Search songs, albums, artists", &self.search)
+        let input = text_input(tr("Search songs, albums, artists"), &self.search)
             .on_input(Message::SearchChanged)
             .on_submit(Message::SearchSubmit)
             .padding([9, 6])
@@ -158,7 +159,7 @@ impl Gui {
         let status = container(line(self.status.clone(), 13, FONT, p.dim)).width(Fill).align_x(Alignment::End).clip(true);
         let mut r = row![search, status].spacing(20).padding([16, 28]).align_y(Alignment::Center);
         if !self.logged_in() {
-            r = r.push(button(line("Sign in", 13, BOLD, p.pill_text)).padding([7, 16]).style(style::pill(p)).on_press(Message::SignIn));
+            r = r.push(button(line(tr("Sign in"), 13, BOLD, p.pill_text)).padding([7, 16]).style(style::pill(p)).on_press(Message::SignIn));
         }
         r.into()
     }
@@ -171,7 +172,7 @@ impl Gui {
             Page::Home => self.home(p),
             Page::Library => self.library(p),
             Page::Settings => self.settings(p),
-            Page::Search(ref q) if q.is_empty() => center(text("Type in the search box above").size(15).color(p.dim)).into(),
+            Page::Search(ref q) if q.is_empty() => center(text(tr("Type in the search box above")).size(15).color(p.dim)).into(),
             _ => self.list(p),
         }
     }
@@ -234,7 +235,7 @@ impl Gui {
     }
 
     fn loading(&self, p: Palette) -> Element<'_, Message> {
-        let msg = if self.busy { "Loading..." } else if self.status.is_empty() { "Nothing here yet" } else { self.status.as_str() };
+        let msg = if self.busy { tr("Loading...") } else if self.status.is_empty() { tr("Nothing here yet") } else { self.status.as_str() };
         center(text(msg).size(15).color(p.dim)).into()
     }
 
@@ -250,20 +251,20 @@ impl Gui {
                 None => sections.push((&t.album, vec![(i, t)])),
             }
         }
-        let refresh = button(line(if self.busy { "Refreshing..." } else { "Refresh" }, 13, BOLD, p.pill_text))
+        let refresh = button(line(if self.busy { tr("Refreshing...") } else { tr("Refresh") }, 13, BOLD, p.pill_text))
             .padding([6, 16])
             .style(style::pill(p))
             .on_press_maybe((!self.busy).then_some(Message::Refresh));
-        let mut col = Column::new().spacing(26).padding(self.pad()).push(row![space().width(Fill), tooltip(refresh, text("New songs on top (F5)").size(12), tooltip::Position::Left)]);
+        let mut col = Column::new().spacing(26).padding(self.pad()).push(row![space().width(Fill), tooltip(refresh, text(tr("New songs on top (F5)")).size(12), tooltip::Position::Left)]);
         for (name, items) in sections {
             let cards = items
                 .into_iter()
                 .map(|(i, t)| {
                     let kind = match &t.link {
-                        Some(Link::Playlist(_)) => "Playlist",
-                        Some(Link::Album(_)) => "Album",
-                        Some(Link::Mix(_)) => "Mix",
-                        None => "Song",
+                        Some(Link::Playlist(_)) => tr("Playlist"),
+                        Some(Link::Album(_)) => tr("Album"),
+                        Some(Link::Mix(_)) => tr("Mix"),
+                        None => tr("Song"),
                     };
                     let msg = if t.link.is_none() { Message::PlaySong(t.clone()) } else { Message::PlayRow(i) };
                     let art = self.art(t.thumb.as_ref(), CARD_PX, CARD_ART, 6.0, p);
@@ -285,20 +286,20 @@ impl Gui {
             self.card(
                 p,
                 tile(Icon::HeartFilled, CARD_ART, Color::WHITE, p.accent),
-                "Liked Music",
-                "Auto playlist".into(),
-                format!("{} songs", self.liked.len()),
-                Message::Open(Page::Playlist(api::LIKED_ID.into()), "Liked Music".into()),
+                tr("Liked Music"),
+                tr("Auto playlist").into(),
+                format!("{} {}", self.liked.len(), tr("songs")),
+                Message::Open(Page::Playlist(api::LIKED_ID.into()), tr("Liked Music").into()),
             )
             .into(),
-            self.card(p, tile(Icon::Add, CARD_ART, p.dim, p.input_bg), "New playlist", "Make an empty one".into(), String::new(), Message::NewPlaylist(None))
+            self.card(p, tile(Icon::Add, CARD_ART, p.dim, p.input_bg), tr("New playlist"), tr("Make an empty one").into(), String::new(), Message::NewPlaylist(None))
                 .into(),
         ];
         for pl in &self.playlists {
             let art = self.art(pl.thumb.as_ref(), CARD_PX, CARD_ART, 6.0, p);
-            cards.push(self.card(p, art, &pl.title, "Playlist".into(), String::new(), Message::Open(Page::Playlist(pl.id.clone()), pl.title.clone())).into());
+            cards.push(self.card(p, art, &pl.title, tr("Playlist").into(), String::new(), Message::Open(Page::Playlist(pl.id.clone()), pl.title.clone())).into());
         }
-        scrollable(column![heading("Library", p), self.grid(cards)].spacing(12).padding(self.pad())).height(Fill).style(style::scroll(p)).into()
+        scrollable(column![heading(tr("Library"), p), self.grid(cards)].spacing(12).padding(self.pad())).height(Fill).style(style::scroll(p)).into()
     }
 
     fn settings(&self, p: Palette) -> Element<'_, Message> {
@@ -321,15 +322,24 @@ impl Gui {
             .collect();
 
         let on = self.config.gui_tint;
-        let toggle = button(line(if on { "On" } else { "Off" }, 13, BOLD, if on { p.pill_text } else { p.text }))
+        let toggle = button(line(if on { tr("On") } else { tr("Off") }, 13, BOLD, if on { p.pill_text } else { p.text }))
             .padding([6, 16])
             .style(move |theme: &iced::Theme, status| if on { style::pill(p)(theme, status) } else { style::chip(p)(theme, status) })
             .on_press(Message::ToggleTint);
         let tint_row = row![
-            column![line("Cover colors", 15, SEMI, p.text), line("Wash the background with a soft shade of the song's cover", 13, FONT, p.dim)]
+            column![line(tr("Cover colors"), 15, SEMI, p.text), line(tr("Wash the background with a soft shade of the song's cover"), 13, FONT, p.dim)]
                 .spacing(4)
                 .width(Fill),
             toggle,
+        ]
+        .align_y(Alignment::Center);
+
+        let lang_row = row![
+            column![line(tr("Language"), 15, SEMI, p.text), line(tr("The words in the apps"), 13, FONT, p.dim)].spacing(4).width(Fill),
+            button(line(if self.config.arabic { "العربية" } else { "English" }, 13, BOLD, p.pill_text))
+                .padding([6, 16])
+                .style(style::pill(p))
+                .on_press(Message::ToggleLanguage),
         ]
         .align_y(Alignment::Center);
 
@@ -341,8 +351,8 @@ impl Gui {
             .on_press(Message::ToggleGpu);
         let gpu_row = row![
             column![
-                line("Drawing", 15, SEMI, p.text),
-                line("Vulkan: works on most PCs. DirectX 12: same speed, less RAM. Processor: least RAM, less smooth. Applies after a restart.", 13, FONT, p.dim)
+                line(tr("Drawing"), 15, SEMI, p.text),
+                line(tr("Vulkan: works on most PCs. DirectX 12: same speed, less RAM. Processor: least RAM, less smooth. Applies after a restart."), 13, FONT, p.dim)
             ]
             .spacing(4)
             .width(Fill),
@@ -353,8 +363,8 @@ impl Gui {
         let source = self.config.source;
         let source_row = row![
             column![
-                line("Audio source", 15, SEMI, p.text),
-                line("InnerTube + yt-dlp: fast, and yt-dlp takes over when YouTube refuses. yt-dlp: slower start, Premium gets 256 kbps (needs yt-dlp and Node.js). InnerTube: straight from YouTube only.", 13, FONT, p.dim)
+                line(tr("Audio source"), 15, SEMI, p.text),
+                line(tr("InnerTube + yt-dlp: fast, and yt-dlp takes over when YouTube refuses. yt-dlp: slower start, Premium gets 256 kbps (needs yt-dlp and Node.js). InnerTube: straight from YouTube only."), 13, FONT, p.dim)
             ]
             .spacing(4)
             .width(Fill),
@@ -365,19 +375,19 @@ impl Gui {
         let best = self.config.download_best;
         let download_row = row![
             column![
-                line("Download quality", 15, SEMI, p.text),
-                line("Best: yt-dlp with your account, 256 kbps for Premium, a few seconds more. Fast: the playback file, about 160 kbps.", 13, FONT, p.dim)
+                line(tr("Download quality"), 15, SEMI, p.text),
+                line(tr("Best: yt-dlp with your account, 256 kbps for Premium, a few seconds more. Fast: the playback file, about 160 kbps."), 13, FONT, p.dim)
             ]
             .spacing(4)
             .width(Fill),
-            button(line(if best { "Best" } else { "Fast" }, 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::ToggleDownload),
+            button(line(if best { tr("Best") } else { tr("Fast") }, 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::ToggleDownload),
         ]
         .align_y(Alignment::Center);
 
         let parallel_row = row![
             column![
-                line("Download connections", 15, SEMI, p.text),
-                line("How many connections a song downloads over at once. YouTube limits each one, so more use more of your line.", 13, FONT, p.dim)
+                line(tr("Download connections"), 15, SEMI, p.text),
+                line(tr("How many connections a song downloads over at once. YouTube limits each one, so more use more of your line."), 13, FONT, p.dim)
             ]
             .spacing(4)
             .width(Fill),
@@ -389,8 +399,8 @@ impl Gui {
         .align_y(Alignment::Center);
         let piece_row = row![
             column![
-                line("Download piece size", 15, SEMI, p.text),
-                line("Open: the song is split evenly over the connections, no fixed size.", 13, FONT, p.dim)
+                line(tr("Download piece size"), 15, SEMI, p.text),
+                line(tr("Open: the song is split evenly over the connections, no fixed size."), 13, FONT, p.dim)
             ]
             .spacing(4)
             .width(Fill),
@@ -401,9 +411,9 @@ impl Gui {
         let vlc_found = rymplayer::vlc::find().is_some();
         let vlc_row = row![
             column![
-                line("Play songs in", 15, SEMI, p.text),
+                line(tr("Play songs in"), 15, SEMI, p.text),
                 line(
-                    if vlc_found { "VLC: each song opens in VLC. RyM: the built-in player." } else { "VLC isn't installed on this PC, so songs play here." },
+                    if vlc_found { tr("VLC: each song opens in VLC. RyM: the built-in player.") } else { tr("VLC isn't installed on this PC, so songs play here.") },
                     13,
                     FONT,
                     p.dim
@@ -416,17 +426,18 @@ impl Gui {
         .align_y(Alignment::Center);
 
         let account: Element<'_, Message> = if self.logged_in() {
-            button(line("Sign out", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
+            button(line(tr("Sign out"), 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
-            button(line("Sign in with Google", 13, BOLD, p.pill_text)).padding([7, 16]).style(style::pill(p)).on_press(Message::SignIn).into()
+            button(line(tr("Sign in with Google"), 13, BOLD, p.pill_text)).padding([7, 16]).style(style::pill(p)).on_press(Message::SignIn).into()
         };
 
         let col = column![
-            heading("Theme", p),
+            heading(tr("Theme"), p),
             self.grid(themes),
             space().height(8),
-            heading("Look", p),
+            heading(tr("Look"), p),
             tint_row,
+            lang_row,
             gpu_row,
             source_row,
             download_row,
@@ -434,7 +445,7 @@ impl Gui {
             piece_row,
             vlc_row,
             space().height(8),
-            heading("Account", p),
+            heading(tr("Account"), p),
             row![account],
         ]
         .spacing(14)
@@ -448,12 +459,12 @@ impl Gui {
             return self.loading(p);
         }
         let kind = match self.page {
-            Page::Search(_) => "SEARCH",
-            Page::History => "HISTORY",
-            Page::Album(_) => "ALBUM",
-            Page::Mix(_) | Page::Radio(_) => "MIX",
-            Page::Artist(_) => "ARTIST",
-            _ => "PLAYLIST",
+            Page::Search(_) => tr("SEARCH"),
+            Page::History => tr("HISTORY"),
+            Page::Album(_) => tr("ALBUM"),
+            Page::Mix(_) | Page::Radio(_) => tr("MIX"),
+            Page::Artist(_) => tr("ARTIST"),
+            _ => tr("PLAYLIST"),
         };
         let songs = self.tracks.iter().filter(|t| t.link.is_none()).count();
         let cover: Element<'_, Message> = if self.page == Page::Playlist(api::LIKED_ID.into()) {
@@ -467,9 +478,9 @@ impl Gui {
             column![
                 line(kind, 12, BOLD, p.dim),
                 container(line(&self.page_title, 30, BOLD, p.text)).clip(true),
-                line(format!("{songs} songs"), 13, FONT, p.dim),
+                line(format!("{songs} {}", tr("songs")), 13, FONT, p.dim),
                 space().height(4),
-                button(row![icon(Icon::Play, 18.0, p.pill_text), line("Play all", 14, BOLD, p.pill_text)].spacing(6).align_y(Alignment::Center))
+                button(row![icon(Icon::Play, 18.0, p.pill_text), line(tr("Play all"), 14, BOLD, p.pill_text)].spacing(6).align_y(Alignment::Center))
                     .padding([8, 20])
                     .style(style::pill(p))
                     .on_press(Message::PlayAll),
@@ -480,13 +491,13 @@ impl Gui {
         .align_y(Alignment::End);
 
         let playing = self.now_playing().map(|t| t.video_id.as_str());
-        let third = if self.page == Page::History { "When" } else { "Album" };
+        let third = if self.page == Page::History { tr("When") } else { tr("Album") };
         let head = row![
             container(line("#", 12, SEMI, p.dim)).width(40),
-            container(line("Title", 12, SEMI, p.dim)).width(FillPortion(5)),
+            container(line(tr("Title"), 12, SEMI, p.dim)).width(FillPortion(5)),
             container(line(third, 12, SEMI, p.dim)).width(FillPortion(3)),
             container(line("", 12, SEMI, p.dim)).width(76),
-            container(line("Time", 12, SEMI, p.dim)).width(48),
+            container(line(tr("Time"), 12, SEMI, p.dim)).width(48),
         ]
         .spacing(16)
         .padding([0, 10]);
@@ -558,7 +569,7 @@ impl Gui {
                 .style(style::ghost(p, false))
                 .on_press(Message::ShowTab(which))
         };
-        let tabs = row![tab("LYRICS", Tab::Lyrics), tab("UP NEXT", Tab::UpNext)];
+        let tabs = row![tab(tr("LYRICS"), Tab::Lyrics), tab(tr("UP NEXT"), Tab::UpNext)];
         let body = match self.tab {
             Tab::UpNext => self.up_next(p),
             Tab::Lyrics => self.lyrics_view(p),
@@ -584,7 +595,7 @@ impl Gui {
             col = col.push(mouse_area(b).on_right_press(Message::Menu(MenuFor { track: t.clone(), queue_index: Some(i) })));
         }
         if self.radio_pending {
-            col = col.push(container(text("Finding more songs...").size(13).color(p.dim)).padding(10));
+            col = col.push(container(text(tr("Finding more songs...")).size(13).color(p.dim)).padding(10));
         }
         scrollable(col.padding([8, 0])).height(Fill).style(style::scroll(p)).into()
     }
@@ -611,9 +622,9 @@ impl Gui {
         let Some(l) = &self.lyrics else {
             return panel(center(text(self.lyrics_status.clone()).size(18).font(BOLD).color(sung)).into());
         };
-        let source = text(format!("Lyrics from {}", l.source)).size(12).font(SEMI).color(sung);
+        let source = text(format!("{} {}", tr("Lyrics from"), l.source)).size(12).font(SEMI).color(sung);
         if l.synced.is_empty() {
-            let mut lines = Column::new().spacing(10).push(text("These lyrics aren't synced to the song").size(13).color(sung));
+            let mut lines = Column::new().spacing(10).push(text(tr("These lyrics aren't synced to the song")).size(13).color(sung));
             for s in &l.plain {
                 lines = lines.push(text(s.clone()).size(24).font(BOLD).color(Color::WHITE));
             }
@@ -667,7 +678,7 @@ impl Gui {
                 .align_y(Alignment::Center)
                 .into()
             }
-            None => line("Pick something to play", 14, FONT, p.dim).into(),
+            None => line(tr("Pick something to play"), 14, FONT, p.dim).into(),
         };
 
         let mut right = row![line(format!("{} / {}", fmt_time(shown), fmt_time(dur)), 12, FONT, p.dim), space().width(6)]
@@ -706,16 +717,16 @@ impl Gui {
     fn dialog<'a>(&'a self, p: Palette, d: &'a Dialog) -> Element<'a, Message> {
         let body: Column<'a, Message> = match d {
             Dialog::NewPlaylist(name, song) => {
-                let mut c = column![line("New playlist", 22, BOLD, p.text)];
+                let mut c = column![line(tr("New playlist"), 22, BOLD, p.text)];
                 if let Some(t) = song {
                     c = c.push(line(format!("with \"{}\"", t.title), 13, FONT, p.dim));
                 }
-                c.push(text_input("Title", name).on_input(Message::NameChanged).on_submit(Message::CreatePlaylist).padding([11, 16]).size(15).style(style::field(p)))
+                c.push(text_input(tr("Title"), name).on_input(Message::NameChanged).on_submit(Message::CreatePlaylist).padding([11, 16]).size(15).style(style::field(p)))
                     .push(
                         row![
                             space::horizontal(),
-                            button(line("Cancel", 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog),
-                            button(line("Create", 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::CreatePlaylist),
+                            button(line(tr("Cancel"), 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog),
+                            button(line(tr("Create"), 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::CreatePlaylist),
                         ]
                         .spacing(8),
                     )
@@ -732,14 +743,14 @@ impl Gui {
                     );
                 }
                 column![
-                    line("Save to playlist", 22, BOLD, p.text),
+                    line(tr("Save to playlist"), 22, BOLD, p.text),
                     line(&t.title, 13, FONT, p.dim),
-                    button(row![icon(Icon::Add, 18.0, p.text), line("New playlist", 14, SEMI, p.text)].spacing(8).align_y(Alignment::Center))
+                    button(row![icon(Icon::Add, 18.0, p.text), line(tr("New playlist"), 14, SEMI, p.text)].spacing(8).align_y(Alignment::Center))
                         .padding([9, 16])
                         .style(style::chip(p))
                         .on_press(Message::NewPlaylist(Some(t.clone()))),
                     scrollable(list).height(Length::Fixed(300.0)).style(style::scroll(p)),
-                    row![space::horizontal(), button(line("Close", 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog)],
+                    row![space::horizontal(), button(line(tr("Close"), 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog)],
                 ]
             }
         };
@@ -789,30 +800,30 @@ const LYRIC_STEP: f32 = LYRIC_SIZE * 1.3 + LYRIC_GAP;
 fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {
     let t = &m.track;
     let mut items = vec![
-        (Icon::Radio, "Start mix", Message::StartRadio(t.clone())),
-        (Icon::PlayNext, "Play next", Message::PlayNext(t.clone())),
-        (Icon::Queue, "Add to queue", Message::AddToQueue(t.clone())),
+        (Icon::Radio, tr("Start mix"), Message::StartRadio(t.clone())),
+        (Icon::PlayNext, tr("Play next"), Message::PlayNext(t.clone())),
+        (Icon::Queue, tr("Add to queue"), Message::AddToQueue(t.clone())),
     ];
     if gui.logged_in() {
         let liked = gui.liked.contains(&t.video_id);
-        items.push((Icon::ThumbUp, if liked { "Remove from liked songs" } else { "Add to liked songs" }, Message::Like(t.clone())));
+        items.push((Icon::ThumbUp, if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Message::Like(t.clone())));
     }
-    items.push((Icon::Download, "Download", Message::Download(t.clone())));
+    items.push((Icon::Download, tr("Download"), Message::Download(t.clone())));
     if gui.logged_in() {
-        items.push((Icon::PlaylistAdd, "Save to playlist", Message::AddTo(t.clone())));
+        items.push((Icon::PlaylistAdd, tr("Save to playlist"), Message::AddTo(t.clone())));
     }
     if let Some(i) = m.queue_index {
-        items.push((Icon::Remove, "Remove from queue", Message::RemoveFromQueue(i)));
+        items.push((Icon::Remove, tr("Remove from queue"), Message::RemoveFromQueue(i)));
     }
     if t.album_id.is_some() {
-        items.push((Icon::Album, "Go to album", Message::GoAlbum(t.clone())));
+        items.push((Icon::Album, tr("Go to album"), Message::GoAlbum(t.clone())));
     }
     if t.artist_id.is_some() {
-        items.push((Icon::Artist, "Go to artist", Message::GoArtist(t.clone())));
+        items.push((Icon::Artist, tr("Go to artist"), Message::GoArtist(t.clone())));
     }
-    items.push((Icon::Share, "Share", Message::Share(t.clone())));
+    items.push((Icon::Share, tr("Share"), Message::Share(t.clone())));
     if m.queue_index.is_some() && gui.queue.len() > 1 {
-        items.push((Icon::ClearQueue, "Dismiss queue", Message::DismissQueue));
+        items.push((Icon::ClearQueue, tr("Dismiss queue"), Message::DismissQueue));
     }
     items
 }

@@ -16,7 +16,7 @@ reqwest = { version = "0.13.5", features = ["json"] }
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-symphonia = { version = "0.6.1", default-features = false, features = ["mkv", "ogg", "isomp4", "aac", "opt-simd"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mkv", "ogg", "isomp4", "aac", "opt-simd", "mp3", "flac", "wav", "pcm", "vorbis", "alac", "id3v2"] }
 symphonia-adapter-libopus = "0.3"
 # The Google sign-in window (feature "webview", on by default).
 tao = { version = "0.37.2", optional = true }
@@ -27,6 +27,9 @@ music_api = { package = "ytmapi-rs", version = "0.3.3" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # The GTK 4 window app (needs GTK 4 to build): `cargo build --release --features gtk-ui --bin RymPlayer-GTK`.
 gtk = { package = "gtk4", version = "0.11.5", optional = true, features = ["v4_12"] }
+lofty = "0.25.5"
+ar-reshaper = "1.5.0"
+unicode-bidi = "0.3.18"
 
 [features]
 default = ["webview"]

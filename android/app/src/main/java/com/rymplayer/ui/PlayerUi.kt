@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import com.rymplayer.tr
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -91,7 +92,7 @@ fun MiniPlayer(vm: AppViewModel, tint: Color) {
                 Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
             }
             PlayPause(vm, 28)
-            IconButton(p::next) { Icon(Icons.Default.SkipNext, "Next", tint = Color.White) }
+            IconButton(p::next) { Icon(Icons.Default.SkipNext, tr("Next"), tint = Color.White) }
         }
         val dur = p.duration
         LinearProgressIndicator(
@@ -111,7 +112,7 @@ private fun PlayPause(vm: AppViewModel, size: Int) {
         CircularProgressIndicator(Modifier.size((size + 14).dp).padding(8.dp), strokeWidth = 2.dp, color = Color.White)
     } else {
         IconButton(p::toggle) {
-            Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", tint = Color.White, modifier = Modifier.size(size.dp))
+            Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, tr("Play"), tint = Color.White, modifier = Modifier.size(size.dp))
         }
     }
 }
@@ -126,10 +127,10 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
     val bg = Brush.verticalGradient(listOf(lerp(Color.Black, tint, 0.55f), lerp(Color.Black, tint, 0.18f), Color.Black))
     Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton({ vm.playerOpen = false }) { Icon(Icons.Default.KeyboardArrowDown, "Close", tint = Color.White, modifier = Modifier.size(30.dp)) }
-            Text("Now playing", Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.8f))
+            IconButton({ vm.playerOpen = false }) { Icon(Icons.Default.KeyboardArrowDown, tr("Close"), tint = Color.White, modifier = Modifier.size(30.dp)) }
+            Text(tr("Now playing"), Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.8f))
             IconButton({ vm.player.current?.let { vm.menu = com.rymplayer.MenuFor(it, vm.player.index) } }) {
-                Icon(Icons.Default.MoreVert, "More", tint = Color.White)
+                Icon(Icons.Default.MoreVert, tr("More"), tint = Color.White)
             }
         }
         AnimatedContent(panel, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(200)) }, modifier = Modifier.weight(1f), label = "panel") { shown ->
@@ -153,7 +154,7 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 if (vm.api.signedIn) {
                     val liked = t.videoId in vm.liked
                     IconButton({ vm.toggleLike(t) }) {
-                        Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Like", tint = if (liked) MaterialTheme.colorScheme.primary else Color.White)
+                        Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, tr("Like"), tint = if (liked) MaterialTheme.colorScheme.primary else Color.White)
                     }
                 }
             }
@@ -172,19 +173,19 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 Text(fmtTime(dur), color = Dim, fontSize = 12.sp)
             }
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(p::prev, Modifier.size(56.dp)) { Icon(Icons.Default.SkipPrevious, "Previous", tint = Color.White, modifier = Modifier.size(36.dp)) }
+                IconButton(p::prev, Modifier.size(56.dp)) { Icon(Icons.Default.SkipPrevious, tr("Previous"), tint = Color.White, modifier = Modifier.size(36.dp)) }
                 Box(Modifier.size(76.dp).clip(CircleShape).background(Color.White).clickable(onClick = p::toggle), contentAlignment = Alignment.Center) {
                     if (p.loading) {
                         CircularProgressIndicator(Modifier.size(34.dp), color = Color.Black, strokeWidth = 3.dp)
                     } else {
-                        Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", tint = Color.Black, modifier = Modifier.size(40.dp))
+                        Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, tr("Play"), tint = Color.Black, modifier = Modifier.size(40.dp))
                     }
                 }
-                IconButton(p::next, Modifier.size(56.dp)) { Icon(Icons.Default.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(36.dp)) }
+                IconButton(p::next, Modifier.size(56.dp)) { Icon(Icons.Default.SkipNext, tr("Next"), tint = Color.White, modifier = Modifier.size(36.dp)) }
             }
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                PanelButton(Icons.Default.Lyrics, "Lyrics", panel == Panel.Lyrics) { panel = if (panel == Panel.Lyrics) Panel.Cover else Panel.Lyrics }
-                PanelButton(Icons.AutoMirrored.Filled.QueueMusic, "Up next", panel == Panel.Queue) { panel = if (panel == Panel.Queue) Panel.Cover else Panel.Queue }
+                PanelButton(Icons.Default.Lyrics, tr("Lyrics"), panel == Panel.Lyrics) { panel = if (panel == Panel.Lyrics) Panel.Cover else Panel.Lyrics }
+                PanelButton(Icons.AutoMirrored.Filled.QueueMusic, tr("Up next"), panel == Panel.Queue) { panel = if (panel == Panel.Queue) Panel.Cover else Panel.Queue }
             }
         }
     }
@@ -227,9 +228,9 @@ private fun LyricsView(vm: AppViewModel, tint: Color) {
         val state = rememberLazyListState()
         if (l.synced.isEmpty()) {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp)) {
-                item { Text("These lyrics aren't synced to the song", color = sung, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp)) }
+                item { Text(tr("These lyrics aren't synced to the song"), color = sung, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp)) }
                 itemsIndexed(l.plain) { _, s -> Text(s, color = Color.White, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp)) }
-                item { Text("Lyrics from ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp)) }
+                item { Text("${tr("Lyrics from")} ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp)) }
             }
             return@Box
         }
@@ -260,7 +261,7 @@ private fun LyricsView(vm: AppViewModel, tint: Color) {
                     modifier = Modifier.fillMaxWidth().clickable { vm.player.seekTo(time) },
                 )
             }
-            item { Text("Lyrics from ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+            item { Text("${tr("Lyrics from")} ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         }
     }
 }

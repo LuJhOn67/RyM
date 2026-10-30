@@ -95,7 +95,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                         Streams.forget(context, it.videoId)
                         Streams.forgetLink(it.videoId)
                     }
-                    message = "Can't play: ${error.errorCodeName}"
+                    message = "${com.rymplayer.tr("Can't play")}: ${error.errorCodeName}"
                 }
             })
             ready.complete(c)
@@ -151,7 +151,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             // A downloaded song plays from Music/RymPlayer; others stream (or play from the cache).
             val url = Downloads.uriFor(context, t.videoId)?.toString()
                 ?: runCatching { Streams.playable(context, t.videoId) }
-                    .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "Can't play: ${it.message}" }
+                    .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "${com.rymplayer.tr("Can't play")}: ${it.message}" }
                     .getOrNull()
             if (url == null) {
                 loading = false
@@ -159,7 +159,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             }
             val c = runCatching { ready.await() }.getOrElse {
                 loading = false
-                message = "Can't start the player: ${it.message}"
+                message = "${com.rymplayer.tr("Can't start the player")}: ${it.message}"
                 return@launch
             }
             if (current?.videoId != t.videoId) return@launch

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{Align, Application, ApplicationWindow, Button, CssProvider, HeaderBar, Label, Orientation, Scale, gdk, glib};
+use rymplayer::i18n::tr;
 use rymplayer::api::{self, Api, LIKED_ID, Link, Playlist, Track};
 use rymplayer::audio::Audio;
 use rymplayer::config::{Config, Source};
@@ -554,6 +555,9 @@ fn now_playing(ui: &Shared) -> Option<Track> {
 
 fn build(app: &Application) {
     let config = Config::load();
+    rymplayer::i18n::set_arabic(config.arabic);
+    // Arabic: the whole window reads right to left.
+    gtk::Widget::set_default_direction(if config.arabic { gtk::TextDirection::Rtl } else { gtk::TextDirection::Ltr });
     stream::use_source(config.source);
     stream::download_best(config.download_best);
     stream::download_parallel(config.download_connections, config.download_piece_mb);
@@ -576,11 +580,11 @@ fn build(app: &Application) {
     let header = HeaderBar::new();
     let search = gtk::Entry::new();
     search.add_css_class("search");
-    search.set_placeholder_text(Some("Search songs, albums, artists"));
+    search.set_placeholder_text(Some(tr("Search songs, albums, artists")));
     search.set_primary_icon_name(Some("system-search-symbolic"));
     search.set_width_chars(46);
     header.set_title_widget(Some(&search));
-    let refresh = icon_button("view-refresh-symbolic", "Refresh: new songs on top (F5)", &[]);
+    let refresh = icon_button("view-refresh-symbolic", tr("Refresh: new songs on top (F5)"), &[]);
     header.pack_end(&refresh);
     window.set_titlebar(Some(&header));
 
@@ -589,11 +593,11 @@ fn build(app: &Application) {
     rail_box.add_css_class("rail");
     let mut rail = Vec::new();
     for (page, icon, text) in [
-        (Page::Home, "go-home-symbolic", "Home"),
-        (Page::Liked, "", "Liked"),
-        (Page::Library, "view-grid-symbolic", "Library"),
-        (Page::History, "document-open-recent-symbolic", "History"),
-        (Page::Settings, "emblem-system-symbolic", "Settings"),
+        (Page::Home, "go-home-symbolic", tr("Home")),
+        (Page::Liked, "", tr("Liked")),
+        (Page::Library, "view-grid-symbolic", tr("Library")),
+        (Page::History, "document-open-recent-symbolic", tr("History")),
+        (Page::Settings, "emblem-system-symbolic", tr("Settings")),
     ] {
         let b = Button::new();
         let col = gtk::Box::new(Orientation::Vertical, 3);
@@ -655,14 +659,14 @@ fn build(app: &Application) {
 
     // Player bar: song on the left, controls in the middle, lyrics and volume on the right.
     let bar_cover = picture(52, "cover");
-    let bar_title = label("Nothing playing", &["title"]);
+    let bar_title = label(tr("Nothing playing"), &["title"]);
     let bar_artist = label("", &["dim", "small"]);
     let names = gtk::Box::new(Orientation::Vertical, 2);
     names.set_valign(Align::Center);
     names.append(&bar_title);
     names.append(&bar_artist);
     names.set_hexpand(true);
-    let bar_heart = heart_button("Like");
+    let bar_heart = heart_button(tr("Like"));
     bar_heart.set_valign(Align::Center);
     let left = gtk::Box::new(Orientation::Horizontal, 12);
     left.set_size_request(320, -1);
@@ -670,12 +674,12 @@ fn build(app: &Application) {
     left.append(&names);
     left.append(&bar_heart);
 
-    let prev = icon_button("media-skip-backward-symbolic", "Previous", &[]);
+    let prev = icon_button("media-skip-backward-symbolic", tr("Previous"), &[]);
     let play = Button::from_icon_name("media-playback-start-symbolic");
     play.add_css_class("icon");
     play.add_css_class("play");
-    play.set_tooltip_text(Some("Play / pause"));
-    let next = icon_button("media-skip-forward-symbolic", "Next", &[]);
+    play.set_tooltip_text(Some(tr("Play / pause")));
+    let next = icon_button("media-skip-forward-symbolic", tr("Next"), &[]);
     let controls = gtk::Box::new(Orientation::Horizontal, 10);
     controls.set_halign(Align::Center);
     controls.append(&prev);
@@ -695,7 +699,7 @@ fn build(app: &Application) {
     center.append(&controls);
     center.append(&line);
 
-    let lyrics_toggle = icon_button("format-justify-left-symbolic", "Lyrics", &[]);
+    let lyrics_toggle = icon_button("format-justify-left-symbolic", tr("Lyrics"), &[]);
     let vol_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.set_draw_value(false);
@@ -791,7 +795,7 @@ fn build(app: &Application) {
         play_asked: Instant::now(),
     }));
     if ui.borrow().audio.is_none() {
-        toast(&ui, "No audio device found");
+        toast(&ui, tr("No audio device found"));
     }
 
     // ---- signals
@@ -975,10 +979,10 @@ fn open_link(ui: &Shared, t: &Track) {
 
 fn search_songs(ui: &Shared, q: String) {
     let Some(api) = api_of(ui) else {
-        toast(ui, "Still connecting to YouTube Music");
+        toast(ui, tr("Still connecting to YouTube Music"));
         return;
     };
-    open_songs(ui, format!("Results for \"{q}\""), api.search(q));
+    open_songs(ui, format!("{} \"{q}\"", tr("Results for")), api.search(q));
 }
 
 /// A fresh home feed: new songs on top, liked songs read on the way.
@@ -1043,8 +1047,8 @@ fn render_page(ui: &Shared) {
     };
     let body: gtk::Widget = match &page {
         Page::Home => home_page(ui, &mut wants),
-        Page::Liked => list_page(ui, "Liked Music", true, &mut wants),
-        Page::History => list_page(ui, "History", false, &mut wants),
+        Page::Liked => list_page(ui, tr("Liked Music"), true, &mut wants),
+        Page::History => list_page(ui, tr("History"), false, &mut wants),
         Page::Songs(title) => list_page(ui, title, false, &mut wants),
         Page::Library => library_page(ui, &mut wants),
         Page::Settings => settings_page(ui),
@@ -1077,13 +1081,13 @@ fn home_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
         (s.home.clone(), s.home_loading)
     };
     let top = gtk::Box::new(Orientation::Horizontal, 8);
-    let h = label("Home", &["heading"]);
+    let h = label(tr("Home"), &["heading"]);
     h.set_hexpand(true);
     top.append(&h);
-    let refresh = Button::with_label(if loading { "Refreshing…" } else { "Refresh" });
+    let refresh = Button::with_label(if loading { tr("Refreshing…") } else { tr("Refresh") });
     refresh.add_css_class("ghost");
     refresh.set_sensitive(!loading);
-    refresh.set_tooltip_text(Some("New songs on top (F5)"));
+    refresh.set_tooltip_text(Some(tr("New songs on top (F5)")));
     {
         let ui = ui.clone();
         refresh.connect_clicked(move |_| refresh_home(&ui));
@@ -1091,7 +1095,7 @@ fn home_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
     top.append(&refresh);
     page.append(&top);
     if home.is_empty() {
-        page.append(&note(if loading { "Loading your feed…" } else { "Nothing here yet" }));
+        page.append(&note(if loading { tr("Loading your feed…") } else { tr("Nothing here yet") }));
         return page.upcast();
     }
     // Shelves in YouTube's order ("New for you" first), each a grid of cards.
@@ -1129,10 +1133,10 @@ fn home_card(ui: &Shared, t: &Track, wants: &mut Wants) -> gtk::Widget {
     text.set_valign(Align::Center);
     text.set_hexpand(true);
     let kind = match &t.link {
-        Some(Link::Playlist(_)) => "Playlist",
-        Some(Link::Album(_)) => "Album",
-        Some(Link::Mix(_)) => "Mix",
-        None => "Song",
+        Some(Link::Playlist(_)) => tr("Playlist"),
+        Some(Link::Album(_)) => tr("Album"),
+        Some(Link::Mix(_)) => tr("Mix"),
+        None => tr("Song"),
     };
     let title = label(&t.title, &["title"]);
     title.set_max_width_chars(28);
@@ -1184,9 +1188,9 @@ fn list_page(ui: &Shared, title: &str, liked_page: bool, wants: &mut Wants) -> g
     let info = gtk::Box::new(Orientation::Vertical, 8);
     info.set_valign(Align::End);
     info.append(&label(title, &["heading"]));
-    let count = if loading && tracks.is_empty() { "Loading…".to_string() } else { format!("{} songs", tracks.len()) };
+    let count = if loading && tracks.is_empty() { tr("Loading…").to_string() } else { format!("{} {}", tracks.len(), tr("songs")) };
     info.append(&label(&count, &["dim"]));
-    let play_all = Button::with_label("Play all");
+    let play_all = Button::with_label(tr("Play all"));
     play_all.add_css_class("pill");
     play_all.set_halign(Align::Start);
     play_all.set_sensitive(!tracks.is_empty());
@@ -1202,11 +1206,11 @@ fn list_page(ui: &Shared, title: &str, liked_page: bool, wants: &mut Wants) -> g
 
     if tracks.is_empty() {
         let why = if loading {
-            "Loading…"
+            tr("Loading…")
         } else if !signed && matches!(ui.borrow().page, Page::Liked | Page::History) {
-            "Sign in (Settings) to see this"
+            tr("Sign in (Settings) to see this")
         } else {
-            "No songs here"
+            tr("No songs here")
         };
         page.append(&note(why));
         return page.upcast();
@@ -1240,7 +1244,7 @@ fn song_row(ui: &Shared, i: usize, t: &Track, songs: Rc<Vec<Track>>, playing: Op
     album.set_width_chars(22);
     album.set_max_width_chars(22);
     row.append(&album);
-    let heart = heart_button("Like");
+    let heart = heart_button(tr("Like"));
     heart.set_valign(Align::Center);
     {
         let ui = ui.clone();
@@ -1280,13 +1284,13 @@ fn song_row(ui: &Shared, i: usize, t: &Track, songs: Rc<Vec<Track>>, playing: Op
 
 fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
     let page = page_box();
-    page.append(&label("Library", &["heading"]));
+    page.append(&label(tr("Library"), &["heading"]));
     let (playlists, liked_count, signed) = {
         let s = ui.borrow();
         (s.playlists.clone(), s.liked.len(), s.api.as_ref().is_some_and(Api::logged_in))
     };
     if !signed {
-        page.append(&note("Sign in (Settings) to see your playlists"));
+        page.append(&note(tr("Sign in (Settings) to see your playlists")));
         return page.upcast();
     }
     let grid = gtk::FlowBox::new();
@@ -1312,7 +1316,7 @@ fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
     let img = heart_glyph(52);
     img.set_vexpand(true);
     tile.append(&img);
-    let liked = card(tile.upcast(), "Liked Music", &format!("{liked_count} songs"));
+    let liked = card(tile.upcast(), tr("Liked Music"), &format!("{liked_count} {}", tr("songs")));
     {
         let ui = ui.clone();
         liked.connect_clicked(move |_| go(&ui, Page::Liked));
@@ -1320,7 +1324,7 @@ fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
     grid.insert(&liked, -1);
     for p in playlists {
         let art = cover(&ui.borrow(), p.thumb.as_ref(), CARD_PX, 150, "cover-big", wants);
-        let b = card(art.upcast(), &p.title, "Playlist");
+        let b = card(art.upcast(), &p.title, tr("Playlist"));
         let ui = ui.clone();
         b.connect_clicked(move |_| {
             if let Some(api) = api_of(&ui) {
@@ -1350,8 +1354,24 @@ fn setting_row(title: &str, about: &str, control: &impl IsA<gtk::Widget>) -> gtk
 fn settings_page(ui: &Shared) -> gtk::Widget {
     let page = page_box();
     page.set_spacing(20);
-    page.append(&label("Settings", &["heading"]));
+    page.append(&label(tr("Settings"), &["heading"]));
     let config = ui.borrow().config.clone();
+
+    let language = gtk::DropDown::from_strings(&["English", "العربية"]);
+    language.set_selected(config.arabic as u32);
+    {
+        let ui = ui.clone();
+        language.connect_selected_notify(move |d| {
+            {
+                let mut s = ui.borrow_mut();
+                s.config.arabic = d.selected() == 1;
+                rymplayer::i18n::set_arabic(s.config.arabic);
+                s.config.save();
+            }
+            toast(&ui, tr("Restart the app to see everything in the new language"));
+        });
+    }
+    page.append(&setting_row(tr("Language"), tr("The words in the apps"), &language));
 
     let names: Vec<&str> = THEMES.iter().map(|t| t.name).collect();
     let theme = gtk::DropDown::from_strings(&names);
@@ -1365,9 +1385,9 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             apply_theme(&s.w.provider, s.config.gui_theme);
         });
     }
-    page.append(&setting_row("Theme", "Shared with RyM Legacy Player", &theme));
+    page.append(&setting_row(tr("Theme"), tr("Shared with RyM Legacy Player"), &theme));
 
-    let source = gtk::DropDown::from_strings(&["Auto", "yt-dlp", "InnerTube"]);
+    let source = gtk::DropDown::from_strings(&[tr("Auto"), "yt-dlp", "InnerTube"]);
     source.set_selected(match config.source {
         Source::Auto => 0,
         Source::YtDlp => 1,
@@ -1386,9 +1406,9 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             s.config.save();
         });
     }
-    page.append(&setting_row("Audio source", "Auto: YouTube's player API, yt-dlp when a song is refused", &source));
+    page.append(&setting_row(tr("Audio source"), tr("Auto: YouTube's player API, yt-dlp when a song is refused"), &source));
 
-    let quality = gtk::DropDown::from_strings(&["Best (yt-dlp)", "Fast (playback file)"]);
+    let quality = gtk::DropDown::from_strings(&[tr("Best (yt-dlp)"), tr("Fast (playback file)")]);
     quality.set_selected(if config.download_best { 0 } else { 1 });
     {
         let ui = ui.clone();
@@ -1399,7 +1419,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             s.config.save();
         });
     }
-    page.append(&setting_row("Download quality", "Songs saved with right-click > Download go to Music/RymPlayer", &quality));
+    page.append(&setting_row(tr("Download quality"), tr("Songs saved with right-click > Download go to Music/RymPlayer"), &quality));
 
     let steps = ["1", "2", "4", "6", "8", "10", "12", "16"];
     let connections = gtk::DropDown::from_strings(&steps);
@@ -1413,7 +1433,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             s.config.save();
         });
     }
-    page.append(&setting_row("Download connections", "Pieces of a song downloaded at once", &connections));
+    page.append(&setting_row(tr("Download connections"), tr("Pieces of a song downloaded at once"), &connections));
 
     if vlc::find().is_some() {
         let player = gtk::DropDown::from_strings(&["RyM", "VLC"]);
@@ -1429,19 +1449,19 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
                 }
             });
         }
-        page.append(&setting_row("Play songs in", "VLC: each song opens in VLC", &player));
+        page.append(&setting_row(tr("Play songs in"), tr("VLC: each song opens in VLC"), &player));
     }
 
     let signed = signed_in(ui);
-    let account = Button::with_label(if signed { "Sign out" } else { "Sign in with Google" });
+    let account = Button::with_label(if signed { tr("Sign out") } else { tr("Sign in with Google") });
     account.add_css_class(if signed { "ghost" } else { "pill" });
     {
         let ui = ui.clone();
         account.connect_clicked(move |_| sign_in_or_out(&ui));
     }
     page.append(&setting_row(
-        "Account",
-        if signed { "Signed in: likes and playlists sync with your phone" } else { "Sign in for your likes, playlists and history" },
+        tr("Account"),
+        if signed { tr("Signed in: likes and playlists sync with your phone") } else { tr("Sign in for your likes, playlists and history") },
         &account,
     ));
     page.upcast()
@@ -1462,11 +1482,11 @@ fn song_menu_on(ui: &Shared, widget: &impl IsA<gtk::Widget>, t: Track) {
         let col = gtk::Box::new(Orientation::Vertical, 0);
         let liked = ui.borrow().liked.contains(&t.video_id);
         let items: Vec<(&str, Box<dyn Fn(&Shared, &Track)>)> = vec![
-            ("Play next", Box::new(|ui: &Shared, t: &Track| play_next(ui, t.clone()))),
-            ("Add to queue", Box::new(|ui: &Shared, t: &Track| add_to_queue(ui, t.clone()))),
-            ("Start radio", Box::new(|ui: &Shared, t: &Track| play_with_radio(ui, t.clone()))),
-            (if liked { "Remove from liked songs" } else { "Add to liked songs" }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))),
-            ("Download", Box::new(|ui: &Shared, t: &Track| download(ui, t.clone()))),
+            (tr("Play next"), Box::new(|ui: &Shared, t: &Track| play_next(ui, t.clone()))),
+            (tr("Add to queue"), Box::new(|ui: &Shared, t: &Track| add_to_queue(ui, t.clone()))),
+            (tr("Start radio"), Box::new(|ui: &Shared, t: &Track| play_with_radio(ui, t.clone()))),
+            (if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))),
+            (tr("Download"), Box::new(|ui: &Shared, t: &Track| download(ui, t.clone()))),
         ];
         for (text, act) in items {
             let b = Button::with_label(text);
@@ -1536,7 +1556,7 @@ fn sync_liked(ui: &Shared, tracks: Vec<Track>) {
 
 fn toggle_like(ui: &Shared, t: &Track) {
     let Some(api) = api_of(ui).filter(Api::logged_in) else {
-        toast(ui, "Sign in to like songs");
+        toast(ui, tr("Sign in to like songs"));
         return;
     };
     let vid = t.video_id.clone();
@@ -1607,7 +1627,7 @@ fn play_next(ui: &Shared, t: Track) {
     if empty {
         play_at(ui, 0);
     } else {
-        toast(ui, "Plays next");
+        toast(ui, tr("Plays next"));
     }
 }
 
@@ -1619,7 +1639,7 @@ fn add_to_queue(ui: &Shared, t: Track) {
     };
     match start {
         Some(i) => play_at(ui, i),
-        None => toast(ui, "Added to the queue"),
+        None => toast(ui, tr("Added to the queue")),
     }
 }
 
@@ -1672,7 +1692,7 @@ fn play_at(ui: &Shared, i: usize) {
             }
         }
         clear(&s.w.lyrics_box);
-        s.w.lyrics_box.append(&label("Looking for lyrics…", &["lyrics-note"]));
+        s.w.lyrics_box.append(&label(tr("Looking for lyrics…"), &["lyrics-note"]));
         let in_vlc = s.config.play_in_vlc && vlc::find().is_some();
         if !in_vlc {
             vlc::stop(&mut s.vlc);
@@ -1795,7 +1815,7 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     clear(&s.w.lyrics_box);
     s.lyric_line = None;
     let Some(lyrics) = lyrics else {
-        s.w.lyrics_box.append(&label("No lyrics for this song", &["lyrics-note"]));
+        s.w.lyrics_box.append(&label(tr("No lyrics for this song"), &["lyrics-note"]));
         s.lyrics = None;
         return;
     };
@@ -1805,7 +1825,7 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
         lyrics.synced.iter().map(|(_, l)| if l.is_empty() { "♪".to_string() } else { l.clone() }).collect()
     };
     if lyrics.synced.is_empty() {
-        let note = label("These lyrics aren't synced to the song", &["lyrics-note"]);
+        let note = label(tr("These lyrics aren't synced to the song"), &["lyrics-note"]);
         note.set_margin_bottom(10);
         s.w.lyrics_box.append(&note);
     }
@@ -1832,7 +1852,7 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
         }
         s.w.lyrics_box.append(&l);
     }
-    let src = label(&format!("Lyrics from {}", lyrics.source), &["lyrics-note", "small"]);
+    let src = label(&format!("{} {}", tr("Lyrics from"), lyrics.source), &["lyrics-note", "small"]);
     src.set_margin_top(18);
     s.w.lyrics_box.append(&src);
     s.lyrics = Some(lyrics);
@@ -1952,7 +1972,7 @@ fn sign_in_or_out(ui: &Shared) {
         go(ui, Page::Home);
         return;
     }
-    toast(ui, "Finish signing in in the Google window");
+    toast(ui, tr("Finish signing in in the Google window"));
     post(ui, async {
         let r = async {
             let cookie = login::sign_in().await?;
@@ -1975,7 +1995,7 @@ fn poll_events(ui: &Shared) {
                     post(ui, async move { Ev::Playlists(api.library_playlists().await) });
                 }
                 if matches!(mode, AuthMode::NewLogin) {
-                    toast(ui, "Signed in");
+                    toast(ui, tr("Signed in"));
                 }
                 ui.borrow_mut().home_loading = false;
                 refresh_home(ui);
@@ -1985,10 +2005,10 @@ fn poll_events(ui: &Shared) {
             }
             Ev::Auth(mode, Err(e)) => match mode {
                 AuthMode::Saved => {
-                    toast(ui, "Your saved sign-in ended: continuing as a guest");
+                    toast(ui, tr("Your saved sign-in ended: continuing as a guest"));
                     post(ui, async { Ev::Auth(AuthMode::Guest, Api::guest().await) });
                 }
-                AuthMode::NewLogin => toast(ui, &format!("Sign-in failed: {e}")),
+                AuthMode::NewLogin => toast(ui, &format!("{}: {e}", tr("Sign-in failed"))),
                 AuthMode::Guest => {
                     ui.borrow_mut().home_loading = false;
                     toast(ui, &format!("Can't reach YouTube Music: {e}"));
@@ -2011,7 +2031,7 @@ fn poll_events(ui: &Shared) {
                             Ev::Done
                         });
                     }
-                    Err(e) => toast(ui, &format!("Home: {e}")),
+                    Err(e) => toast(ui, &format!("{}: {e}", tr("Home"))),
                 }
                 if ui.borrow().page == Page::Home {
                     render(ui);
@@ -2107,13 +2127,13 @@ fn poll_events(ui: &Shared) {
                         match vlc::play(&exe, &url, &headers, &format!("{} - {}", t.artist, t.title)) {
                             Ok(child) => {
                                 s.vlc = Some(child);
-                                "Playing in VLC".to_string()
+                                tr("Playing in VLC").to_string()
                             }
                             Err(e) => format!("VLC: {e}"),
                         }
                     }
-                    (Err(e), _) => format!("Can't play: {e}"),
-                    (_, None) => "VLC isn't installed".into(),
+                    (Err(e), _) => format!("{}: {e}", tr("Can't play")),
+                    (_, None) => tr("VLC isn't installed").into(),
                 };
                 drop(s);
                 toast(ui, &msg);
@@ -2133,7 +2153,7 @@ fn poll_events(ui: &Shared) {
                 // Take back the heart that was shown right away.
                 ui.borrow_mut().liked.set(&vid, !like);
                 refresh_hearts(ui);
-                toast(ui, &format!("Like failed: {e}"));
+                toast(ui, &format!("{}: {e}", tr("Like failed")));
             }
             Ev::Rated(..) => {}
             Ev::Radio(result) => {
@@ -2152,8 +2172,8 @@ fn poll_events(ui: &Shared) {
                     }
                 }
             }
-            Ev::Downloaded(Ok(p)) => toast(ui, &format!("Saved to {}", p.display())),
-            Ev::Downloaded(Err(e)) => toast(ui, &format!("Download failed: {e}")),
+            Ev::Downloaded(Ok(p)) => toast(ui, &format!("{} {}", tr("Saved to"), p.display())),
+            Ev::Downloaded(Err(e)) => toast(ui, &format!("{}: {e}", tr("Download failed"))),
             Ev::Done => {}
         }
     }
