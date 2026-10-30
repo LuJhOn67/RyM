@@ -1,5 +1,7 @@
 package com.rymplayer.ui
 
+import androidx.compose.material.icons.filled.PlayArrow
+
 import androidx.compose.material3.ExperimentalMaterial3Api
 
 import androidx.compose.material3.ModalBottomSheet
@@ -197,6 +199,9 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         item("Play next", Icons.Default.SkipNext) { vm.player.playNext(t) }()
         item("Add to queue", Icons.AutoMirrored.Filled.QueueMusic) { vm.player.append(listOf(t)) }()
         item("Download", Icons.Default.Download) { vm.download(t) }()
+        if (com.rymplayer.playback.Vlc.installed(LocalContext.current)) {
+            item("Open in VLC", Icons.Default.PlayArrow) { vm.openInVlc(t) }()
+        }
         if (vm.api.signedIn) {
             val liked = t.videoId in vm.liked
             item(if (liked) "Remove from liked songs" else "Add to liked songs", if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder) { vm.toggleLike(t) }()

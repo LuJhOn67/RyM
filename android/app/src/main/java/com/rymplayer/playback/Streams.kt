@@ -91,6 +91,9 @@ object Streams {
         }
     }
 
+    /** The song's stream link (not a cached file), for an outside player. */
+    suspend fun streamLink(videoId: String): String = kotlinx.coroutines.withContext(Dispatchers.IO) { cachedLink(videoId).url }
+
     /** Looks up the next song's link while this one plays. */
     fun prefetchLink(videoId: String) {
         scope.async { lookups.withPermit { runCatching { RangedHttpDataSource.warm(cachedLink(videoId).url) } } }

@@ -141,6 +141,7 @@ fun SearchPage(vm: AppViewModel) {
 @Composable
 fun LibraryPage(vm: AppViewModel) {
     var naming by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     LazyColumn(contentPadding = pagePadding) {
         item { Title("Library") }
         item {
@@ -150,6 +151,16 @@ fun LibraryPage(vm: AppViewModel) {
                 Brush.linearGradient(listOf(Color(0xFF8E44FF), Color(0xFF2878D0))),
                 Icons.Default.Download,
             ) { vm.toggleDownloadQuality() }
+        }
+        if (com.rymplayer.playback.Vlc.installed(context)) {
+            item {
+                LibraryRow(
+                    "Play songs in: " + if (vm.playInVlc) "VLC" else "RyM",
+                    if (vm.playInVlc) "Each song opens in VLC · tap to play here" else "The built-in player · tap to use VLC",
+                    Brush.linearGradient(listOf(Color(0xFFFF8800), Color(0xFFFF5500))),
+                    Icons.Default.PlayArrow,
+                ) { vm.togglePlayInVlc() }
+            }
         }
         item {
             LibraryRow(

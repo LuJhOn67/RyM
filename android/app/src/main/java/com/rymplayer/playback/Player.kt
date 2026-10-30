@@ -35,6 +35,8 @@ import kotlinx.coroutines.launch
  */
 class Player(private val context: Context, private val scope: CoroutineScope) {
     lateinit var api: MusicApi
+    /** Hand songs to VLC instead of playing them here (see [Vlc]). */
+    @Volatile var useVlc = false
     var onTrackChanged: (Track?) -> Unit = {}
 
     val queue = mutableStateListOf<Track>()
@@ -139,6 +141,13 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         loading = true
         loadJob?.cancel()
         loadJob = scope.launch {
+            // Play songs in VLC (Library setting), when it's installed; the built-in player otherwise.
+            if (useVlc && Vlc.installed(context)) {
+                val sent = runCatching { Vlc.open(context, t) }
+                    .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "VLC couldn't open it: ${it.message}" }
+                loading = false
+                if (sent.isSuccess) return@launch
+            }
             // A downloaded song plays from Music/RymPlayer; others stream (or play from the cache).
             val url = Downloads.uriFor(context, t.videoId)?.toString()
                 ?: runCatching { Streams.playable(context, t.videoId) }
