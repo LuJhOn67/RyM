@@ -152,17 +152,14 @@ fn main() {
     app.run();
 }
 
-/// Keep a portable GTK runtime beside the executable instead of requiring a system install.
+/// Windows: a portable GTK runtime beside the program (its DLLs next to the .exe, its data in
+/// `share` and `lib`) instead of a system install.
 fn configure_gtk_runtime() {
     #[cfg(windows)]
     if let Some(root) = std::env::current_exe().ok().and_then(|path| path.parent().map(std::path::Path::to_path_buf)) {
-        let bin = root.join("bin");
-        if bin.is_dir() {
-            let old_path = std::env::var_os("PATH").unwrap_or_default();
-            let path = format!("{};{}", bin.display(), old_path.to_string_lossy());
+        if root.join("share").join("glib-2.0").is_dir() {
             // SAFETY: this runs before GTK or Tokio creates any threads.
             unsafe {
-                std::env::set_var("PATH", path);
                 std::env::set_var("GTK_DATA_PREFIX", &root);
                 std::env::set_var("GTK_EXE_PREFIX", &root);
                 std::env::set_var("GSETTINGS_SCHEMA_DIR", root.join("share/glib-2.0/schemas"));
