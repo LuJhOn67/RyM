@@ -250,7 +250,11 @@ impl Gui {
                 None => sections.push((&t.album, vec![(i, t)])),
             }
         }
-        let mut col = Column::new().spacing(26).padding(self.pad());
+        let refresh = button(line(if self.busy { "Refreshing..." } else { "Refresh" }, 13, BOLD, p.pill_text))
+            .padding([6, 16])
+            .style(style::pill(p))
+            .on_press_maybe((!self.busy).then_some(Message::Refresh));
+        let mut col = Column::new().spacing(26).padding(self.pad()).push(row![space().width(Fill), tooltip(refresh, text("New songs on top (F5)").size(12), tooltip::Position::Left)]);
         for (name, items) in sections {
             let cards = items
                 .into_iter()

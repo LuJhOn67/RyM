@@ -138,6 +138,13 @@ pub enum Message {
     Lyrics(String, Option<Lyrics>),
     Like(Track),
     Rated(String, bool, Result<(), String>),
+    /// A fresh home feed and the liked songs read on the way.
+    Refreshed(Result<(Vec<Track>, Option<Vec<Track>>), String>),
+    /// New home feed (new songs on top) and the liked songs again.
+    Refresh,
+    /// Time to re-read the liked songs (likes made on the phone show here).
+    SyncLikes,
+    Liked(Result<Vec<Track>, String>),
 
     Image(String, Option<Thumb>),
     ToggleNowPlaying,
@@ -182,6 +189,16 @@ pub enum Message {
     Dislike(Track),
     Disliked(String, bool, Result<(), String>),
     Ignore,
+}
+
+fn covers_http() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| reqwest::Client::builder().timeout(Duration::from_secs(20)).build().expect("http client"))
+}
+
+fn covers_limit() -> &'static tokio::sync::Semaphore {
+    static S: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    S.get_or_init(|| tokio::sync::Semaphore::new(6))
 }
 
 fn s<T>(r: anyhow::Result<T>) -> Result<T, String> {
@@ -268,7 +285,7 @@ pub struct Gui {
     pub tracks: Vec<Track>,
     pub search: String,
     pub playlists: Vec<Playlist>,
-    pub liked: HashSet<String>,
+    pub liked: rymplayer::likes::Likes,
 
     pub queue: Vec<Track>,
     pub current: Option<usize>,
@@ -345,7 +362,7 @@ impl Gui {
             tracks: Vec::new(),
             search: String::new(),
             playlists: Vec::new(),
-            liked: HashSet::new(),
+            liked: rymplayer::likes::Likes::default(),
             queue: Vec::new(),
             current: None,
             loading: false,
@@ -436,8 +453,14 @@ impl Gui {
         // each time the mouse moves. Right-click positions come from `right_click::tracker`.
         let mut subs = vec![iced::event::listen_with(|event, _status, _window| match event {
             iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key: iced::keyboard::Key::Named(iced::keyboard::key::Named::F5), .. }) => {
+                Some(Message::Refresh)
+            }
             _ => None,
         })];
+        if self.logged_in() {
+            subs.push(iced::time::every(rymplayer::likes::SYNC_EVERY).map(|_| Message::SyncLikes));
+        }
         if self.current.is_some() {
             subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
@@ -551,7 +574,10 @@ impl Gui {
                 {
                     let url = url.clone();
                     async move {
-                        let r = reqwest::get(&url).await.ok()?.error_for_status().ok()?;
+                        // One shared connection pool, a few covers at a time: a long playlist's
+                        // covers shouldn't hold up the song that's starting.
+                        let _turn = covers_limit().acquire().await.ok()?;
+                        let r = covers_http().get(&url).send().await.ok()?.error_for_status().ok()?;
                         let bytes = r.bytes().await.ok()?.to_vec();
                         let tint = px == ROW_PX;
                         tokio::task::spawn_blocking(move || Thumb::new(bytes, tint)).await.ok().flatten()
@@ -596,11 +622,8 @@ impl Gui {
                 self.api = Some(api.clone());
                 let mut tasks = vec![self.open(Page::Home, "For you".into())];
                 if user {
+                    // Liked songs come with the home feed, so hearts show everywhere.
                     tasks.push(Task::perform(api.clone().library_playlists(), |r| Message::Playlists(s(r))));
-                    // Liked songs, so hearts show everywhere.
-                    tasks.push(Task::perform(api.playlist_tracks(api::LIKED_ID.into()), |r| {
-                        Message::Loaded(Page::Playlist(api::LIKED_ID.into()), s(r))
-                    }));
                 }
                 return Task::batch(tasks);
             }
@@ -650,7 +673,7 @@ impl Gui {
                 if page == Page::Playlist(api::LIKED_ID.into())
                     && let Ok(t) = &result
                 {
-                    self.liked.extend(t.iter().map(|t| t.video_id.clone()));
+                    self.liked.sync(t.iter().map(|t| t.video_id.clone()));
                 }
                 if page != self.page {
                     return Task::none();
@@ -668,7 +691,9 @@ impl Gui {
                         let px = if self.page == Page::Home { CARD_PX } else { ROW_PX };
                         let wanted: Vec<_> = self.tracks.iter().map(|t| t.thumb.clone()).collect();
                         let header = self.tracks.first().map(|t| t.thumb.clone());
-                        let mut tasks = vec![self.want_images(wanted.iter().map(|u| (u, px)))];
+                        // The first songs' links are looked up now, so a tap starts at once.
+                        let ids = self.tracks.iter().filter(|t| t.link.is_none()).map(|t| t.video_id.clone()).collect();
+                        let mut tasks = vec![Task::perform(stream::look_ahead(ids), |_| Message::Ignore), self.want_images(wanted.iter().map(|u| (u, px)))];
                         if let Some(h) = &header {
                             tasks.push(self.want_images([(h, CARD_PX)]));
                         }
@@ -694,6 +719,9 @@ impl Gui {
 
             Message::PlayRow(i) => {
                 let Some(t) = self.tracks.get(i).cloned() else { return Task::none() };
+                if self.page == Page::Home {
+                    rymplayer::feed::opened(&t);
+                }
                 return match t.link {
                     Some(Link::Playlist(id)) => self.open(Page::Playlist(id), t.title),
                     Some(Link::Album(id)) => self.open(Page::Album(id), t.title),
@@ -704,6 +732,9 @@ impl Gui {
             Message::PlayAll => return self.play_list(0),
             Message::PlayQueue(i) => return self.play(i),
             Message::PlaySong(t) => {
+                if self.page == Page::Home {
+                    rymplayer::feed::opened(&t);
+                }
                 self.queue = vec![t];
                 let play = self.play(0);
                 return Task::batch([play, self.continue_with_radio()]);
@@ -834,23 +865,54 @@ impl Gui {
                 let Some(api) = self.api.clone() else { return Task::none() };
                 let vid = t.video_id.clone();
                 let like = !self.liked.contains(&vid);
+                self.liked.set(&vid, like);
                 if like {
-                    self.liked.insert(vid.clone());
                     self.disliked.remove(&vid);
-                } else {
-                    self.liked.remove(&vid);
+                }
+                // The Liked Music page follows at once.
+                if self.page == Page::Playlist(api::LIKED_ID.into()) {
+                    if like {
+                        if !self.tracks.iter().any(|x| x.video_id == vid) {
+                            self.tracks.insert(0, t.clone());
+                        }
+                    } else {
+                        self.tracks.retain(|x| x.video_id != vid);
+                    }
                 }
                 return Task::perform(api.rate(vid.clone(), like), move |r| Message::Rated(vid.clone(), like, s(r)));
             }
             Message::Rated(vid, like, Err(e)) => {
-                if like {
-                    self.liked.remove(&vid);
-                } else {
-                    self.liked.insert(vid);
-                }
+                self.liked.set(&vid, !like);
                 self.status = format!("Like failed: {e}");
             }
             Message::Rated(..) => {}
+            Message::Refreshed(result) => {
+                let result = result.map(|(home, liked)| {
+                    if let Some(l) = liked {
+                        self.liked.sync(l.iter().map(|t| t.video_id.clone()));
+                    }
+                    home
+                });
+                return self.update(Message::Loaded(Page::Home, result));
+            }
+            Message::Refresh => {
+                if self.api.is_none() {
+                    return Task::none();
+                }
+                self.now_playing_open = false;
+                return self.open(Page::Home, "For you".into());
+            }
+            Message::SyncLikes => {
+                let Some(api) = self.api.clone().filter(Api::logged_in) else { return Task::none() };
+                return Task::perform(api.playlist_tracks(api::LIKED_ID.into()), |r| Message::Liked(s(r)));
+            }
+            Message::Liked(Ok(t)) => {
+                self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                if self.page == Page::Playlist(api::LIKED_ID.into()) && !self.busy {
+                    self.tracks = t;
+                }
+            }
+            Message::Liked(Err(_)) => {}
 
             Message::Image(url, Some(t)) => {
                 self.images.insert(url, t);
@@ -1034,7 +1096,7 @@ impl Gui {
                 let mut tasks = Vec::new();
                 if on {
                     self.disliked.insert(vid.clone());
-                    self.liked.remove(&vid);
+                    self.liked.set(&vid, false);
                     // Like YouTube Music: a thumbs-down on the playing song skips it.
                     if self.now_playing().map(|n| &n.video_id) == Some(&vid) {
                         tasks.push(self.next());
@@ -1068,6 +1130,12 @@ impl Gui {
         self.busy = true;
         if !keep {
             self.tracks.clear();
+        }
+        if page == Page::Home {
+            return Task::perform(
+                async move { rymplayer::feed::refresh(api).await.map(|r| (r.home, r.liked)) },
+                |r| Message::Refreshed(s(r)),
+            );
         }
         Task::perform(
             {
@@ -1261,7 +1329,7 @@ mod shots {
         gui.tracks = home;
 
         let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
-        gui.liked = liked.iter().map(|t| t.video_id.clone()).collect();
+        gui.liked.sync(liked.iter().map(|t| t.video_id.clone()));
         fetch_images(&mut gui, liked.iter().take(30).map(|t| (t.thumb.clone(), ROW_PX)).collect()).await;
         fetch_images(&mut gui, liked.iter().take(1).map(|t| (t.thumb.clone(), CARD_PX)).collect()).await;
         fetch_images(&mut gui, liked.iter().take(1).map(|t| (t.thumb.clone(), ART_PX)).collect()).await;

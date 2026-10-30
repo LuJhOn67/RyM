@@ -426,6 +426,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("d", "download"),
         ("/", "search"),
         ("h", "history"),
+        ("F5/u", "refresh"),
         ("a", "add to playlist"),
         ("tab", "switch"),
         (",", "settings"),
@@ -524,7 +525,7 @@ mod tests {
         a.track_state.select(Some(1));
         a.queue = a.tracks.clone();
         a.current = Some(1);
-        a.liked.insert("v2".into());
+        a.liked.set("v2", true);
         a.lyrics = Some(lyrics::Lyrics {
             synced: lyrics::parse_lrc("[00:00.00]first line\n[00:05.00]second line\n[00:10.00]third line"),
             plain: vec![],
