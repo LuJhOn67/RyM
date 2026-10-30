@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rymplayer.data.Downloads
 import com.rymplayer.data.FeedMemory
+import com.rymplayer.data.PageCache
 import com.rymplayer.data.LIKED_ID
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
@@ -21,6 +22,8 @@ import com.rymplayer.data.MusicApi
 import com.rymplayer.data.parseDuration
 import com.rymplayer.playback.Player
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /** The song a menu is open for, and its place in the queue when opened from "Up next". */
@@ -86,13 +89,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         com.rymplayer.playback.Streams.cookie = cookie
         signedIn = cookie != null
         player.api = api
+        // Last saved home and playlists show at once; fresh ones replace them when they arrive.
+        if (home.isEmpty()) home = PageCache.loadTracks(getApplication(), "home")
+        if (cookie != null && playlists.isEmpty()) playlists = PageCache.loadPlaylists(getApplication())
         loadHome()
         if (api.signedIn) {
             viewModelScope.launch {
                 try {
-                    playlists = api.libraryPlaylists()
+                    // Both at once instead of one after the other.
+                    val (lists, likedSongs) = coroutineScope {
+                        val lists = async { api.libraryPlaylists() }
+                        val likedSongs = async { api.playlist(LIKED_ID) }
+                        lists.await() to likedSongs.await()
+                    }
+                    playlists = lists
+                    PageCache.savePlaylists(getApplication(), lists)
                     liked.clear()
-                    liked += api.playlist(LIKED_ID).map { it.videoId }
+                    liked += likedSongs.map { it.videoId }
                 } catch (e: SignedOutException) {
                     status = "Your session ended. Sign in again."
                     signOut()
@@ -115,6 +128,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         playlists = emptyList()
         liked.clear()
         stack.clear()
+        // The saved home and playlists were this account's.
+        PageCache.clear(getApplication())
+        home = emptyList()
     }
 
     // ---------------------------------------------------------------- navigation
@@ -166,9 +182,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun loadHome() {
         homeLoading = true
         viewModelScope.launch {
-            home = runCatching { api.home() }.onFailure { status = it.message.orEmpty() }.getOrDefault(emptyList())
-                .let { FeedMemory.arrange(getApplication(), it) }
-            homeLoadedAt = System.currentTimeMillis()
+            // A failed refresh keeps what's on screen (the saved feed) instead of emptying it.
+            runCatching { api.home() }
+                .onFailure { if (home.isEmpty()) status = it.message.orEmpty() }
+                .onSuccess { fresh ->
+                    home = FeedMemory.arrange(getApplication(), fresh)
+                    PageCache.saveTracks(getApplication(), "home", home)
+                    homeLoadedAt = System.currentTimeMillis()
+                }
             // Songs at the top start right away when tapped.
             com.rymplayer.playback.Streams.prefetchLinks(home.filter { it.link == null }.take(8).map { it.videoId })
             homeLoading = false

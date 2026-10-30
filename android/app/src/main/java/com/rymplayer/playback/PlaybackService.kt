@@ -30,8 +30,8 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         // Web links stream in 4 MB ranges (see RangedHttpDataSource); files play directly.
-        // Start after 1 s of audio instead of the default 2.5 s; songs stream fast enough for it.
-        val load = DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 50_000, 1_000, 2_000).build()
+        // Start after half a second of audio instead of the default 2.5 s; songs stream fast enough for it.
+        val load = DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 50_000, 500, 2_000).build()
         val exo = ExoPlayer.Builder(this)
             .setLoadControl(load)
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, RangedHttpDataSource.Factory())))
