@@ -19,6 +19,9 @@ pub mod vlc;
 
 use std::path::PathBuf;
 
+/// The version shown in the apps ("7.6").
+pub const VERSION: &str = "7.6";
+
 pub fn data_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "RymPlayer")
         .map(|d| d.data_local_dir().to_path_buf())

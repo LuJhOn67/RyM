@@ -139,7 +139,8 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                     // The cover breathes: full size while playing, slightly smaller when paused.
                     val scale by animateFloatAsState(if (p.playing) 1f else 0.86f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessLow), label = "cover")
                     val side = minOf(maxWidth, maxHeight) - 48.dp
-                    Box(Modifier.scale(scale).shadow(24.dp, RoundedCornerShape(16.dp))) { Cover(t.thumb, side, 720, 16.dp) }
+                    // A tap on the cover shows the lyrics (it never skips the song).
+                    Box(Modifier.scale(scale).shadow(24.dp, RoundedCornerShape(16.dp)).clickable { panel = Panel.Lyrics }) { Cover(t.thumb, side, 720, 16.dp) }
                 }
                 Panel.Lyrics -> LyricsView(vm, tint)
                 Panel.Queue -> QueueView(vm)
@@ -149,7 +150,7 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Marquee(t.title, 22, FontWeight.Bold, Color.White)
-                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp)
+                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, modifier = Modifier.clickable { vm.goArtist(t) })
                 }
                 if (vm.api.signedIn) {
                     val liked = t.videoId in vm.liked

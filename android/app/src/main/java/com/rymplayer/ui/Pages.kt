@@ -6,6 +6,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -113,9 +115,11 @@ fun HomePage(vm: AppViewModel) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun HomeCard(vm: AppViewModel, t: Track) {
-    Column(Modifier.width(150.dp).clip(RoundedCornerShape(10.dp)).clickable { vm.openLink(t) }) {
+    val hold: (() -> Unit)? = if (t.link == null) ({ vm.menu = com.rymplayer.MenuFor(t) }) else null
+    Column(Modifier.width(150.dp).clip(RoundedCornerShape(10.dp)).combinedClickable(onClick = { vm.openLink(t) }, onLongClick = hold)) {
         Cover(t.thumb, 150.dp, 360, 10.dp)
         Spacer(Modifier.height(8.dp))
         Text(t.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -224,6 +228,7 @@ fun LibraryPage(vm: AppViewModel) {
         } else {
             item { Text(tr("Sign in to see your playlists"), color = Dim, modifier = Modifier.padding(16.dp)) }
         }
+        item { Text("RyM ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()}", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(16.dp)) }
         // Account: sign out, or sign in when browsing without an account (both show the sign-in screen).
         item {
             if (vm.api.signedIn) {
@@ -262,7 +267,7 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
                 Cover(tracks.firstOrNull()?.thumb, 200.dp, 480, 12.dp)
                 Spacer(Modifier.height(14.dp))
                 Text(tr(page.title), fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("${songs.size} songs", color = Dim, fontSize = 13.sp)
+                Text("${songs.size} ${tr("songs")}", color = Dim, fontSize = 13.sp)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button({ vm.playFrom(tracks, tracks.indexOfFirst { it.link == null }.coerceAtLeast(0)) }, enabled = songs.isNotEmpty()) {
@@ -276,13 +281,54 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
                         Text(tr("Shuffle"))
                     }
                 }
+                if (page.kind == Screen.Kind.Playlist && page.id == LIKED_ID && vm.api.signedIn) DownloadAll(vm)
             }
         }
         if (tracks.isEmpty()) item { Text(vm.status.ifEmpty { tr("Nothing here") }, color = Dim, modifier = Modifier.padding(16.dp)) }
         itemsIndexed(tracks) { i, t ->
-            val onClick = { if (t.link != null) vm.openLink(t) else vm.playFrom(tracks, i) }
+            val onClick = {
+                when {
+                    t.link != null -> vm.openLink(t)
+                    // A search result: the song, then a radio of songs like it.
+                    page.kind == Screen.Kind.Results -> vm.playRadio(t)
+                    else -> vm.playFrom(tracks, i)
+                }
+            }
             SongRow(vm, t, current == t.videoId && t.videoId.isNotEmpty(), onClick)
         }
+    }
+}
+
+/** Liked Music: download the first N (empty = all), one after another, with progress. */
+@Composable
+private fun DownloadAll(vm: AppViewModel) {
+    var count by remember { mutableStateOf("") }
+    val b = vm.batch
+    val running = b != null && !b.finished
+    Spacer(Modifier.height(12.dp))
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            value = count,
+            onValueChange = { v -> count = v.filter(Char::isDigit).take(5) },
+            placeholder = { Text(tr("How many (empty = all)"), fontSize = 13.sp) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+            modifier = Modifier.width(190.dp),
+        )
+        Button({ vm.downloadAll(count.toIntOrNull()?.takeIf { it > 0 } ?: 5000) }, enabled = !running) {
+            Icon(Icons.Default.Download, null)
+            Spacer(Modifier.width(6.dp))
+            Text(tr("Download all"))
+        }
+    }
+    if (b != null) {
+        Spacer(Modifier.height(8.dp))
+        val words = buildString {
+            append("${tr("Downloading songs")} ${b.done} / ${b.total}")
+            for ((n, what) in listOf(b.saved to "saved", b.skipped to "already there", b.failed to "failed")) if (n > 0) append(" · $n ${tr(what)}")
+        }
+        Text(words, color = if (b.finished) Dim else MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+        LinearProgressIndicator(progress = { if (b.total > 0) b.done.toFloat() / b.total else 0f }, modifier = Modifier.width(260.dp).padding(top = 6.dp))
     }
 }
 

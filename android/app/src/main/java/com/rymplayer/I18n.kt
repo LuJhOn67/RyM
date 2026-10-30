@@ -100,6 +100,17 @@ object I18n {
         "Each connection fetches" to "كل اتصال يجلب",
         "at a time · tap to change" to "في كل مرة · اضغط للتغيير",
         "Theme" to "السمة",
+        "Download all" to "تنزيل الكل",
+        "How many (empty = all)" to "كم أغنية (فارغ = الكل)",
+        "Downloading songs" to "جارٍ تنزيل الأغاني",
+        "saved" to "حُفظت",
+        "already there" to "موجودة مسبقاً",
+        "failed" to "فشلت",
+        "Go to artist" to "الذهاب إلى الفنان",
+        "Finding the artist..." to "جارٍ إيجاد الفنان...",
+        "Artist not found" to "لم يتم العثور على الفنان",
+        "songs" to "أغنية",
+        "Version" to "الإصدار",
     )
 }
 

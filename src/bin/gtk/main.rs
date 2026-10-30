@@ -1451,6 +1451,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Language"), tr("The words in the apps"), &language));
+    page.append(&label(&format!("RyM {}", rymplayer::VERSION), &["dim", "small"]));
 
     let names: Vec<&str> = THEMES.iter().map(|t| t.name).collect();
     let theme = gtk::DropDown::from_strings(&names);

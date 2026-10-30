@@ -87,7 +87,7 @@ fn draw_login(f: &mut Frame, app: &App) {
     let area = centered(f.area(), 64, 14);
     let key = |k: &'static str| format!("  {k} ").fg(th.accent).bold();
     let mut lines = vec![
-        Line::from("RymPlayer".fg(th.accent).bold()),
+        Line::from(format!("RyM {}", rymplayer::VERSION).fg(th.accent).bold()),
         Line::from(t("YouTube Music in your terminal").fg(th.dim)),
         Line::from(""),
         Line::from(vec![key("g"), t("Sign in with Google (opens a sign-in window)").fg(th.text)]),

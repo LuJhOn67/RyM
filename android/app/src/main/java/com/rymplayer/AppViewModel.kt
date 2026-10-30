@@ -21,6 +21,8 @@ import com.rymplayer.data.SignedOutException
 import com.rymplayer.data.Track
 import com.rymplayer.data.MusicApi
 import com.rymplayer.data.parseDuration
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import com.rymplayer.playback.Player
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -368,6 +370,52 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
             "${tr("Download failed")}: ${it.message ?: it.javaClass.simpleName}"
         })
+    }
+
+    /** The artist's page (every song, then albums and singles); found by name when the song lacks the id. */
+    fun goArtist(t: Track) {
+        if (t.artist.isBlank()) return
+        val name = t.artist.substringBefore(", ")
+        playerOpen = false
+        t.artistId?.let { open(Screen.Songs(Screen.Kind.Artist, it, name)); return }
+        status = tr("Finding the artist...")
+        viewModelScope.launch {
+            val id = runCatching { api.artistIdFor(name) }.getOrNull()
+            if (id == null) status = tr("Artist not found") else open(Screen.Songs(Screen.Kind.Artist, id, name))
+        }
+    }
+
+    /** How the liked songs batch download is going (null: not started). */
+    data class Batch(val done: Int, val total: Int, val saved: Int = 0, val skipped: Int = 0, val failed: Int = 0) {
+        val finished get() = done >= total
+    }
+
+    var batch by mutableStateOf<Batch?>(null)
+        private set
+
+    /** Downloads the first [limit] liked songs, one after another, skipping ones already saved. */
+    fun downloadAll(limit: Int) {
+        if (batch?.finished == false || !api.signedIn) return
+        batch = Batch(0, 0)
+        viewModelScope.launch {
+            val songs = runCatching { api.playlistAll(LIKED_ID, limit) }.getOrElse {
+                status = "${tr("Download failed")}: ${it.message}"
+                batch = null
+                return@launch
+            }
+            var b = Batch(0, songs.size)
+            batch = b
+            for (t in songs) {
+                val r = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }
+                b = when {
+                    r.getOrNull() == "already saved" -> b.copy(skipped = b.skipped + 1)
+                    r.isSuccess -> b.copy(saved = b.saved + 1)
+                    else -> b.copy(failed = b.failed + 1)
+                }
+                b = b.copy(done = b.done + 1)
+                batch = b
+            }
+        }
     }
 
     fun toggleLike(t: Track) {

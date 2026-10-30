@@ -438,6 +438,7 @@ impl Gui {
             heading(tr("Look"), p),
             tint_row,
             lang_row,
+            line(format!("RyM Legacy Player {}", rymplayer::VERSION), 12, FONT, p.dim),
             gpu_row,
             source_row,
             download_row,

@@ -153,8 +153,17 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
                 t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
                 color = if (current) MaterialTheme.colorScheme.primary else Color.White,
             )
-            val sub = listOf(t.artist, t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
-            Text(sub, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+            // The artist's name opens their page; album and length follow it.
+            Row {
+                if (t.artist.isNotBlank()) {
+                    Text(
+                        t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp,
+                        modifier = Modifier.weight(1f, fill = false).clickable(enabled = t.link == null) { vm.goArtist(t) },
+                    )
+                }
+                val rest = listOf(t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
+                if (rest.isNotEmpty()) Text((if (t.artist.isNotBlank()) " • " else "") + rest, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+            }
         }
         if (t.videoId in vm.liked) Icon(Icons.Default.Favorite, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
         IconButton(onClick = { vm.menu = MenuFor(t, queueIndex) }) { Icon(Icons.Default.MoreVert, tr("More"), tint = Dim) }
@@ -216,7 +225,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             }
         }
         t.albumId?.let { id -> item(tr("Go to album"), Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
-        t.artistId?.let { id -> item(tr("Go to artist"), Icons.Default.Person) { vm.open(Screen.Songs(Screen.Kind.Artist, id, t.artist.substringBefore(", "))) }() }
+        if (t.artist.isNotBlank()) item(tr("Go to artist"), Icons.Default.Person) { vm.goArtist(t) }()
         if (queueIndex != null && queueIndex != vm.player.index) {
             item(tr("Remove from queue"), Icons.Default.MoreVert) { vm.player.remove(queueIndex) }()
         }
