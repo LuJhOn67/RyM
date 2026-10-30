@@ -187,6 +187,7 @@ impl App {
         self.config = Config::load();
         stream::use_source(self.config.source);
         stream::download_best(self.config.download_best);
+        stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(self.volume);
@@ -671,6 +672,7 @@ impl App {
         self.config.change(SETTINGS[i], step);
         stream::use_source(self.config.source);
         stream::download_best(self.config.download_best);
+        stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
         self.config.save();
         if self.config.library == Side::Hidden {
             self.focus = Focus::Tracks;

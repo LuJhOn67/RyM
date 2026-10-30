@@ -152,6 +152,22 @@ fun LibraryPage(vm: AppViewModel) {
             ) { vm.toggleDownloadQuality() }
         }
         item {
+            LibraryRow(
+                "Download connections: ${vm.connections}",
+                "How many at once (1-16); more use more of your line · tap to change",
+                Brush.linearGradient(listOf(Color(0xFF2878D0), Color(0xFF19B6A5))),
+                Icons.Default.Download,
+            ) { vm.nextConnections() }
+        }
+        item {
+            LibraryRow(
+                "Download piece size: " + if (vm.pieceMb == 0) "Open" else "${vm.pieceMb} MB",
+                if (vm.pieceMb == 0) "No fixed size: the song is split evenly over the connections" else "Each connection fetches ${vm.pieceMb} MB at a time · tap to change",
+                Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF8E44FF))),
+                Icons.Default.Download,
+            ) { vm.nextPieceSize() }
+        }
+        item {
             LibraryRow("Downloads", "Saved on this phone, play without internet", Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
                 vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", "Downloads"))
             }

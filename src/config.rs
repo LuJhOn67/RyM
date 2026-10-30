@@ -49,6 +49,22 @@ pub struct Config {
     /// Downloads in the best quality (yt-dlp with your account, 256 kbps for Premium, slower)
     /// instead of the playback file (about 160 kbps, in seconds).
     pub download_best: bool,
+    /// Connections a song downloads over at once (1-16).
+    pub download_connections: u8,
+    /// Size of each downloaded piece in MB; 0 = open: the song is split evenly over the connections.
+    pub download_piece_mb: u8,
+}
+
+/// Piece sizes the settings cycle through (MB; 0 = open).
+pub const PIECE_SIZES: [u8; 5] = [0, 1, 2, 4, 8];
+
+impl Config {
+    pub fn piece_label(&self) -> String {
+        match self.download_piece_mb {
+            0 => "Open (split evenly)".to_string(),
+            mb => format!("{mb} MB"),
+        }
+    }
 }
 
 /// Where songs' audio comes from.
@@ -125,6 +141,8 @@ impl Default for Config {
             gui_renderer: Renderer::Vulkan,
             source: Source::Auto,
             download_best: true,
+            download_connections: 8,
+            download_piece_mb: 0,
         }
     }
 }
@@ -241,10 +259,12 @@ pub enum Setting {
     Help,
     Source,
     Download,
+    Connections,
+    Piece,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 11] = [
+pub const SETTINGS: [Setting; 13] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -255,6 +275,8 @@ pub const SETTINGS: [Setting; 11] = [
     Setting::Help,
     Setting::Source,
     Setting::Download,
+    Setting::Connections,
+    Setting::Piece,
     Setting::Reset,
 ];
 
@@ -294,6 +316,8 @@ impl Config {
             Setting::Help => "Key hints",
             Setting::Source => "Audio source",
             Setting::Download => "Download quality",
+            Setting::Connections => "Download connections",
+            Setting::Piece => "Download piece size",
             Setting::Reset => "Reset layout",
         }
     }
@@ -310,6 +334,8 @@ impl Config {
             Setting::Help => if self.help { "Shown" } else { "Hidden" }.to_string(),
             Setting::Source => self.source.label().to_string(),
             Setting::Download => if self.download_best { "Best (yt-dlp, slower)" } else { "Fast (~160 kbps)" }.to_string(),
+            Setting::Connections => format!("{} at once", self.download_connections),
+            Setting::Piece => self.piece_label(),
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -330,9 +356,11 @@ impl Config {
             Setting::Help => self.help = !self.help,
             Setting::Source => self.source = self.source.next(),
             Setting::Download => self.download_best = !self.download_best,
+            Setting::Connections => self.download_connections = (self.download_connections as i32 + step).clamp(1, 16) as u8,
+            Setting::Piece => self.download_piece_mb = cycle(&PIECE_SIZES, self.download_piece_mb, step),
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, ..Config::default() }
             }
         }
     }

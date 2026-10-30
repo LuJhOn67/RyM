@@ -146,6 +146,10 @@ pub enum Message {
     ToggleSource,
     /// Download quality: best (yt-dlp) or fast (the playback file).
     ToggleDownload,
+    /// Download connections up or down by this many.
+    Connections(i32),
+    /// Next download piece size.
+    NextPiece,
 
     NewPlaylist(Option<Track>),
     NameChanged(String),
@@ -373,6 +377,7 @@ impl Gui {
         gui.config = Config::load();
         stream::use_source(gui.config.source);
         stream::download_best(gui.config.download_best);
+        stream::download_parallel(gui.config.download_connections, gui.config.download_piece_mb);
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(gui.volume);
@@ -825,6 +830,18 @@ impl Gui {
             }
             Message::SetTheme(i) => {
                 self.config.gui_theme = i % style::PALETTES.len();
+                self.config.save();
+            }
+            Message::Connections(step) => {
+                self.config.download_connections = (self.config.download_connections as i32 + step).clamp(1, 16) as u8;
+                stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
+                self.config.save();
+            }
+            Message::NextPiece => {
+                let sizes = rymplayer::config::PIECE_SIZES;
+                let i = sizes.iter().position(|s| *s == self.config.download_piece_mb).unwrap_or(0);
+                self.config.download_piece_mb = sizes[(i + 1) % sizes.len()];
+                stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
                 self.config.save();
             }
             Message::ToggleDownload => {

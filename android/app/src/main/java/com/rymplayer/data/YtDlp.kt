@@ -28,10 +28,26 @@ object YtDlp {
         }
     }
 
-    /** Downloads a song into the app's files and returns the file (webm or m4a). Blocking. */
+    /**
+     * Downloads a song into the app's files and returns the file (webm or m4a). Blocking. yt-dlp
+     * finds the link; the song comes over the app's parallel connections, or through yt-dlp
+     * itself when that fails.
+     */
     fun download(ctx: Context, videoId: String, cookie: String?): File {
         prepare(ctx)
         val dir = File(ctx.cacheDir, "ytdlp").apply { mkdirs() }
+        dir.listFiles()?.filter { it.name.startsWith("$videoId.") }?.forEach { it.delete() }
+        runCatching {
+            val info = YoutubeDL.getInstance().getInfo(YoutubeDLRequest("https://music.youtube.com/watch?v=$videoId").apply {
+                addOption("-f", "774/251/141/140/bestaudio")
+                addOption("--no-playlist")
+                if (!cookie.isNullOrBlank()) addOption("--cookies", cookieFile(ctx, cookie).absolutePath)
+            })
+            val url = checkNotNull(info.url) { "yt-dlp gave no link" }
+            val file = File(dir, "$videoId.${info.ext ?: "webm"}")
+            com.rymplayer.playback.Streams.save(url, info.httpHeaders ?: emptyMap(), file)
+            return file
+        }.onFailure { android.util.Log.w("RyM", "parallel download through yt-dlp's link failed, letting yt-dlp download", it) }
         dir.listFiles()?.filter { it.name.startsWith("$videoId.") }?.forEach { it.delete() }
         val request = YoutubeDLRequest("https://music.youtube.com/watch?v=$videoId").apply {
             addOption("-f", "774/251/141/140/bestaudio")

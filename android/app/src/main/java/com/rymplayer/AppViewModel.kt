@@ -71,6 +71,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lyricsJob: Job? = null
 
     init {
+        com.rymplayer.playback.Streams.connections = prefs.getInt("dl_connections", 8)
+        com.rymplayer.playback.Streams.pieceMb = prefs.getInt("dl_piece_mb", 0)
         val cookie = prefs.getString("cookie", null)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
@@ -209,6 +211,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> player.append(radio.filter { it.videoId != t.videoId }) }
         }
+    }
+
+    /** Download connections at once (1-16) and piece size in MB (0 = open: split evenly). */
+    var connections by mutableStateOf(prefs.getInt("dl_connections", 8))
+        private set
+    var pieceMb by mutableStateOf(prefs.getInt("dl_piece_mb", 0))
+        private set
+
+    fun nextConnections() {
+        val steps = listOf(1, 2, 4, 6, 8, 10, 12, 16)
+        connections = steps[(steps.indexOf(connections).coerceAtLeast(0) + 1) % steps.size]
+        prefs.edit().putInt("dl_connections", connections).apply()
+        com.rymplayer.playback.Streams.connections = connections
+    }
+
+    fun nextPieceSize() {
+        val steps = listOf(0, 1, 2, 4, 8)
+        pieceMb = steps[(steps.indexOf(pieceMb).coerceAtLeast(0) + 1) % steps.size]
+        prefs.edit().putInt("dl_piece_mb", pieceMb).apply()
+        com.rymplayer.playback.Streams.pieceMb = pieceMb
     }
 
     /** Downloads in the best quality (yt-dlp, slow on a phone) instead of the playback file. */

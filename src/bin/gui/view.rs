@@ -370,6 +370,30 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        let parallel_row = row![
+            column![
+                line("Download connections", 15, SEMI, p.text),
+                line("How many connections a song downloads over at once. YouTube limits each one, so more use more of your line.", 13, FONT, p.dim)
+            ]
+            .spacing(4)
+            .width(Fill),
+            button(line("-", 15, BOLD, p.text)).padding([4, 14]).style(style::chip(p)).on_press(Message::Connections(-1)),
+            container(line(format!("{}", self.config.download_connections), 15, BOLD, p.text)).width(36).center_x(36),
+            button(line("+", 15, BOLD, p.text)).padding([4, 14]).style(style::chip(p)).on_press(Message::Connections(1)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        let piece_row = row![
+            column![
+                line("Download piece size", 15, SEMI, p.text),
+                line("Open: the song is split evenly over the connections, no fixed size.", 13, FONT, p.dim)
+            ]
+            .spacing(4)
+            .width(Fill),
+            button(line(self.config.piece_label(), 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::NextPiece),
+        ]
+        .align_y(Alignment::Center);
+
         let account: Element<'_, Message> = if self.logged_in() {
             button(line("Sign out", 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
@@ -385,6 +409,8 @@ impl Gui {
             gpu_row,
             source_row,
             download_row,
+            parallel_row,
+            piece_row,
             space().height(8),
             heading("Account", p),
             row![account],

@@ -235,29 +235,40 @@ object Streams {
         else -> OkDownloader.UA
     }
 
-    /** Piece size, and how many pieces are fetched at once: YouTube limits each connection's speed. */
-    private const val PIECE = 4L shl 20
-    private const val PARALLEL = 7
+    /**
+     * Connections a song downloads over at once (1-16), and the piece size in MB: 0 is open, the
+     * song is split evenly over the connections. Set from Library > Download connections / piece size.
+     * The app sets no speed limit; YouTube limits each connection, so more use more of the line.
+     */
+    @Volatile var connections = 8
+    @Volatile var pieceMb = 0
 
-    /** Writes the link to `file`: the first piece tells the size, the rest come over up to 7 connections at once. */
-    internal fun save(url: String, userAgent: String, file: File) {
+    /** The first request is small: it tells the song's size so the rest can be split up. */
+    private const val FIRST = 256L shl 10
+
+    internal fun save(url: String, userAgent: String, file: File) = save(url, mapOf("User-Agent" to userAgent), file)
+
+    /** Writes the link to `file`: a small first piece tells the size, the rest comes over several connections at once. */
+    internal fun save(url: String, headers: Map<String, String>, file: File) {
         java.io.RandomAccessFile(file, "rw").use { raf ->
             raf.setLength(0)
             val channel = raf.channel
-            val total = piece(url, userAgent, 0, PIECE, channel) ?: return
-            if (total <= PIECE) {
+            val total = piece(url, headers, 0, FIRST, channel) ?: return
+            if (total <= FIRST) {
                 raf.setLength(total)
                 return
             }
-            val next = java.util.concurrent.atomic.AtomicLong(PIECE)
+            val parallel = connections.coerceIn(1, 16)
+            val size = if (pieceMb <= 0) maxOf(FIRST, (total - FIRST + parallel - 1) / parallel) else pieceMb.toLong() shl 20
+            val next = java.util.concurrent.atomic.AtomicLong(FIRST)
             val failed = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
-            val workers = (1..PARALLEL).map {
+            val workers = (1..parallel).map {
                 Thread {
                     try {
                         while (failed.get() == null) {
-                            val start = next.getAndAdd(PIECE)
+                            val start = next.getAndAdd(size)
                             if (start >= total) break
-                            piece(url, userAgent, start, minOf(PIECE, total - start), channel)
+                            piece(url, headers, start, minOf(size, total - start), channel)
                         }
                     } catch (e: Throwable) {
                         failed.compareAndSet(null, e)
@@ -275,14 +286,14 @@ object Streams {
      * from where an answer stopped early. Returns the song's size, or null when the server sent
      * the whole song at once (then it's all written).
      */
-    private fun piece(url: String, userAgent: String, start: Long, length: Long, out: java.nio.channels.FileChannel): Long? {
+    private fun piece(url: String, headers: Map<String, String>, start: Long, length: Long, out: java.nio.channels.FileChannel): Long? {
         var pos = start
         val end = start + length
         var total = -1L
         val buf = ByteArray(64 * 1024)
         while (pos < end) {
             val req = Request.Builder().url(url)
-                .header("User-Agent", userAgent)
+                .apply { headers.forEach { (k, v) -> header(k, v) } }
                 .header("Range", "bytes=$pos-${end - 1}")
                 .build()
             media.newCall(req).execute().use { r ->
