@@ -22,7 +22,8 @@ import java.util.concurrent.TimeUnit
  * music.youtube.com website makes). Without a cookie it works as a guest.
  */
 class MusicApi(private val cookie: String?) {
-    private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
+    // HTTP/1.1: signed-in answers over HTTP/2 started breaking the connection (30 Oct 2026, seen on the PC).
+    private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).protocols(listOf(okhttp3.Protocol.HTTP_1_1)).build()
     private val json = Json { ignoreUnknownKeys = true }
     @Volatile private var clientVersion: String? = null
 

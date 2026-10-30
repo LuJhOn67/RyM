@@ -263,6 +263,11 @@ fn arabic(en: &str) -> Option<&'static str> {
     })
 }
 
+/// True when text reads right to left (its first strong letter is Arabic, Hebrew...).
+pub fn is_rtl(s: &str) -> bool {
+    unicode_bidi::get_base_direction(s) == unicode_bidi::Direction::Rtl
+}
+
 /// Text as a terminal without right-to-left support should print it: Arabic letters joined
 /// (their connected forms) and Arabic runs put in visual order. Other text comes back as is.
 pub fn for_terminal(s: &str) -> String {
@@ -301,5 +306,18 @@ mod tests {
         assert_eq!(shown.chars().count(), 3, "{shown}"); // لا becomes one ligature
         assert!(shown.chars().all(|c| ('\u{FE70}'..='\u{FEFF}').contains(&c)), "{shown}");
         assert_eq!(shown.chars().last(), Some('\u{FEB3}')); // initial seen, printed last
+    }
+}
+
+#[cfg(test)]
+mod terminal_sample {
+    /// Writes Arabic as the terminal app prints it to target/arabic-terminal.txt, one line per
+    /// sample, for drawing it in different fonts: `cargo test --lib arabic_sample -- --ignored`.
+    #[test]
+    #[ignore]
+    fn arabic_sample() {
+        let lines = ["الأغاني المعجبة على هذا الجهاز", "جارٍ تنزيل الأغاني 12 / 50", "سلام عليكم يا حبيبي"];
+        let out: Vec<String> = lines.iter().map(|l| super::for_terminal(l)).collect();
+        std::fs::write("target/arabic-terminal.txt", out.join("\n")).unwrap();
     }
 }

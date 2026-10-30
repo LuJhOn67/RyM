@@ -60,17 +60,30 @@ impl fmt::Debug for Api {
     }
 }
 
+/// YouTube Music's connection, over HTTP/1.1: signed in, Google's HTTP/2 answers started
+/// breaking the connection ("stream error: unspecific protocol error", 30 Oct 2026).
+fn http1_client() -> Result<music_api::Client> {
+    let client = reqwest::Client::builder().http1_only().build()?;
+    Ok(music_api::Client::new_from_reqwest_client(client))
+}
+
 fn err(e: impl fmt::Debug) -> anyhow::Error {
     anyhow!("{e:?}")
 }
 
 impl Api {
     pub async fn guest() -> Result<Api> {
-        Ok(Api::Guest(Arc::new(Client::new_unauthenticated().await.map_err(err)?)))
+        let yt = music_api::YtMusicBuilder::new_with_client(http1_client()?).build().await.map_err(err)?;
+        Ok(Api::Guest(Arc::new(yt)))
     }
 
     pub async fn with_cookie(cookie: String) -> Result<Api> {
-        Ok(Api::User(Arc::new(Client::from_cookie(cookie.trim()).await.map_err(err)?)))
+        let yt = music_api::YtMusicBuilder::new_with_client(http1_client()?)
+            .with_browser_token_cookie(cookie.trim().to_string())
+            .build()
+            .await
+            .map_err(err)?;
+        Ok(Api::User(Arc::new(yt)))
     }
 
     pub fn logged_in(&self) -> bool {
@@ -771,5 +784,30 @@ mod raw_tests {
         // Both ways of saying "next page" are found.
         let page = serde_json::json!({ "x": [{ "continuationItemRenderer": { "continuationEndpoint": { "continuationCommand": { "token": "T1" } } } }] });
         assert_eq!(all(&page, "continuationCommand")[0]["token"], "T1");
+    }
+}
+
+#[cfg(test)]
+mod live_probe {
+    use super::*;
+
+    /// Signed in: the whole liked list and one artist's page. Prints counts only.
+    #[tokio::test]
+    #[ignore]
+    async fn liked_and_artist() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let api = Api::with_cookie(cookie).await.unwrap();
+        let first = api.clone().playlist_tracks(LIKED_ID.into()).await.unwrap();
+        let all = api.clone().playlist_all(LIKED_ID.into(), 5000).await.unwrap();
+        println!("liked: first page {}, whole list {}", first.len(), all.len());
+        let id = match all.iter().find_map(|t| t.artist_id.clone()) {
+            Some(id) => id,
+            None => api.clone().artist_id_for(all[0].artist.clone()).await.unwrap().unwrap(),
+        };
+        let page = api.clone().artist_page(id).await.unwrap();
+        let songs = page.iter().filter(|t| t.link.is_none()).count();
+        println!("artist page: {songs} songs, {} albums/singles", page.len() - songs);
+        let found = api.artist_id_for("Daft Punk".into()).await.unwrap();
+        println!("artist by name found: {}", found.is_some());
     }
 }

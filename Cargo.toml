@@ -1,6 +1,6 @@
 [package]
 name = "rymplayer"
-version = "7.6.0"
+version = "6.7.0"
 edition = "2024"
 autobins = false
 build = "build.rs"
@@ -23,7 +23,7 @@ tao = { version = "0.37.2", optional = true }
 tokio = { version = "1.54.1", features = ["full"] }
 wry = { version = "0.57.1", optional = true }
 # The YouTube Music API library (its crates.io name is ytmapi-rs).
-music_api = { package = "ytmapi-rs", version = "0.3.3" }
+music_api = { package = "ytmapi-rs", version = "0.3.3", features = ["reqwest"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # The GTK 4 window app (needs GTK 4 to build): `cargo build --release --features gtk-ui --bin RymPlayer-GTK`.
 gtk = { package = "gtk4", version = "0.11.5", optional = true, features = ["v4_12"] }

@@ -18,6 +18,18 @@ fn t(en: &'static str) -> String {
     show(i18n::tr(en))
 }
 
+/// What's being typed, with the cursor: Arabic is joined and shown right to left, kept to the
+/// box's right edge with the cursor on its left (where the next letter goes), like an Arabic text
+/// field. Other text grows rightwards with the cursor after it.
+fn typed<'a>(app: &App, th: &Theme) -> Paragraph<'a> {
+    let cursor = "█".fg(th.accent);
+    if i18n::is_rtl(&app.buffer) {
+        Paragraph::new(Line::from(vec![cursor, show(&app.buffer).fg(th.text)])).alignment(Alignment::Right)
+    } else {
+        Paragraph::new(Line::from(vec![show(&app.buffer).fg(th.text), cursor]))
+    }
+}
+
 /// Any text (song titles, lyrics, messages) ready to print: Windows terminals don't lay out
 /// Arabic themselves, so its letters are joined and put in visual order here.
 pub fn show(s: &str) -> String {
@@ -181,14 +193,12 @@ fn draw_main(f: &mut Frame, app: &mut App) {
     if app.input == Some(Input::DownloadCount) {
         let area = centered(f.area(), 64, 3);
         popup_bg(f, th, area);
-        let text = Line::from(vec![app.buffer.as_str().fg(th.text), "█".fg(th.accent)]);
-        f.render_widget(Paragraph::new(text).block(pane(th, i18n::tr("Download how many liked songs? (empty = all, Enter / Esc)"), true)), area);
+        f.render_widget(typed(app, th).block(pane(th, i18n::tr("Download how many liked songs? (empty = all, Enter / Esc)"), true)), area);
     }
     if app.input == Some(Input::NewPlaylist) {
         let area = centered(f.area(), 56, 3);
         popup_bg(f, th, area);
-        let text = Line::from(vec![app.buffer.as_str().fg(th.text), "█".fg(th.accent)]);
-        f.render_widget(Paragraph::new(text).block(pane(th, i18n::tr("New playlist name (Enter / Esc)"), true)), area);
+        f.render_widget(typed(app, th).block(pane(th, i18n::tr("New playlist name (Enter / Esc)"), true)), area);
     }
 }
 
@@ -268,16 +278,16 @@ fn draw_top(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let sw = mid.width.min(60);
     let search = Rect::new(mid.x + (mid.width - sw) / 2, mid.y, sw, 3);
     let active = app.input == Some(Input::Search);
-    let text = if active {
-        Line::from(vec![app.buffer.as_str().fg(th.text), "█".fg(th.accent)])
-    } else {
-        Line::from(vec![" ".into(), t("Search songs, artists...").fg(th.faint), "  /".fg(th.faint)])
-    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(if active { th.accent } else { th.faint }));
-    f.render_widget(Paragraph::new(text).block(block), search);
+    let text = if active {
+        typed(app, th)
+    } else {
+        Paragraph::new(Line::from(vec![" ".into(), t("Search songs, artists...").fg(th.faint), "  /".fg(th.faint)]))
+    };
+    f.render_widget(text.block(block), search);
     app.areas.buttons.push((search, Click::Search));
 
     let label = t("⚙ Settings ,");
@@ -562,6 +572,23 @@ mod tests {
     fn app() -> App {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(tx)
+    }
+
+    #[test]
+    fn typed_arabic_is_joined_and_kept_right() {
+        let mut a = main_app();
+        a.input = Some(Input::Search);
+        a.buffer = "سلام".into();
+        let out = render(&mut a, 120, 24);
+        let search_row = out.lines().nth(1).unwrap();
+        let shown = show("سلام");
+        if cfg!(windows) {
+            // Joined letter forms, last letter first, the cursor on their left.
+            assert!(search_row.contains(&format!("█{shown}")), "{search_row}");
+        }
+        // Kept to the right edge of the box (its last column before the border).
+        let at = search_row.find(&shown).unwrap() + shown.len();
+        assert_eq!(search_row[at..].trim_start_matches(' ').chars().next(), Some('│'), "{search_row}");
     }
 
     /// The main screen in Arabic, printed: `cargo test --bin RyM arabic_screen -- --ignored --nocapture`.
