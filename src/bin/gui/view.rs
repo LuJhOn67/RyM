@@ -334,6 +334,76 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        let switch = |on: bool, msg: Message| {
+            button(line(if on { tr("On") } else { tr("Off") }, 13, BOLD, if on { p.pill_text } else { p.text }))
+                .padding([6, 16])
+                .style(move |theme: &iced::Theme, status| if on { style::pill(p)(theme, status) } else { style::chip(p)(theme, status) })
+                .on_press(msg)
+        };
+        let auto_row = row![
+            column![line(tr("Check for updates automatically"), 15, SEMI, p.text), line(tr("Every 12 hours, and when the app opens"), 13, FONT, p.dim)]
+                .spacing(4)
+                .width(Fill),
+            switch(self.config.auto_update_check, Message::ToggleAutoUpdate),
+        ]
+        .align_y(Alignment::Center);
+        let beta_row = row![
+            column![line(tr("Beta updates"), 15, SEMI, p.text), line(tr("Test versions (pre-releases) count as updates too"), 13, FONT, p.dim)]
+                .spacing(4)
+                .width(Fill),
+            switch(self.config.beta_updates, Message::ToggleBeta),
+        ]
+        .align_y(Alignment::Center);
+        let check_row = row![
+            line(format!("{} {}", tr("You have"), rymplayer::VERSION), 15, SEMI, p.text).width(Fill),
+            button(line(tr("Check for updates"), 13, BOLD, p.text)).padding([6, 16]).style(style::chip(p)).on_press(Message::CheckUpdates),
+        ]
+        .align_y(Alignment::Center);
+        let mut plugin_rows = Column::new().spacing(12);
+        match &self.store {
+            None => plugin_rows = plugin_rows.push(line(tr("Loading the store..."), 13, FONT, p.dim)),
+            Some(list) => {
+                for pl in list {
+                    let installed = self.config.plugins.get(&pl.id);
+                    let newer = installed.is_some_and(|v| rymplayer::updates::newer(&pl.version, v));
+                    let state = match installed {
+                        Some(v) => format!("{} {v}", tr("Installed")),
+                        None => format!("{} {}", tr("Version"), pl.version),
+                    };
+                    let (word, on) = match (installed, newer) {
+                        (None, _) => (tr("Install"), true),
+                        (Some(_), true) => (tr("Update"), true),
+                        (Some(_), false) => (tr("Remove"), false),
+                    };
+                    plugin_rows = plugin_rows.push(
+                        row![
+                            column![
+                                line(pl.name().to_string(), 15, SEMI, p.text),
+                                text(pl.description().to_string()).size(13).font(FONT).color(p.dim),
+                                line(state, 12, FONT, p.dim),
+                            ]
+                            .spacing(4)
+                            .width(Fill),
+                            button(line(word, 13, BOLD, if on { p.pill_text } else { p.text }))
+                                .padding([6, 16])
+                                .style(move |theme: &iced::Theme, status| if on { style::pill(p)(theme, status) } else { style::chip(p)(theme, status) })
+                                .on_press(Message::SetPlugin(pl.clone(), on)),
+                        ]
+                        .spacing(12)
+                        .align_y(Alignment::Center),
+                    );
+                }
+                if self.has_video() {
+                    plugin_rows = plugin_rows.push(
+                        button(row![icon(Icon::Download, 16.0, p.text), line(tr("Download from a link"), 13, BOLD, p.text)].spacing(6).align_y(Alignment::Center))
+                            .padding([6, 16])
+                            .style(style::chip(p))
+                            .on_press(Message::OpenLinkDialog),
+                    );
+                }
+            }
+        }
+
         let lang_row = row![
             column![line(tr("Language"), 15, SEMI, p.text), line(tr("The words in the apps"), 13, FONT, p.dim)].spacing(4).width(Fill),
             button(line(if self.config.arabic { "العربية" } else { "English" }, 13, BOLD, p.pill_text))
@@ -438,6 +508,12 @@ impl Gui {
             heading(tr("Look"), p),
             tint_row,
             lang_row,
+            heading(tr("Updates"), p),
+            auto_row,
+            beta_row,
+            check_row,
+            heading(tr("Plugin store"), p),
+            plugin_rows,
             line(format!("RyM Legacy Player {}", rymplayer::VERSION), 12, FONT, p.dim),
             gpu_row,
             source_row,
@@ -777,6 +853,41 @@ impl Gui {
                         .spacing(8),
                     )
             }
+            Dialog::Update(r) => {
+                let kind = if r.beta { tr("New beta") } else { tr("New update") };
+                let notes = Column::with_children(r.plain_notes().into_iter().map(|l| text(l).size(14).font(FONT).color(p.text).into())).spacing(4);
+                let file = if cfg!(windows) { "RyM-Legacy-Player.exe" } else { "RyM-linux-x86_64.tar.gz" };
+                column![
+                    line(format!("{kind}: RyM {}", r.version), 22, BOLD, p.text),
+                    line(format!("{} {}", tr("You have"), rymplayer::VERSION), 13, FONT, p.dim),
+                    line(tr("What's new"), 15, SEMI, p.accent),
+                    scrollable(notes).height(Length::Fixed(320.0)).style(style::scroll(p)),
+                    row![
+                        space::horizontal(),
+                        button(line(tr("Later"), 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog),
+                        button(line(tr("Download"), 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::OpenLink(r.download_for(file))),
+                    ]
+                    .spacing(8),
+                ]
+            }
+            Dialog::Link(url, video) => {
+                let kind = |label: &'static str, on: bool| {
+                    button(line(label, 13, BOLD, if on { p.pill_text } else { p.text }))
+                        .padding([6, 14])
+                        .style(move |theme: &iced::Theme, status| if on { style::pill(p)(theme, status) } else { style::chip(p)(theme, status) })
+                };
+                column![
+                    line(tr("Download from a link"), 22, BOLD, p.text),
+                    text_input(tr("Paste a link from YouTube or any site"), url).on_input(Message::LinkChanged).on_submit(Message::DownloadLink).padding([11, 16]).size(15).style(style::field(p)),
+                    row![kind(tr("Video"), *video).on_press(Message::LinkKind(true)), kind(tr("Audio only"), !*video).on_press(Message::LinkKind(false))].spacing(8),
+                    row![
+                        space::horizontal(),
+                        button(line(tr("Cancel"), 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog),
+                        button(line(tr("Download"), 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::DownloadLink),
+                    ]
+                    .spacing(8),
+                ]
+            }
             Dialog::AddTo(t) => {
                 let mut list = Column::new().spacing(2);
                 for pl in &self.playlists {
@@ -874,6 +985,10 @@ fn menu_items(gui: &Gui, m: &MenuFor) -> Vec<(Icon, &'static str, Message)> {
     }
     if t.artist_id.is_some() || (gui.api.is_some() && !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id)) {
         items.push((Icon::Artist, tr("Go to artist"), Message::GoArtist(t.clone())));
+    }
+    if gui.has_video() && !rymplayer::local::is_local(&t.video_id) {
+        items.push((Icon::Play, tr("Watch video"), Message::WatchVideo(t.clone())));
+        items.push((Icon::Download, tr("Download video"), Message::DownloadVideo(t.clone())));
     }
     items.push((Icon::Share, tr("Share"), Message::Share(t.clone())));
     if m.queue_index.is_some() && gui.queue.len() > 1 {

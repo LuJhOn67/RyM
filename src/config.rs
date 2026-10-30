@@ -61,6 +61,14 @@ pub struct Config {
     pub local_folders: Vec<String>,
     /// The apps' words in Arabic instead of English.
     pub arabic: bool,
+    /// Look for a new RyM on GitHub every 12 hours (and at start when it's been that long).
+    pub auto_update_check: bool,
+    /// Beta channel: pre-releases count as updates too.
+    pub beta_updates: bool,
+    /// When updates were last looked for (seconds since 1970).
+    pub last_update_check: u64,
+    /// Installed plugins: id -> version.
+    pub plugins: std::collections::BTreeMap<String, String>,
 }
 
 /// A side or place ("Left", "Bottom"...) in the app's language.
@@ -167,6 +175,10 @@ impl Default for Config {
             play_in_vlc: false,
             local_folders: Vec::new(),
             arabic: false,
+            auto_update_check: true,
+            beta_updates: false,
+            last_update_check: 0,
+            plugins: Default::default(),
         }
     }
 }
@@ -287,10 +299,14 @@ pub enum Setting {
     Piece,
     Vlc,
     Language,
+    /// Look for updates on GitHub on its own.
+    AutoUpdate,
+    /// Pre-releases count as updates.
+    Beta,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 15] = [
+pub const SETTINGS: [Setting; 17] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -305,6 +321,8 @@ pub const SETTINGS: [Setting; 15] = [
     Setting::Piece,
     Setting::Vlc,
     Setting::Language,
+    Setting::AutoUpdate,
+    Setting::Beta,
     Setting::Reset,
 ];
 
@@ -348,6 +366,8 @@ impl Config {
             Setting::Piece => "Download piece size",
             Setting::Vlc => "Play songs in",
             Setting::Language => "Language",
+            Setting::AutoUpdate => "Updates",
+            Setting::Beta => "Beta updates",
             Setting::Reset => "Reset layout",
         })
     }
@@ -368,6 +388,8 @@ impl Config {
             Setting::Piece => self.piece_label(),
             Setting::Vlc => tr(if self.play_in_vlc { "VLC (when installed)" } else { "RyM (built-in)" }).to_string(),
             Setting::Language => if self.arabic { "العربية" } else { "English" }.to_string(),
+            Setting::AutoUpdate => tr(if self.auto_update_check { "Automatic" } else { "Off" }).to_string(),
+            Setting::Beta => tr(if self.beta_updates { "On" } else { "Off" }).to_string(),
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -391,13 +413,15 @@ impl Config {
             Setting::Connections => self.download_connections = (self.download_connections as i32 + step).clamp(1, 16) as u8,
             Setting::Piece => self.download_piece_mb = cycle(&PIECE_SIZES, self.download_piece_mb, step),
             Setting::Vlc => self.play_in_vlc = !self.play_in_vlc,
+            Setting::AutoUpdate => self.auto_update_check = !self.auto_update_check,
+            Setting::Beta => self.beta_updates = !self.beta_updates,
             Setting::Language => {
                 self.arabic = !self.arabic;
                 crate::i18n::set_arabic(self.arabic);
             }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), ..Config::default() }
             }
         }
     }

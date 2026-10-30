@@ -99,6 +99,10 @@ pub enum Dialog {
     NewPlaylist(String, Option<Track>),
     /// Pick a playlist for this song.
     AddTo(Track),
+    /// A newer RyM with its patch notes.
+    Update(rymplayer::updates::Release),
+    /// Video plugin: a link to download, and whether as video (else just the sound).
+    Link(String, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +165,28 @@ pub enum Message {
     ToggleSource,
     /// English or Arabic.
     ToggleLanguage,
+    /// Settings: look for updates on its own / pre-releases too / now.
+    ToggleAutoUpdate,
+    ToggleBeta,
+    CheckUpdates,
+    /// Hourly: time for the regular look for updates?
+    UpdateTick,
+    /// A newer RyM (None: up to date); true when asked from the settings.
+    Updated(Result<Option<rymplayer::updates::Release>, String>, bool),
+    /// Opens the update's download (or the plugin's page) in the browser.
+    OpenLink(String),
+    /// The plugin store's list.
+    Store(Result<Vec<rymplayer::plugins::Plugin>, String>),
+    /// Install (true) or remove a plugin.
+    SetPlugin(rymplayer::plugins::Plugin, bool),
+    /// Video plugin: watch a song's video, its links found, download from a link.
+    WatchVideo(Track),
+    DownloadVideo(Track),
+    VideoLinks(Track, Result<(String, Option<String>), String>),
+    OpenLinkDialog,
+    LinkChanged(String),
+    LinkKind(bool),
+    DownloadLink,
     /// Download quality: best (yt-dlp) or fast (the playback file).
     ToggleDownload,
     /// Download connections up or down by this many.
@@ -326,6 +352,8 @@ pub struct Gui {
     /// Liked songs batch download: the count typed in, and how it's going.
     pub batch_count: String,
     pub batch: Option<stream::Batch>,
+    /// The plugin store's list once loaded.
+    pub store: Option<Vec<rymplayer::plugins::Plugin>>,
     /// When Previous was last pressed: twice in a row goes back even mid-song.
     last_prev: Instant,
     pub menu: Option<MenuFor>,
@@ -400,6 +428,7 @@ impl Gui {
             disliked: HashSet::new(),
             batch_count: String::new(),
             batch: None,
+            store: None,
             last_prev: long_ago(),
             menu: None,
             menu_pos: Point::ORIGIN,
@@ -421,6 +450,10 @@ impl Gui {
         gui.signed_in_screen = false;
         gui.config = Config::load();
         rymplayer::i18n::set_arabic(gui.config.arabic);
+        let mut first = vec![Task::perform(rymplayer::plugins::store(), |r| Message::Store(s(r)))];
+        if rymplayer::updates::due(gui.config.auto_update_check, gui.config.last_update_check) {
+            first.push(gui.check_updates(false));
+        }
         stream::use_source(gui.config.source);
         stream::download_best(gui.config.download_best);
         stream::download_parallel(gui.config.download_connections, gui.config.download_piece_mb);
@@ -451,7 +484,8 @@ impl Gui {
             }
             None => Task::none(),
         };
-        (gui, task)
+        first.push(task);
+        (gui, Task::batch(first))
     }
 
     fn title(&self) -> String {
@@ -482,6 +516,7 @@ impl Gui {
         if self.logged_in() {
             subs.push(iced::time::every(rymplayer::likes::SYNC_EVERY).map(|_| Message::SyncLikes));
         }
+        subs.push(iced::time::every(Duration::from_secs(3600)).map(|_| Message::UpdateTick));
         if self.current.is_some() {
             subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
@@ -927,6 +962,97 @@ impl Gui {
                 });
                 return self.update(Message::Loaded(Page::Home, result));
             }
+            Message::ToggleAutoUpdate => {
+                self.config.auto_update_check = !self.config.auto_update_check;
+                self.config.save();
+            }
+            Message::ToggleBeta => {
+                self.config.beta_updates = !self.config.beta_updates;
+                self.config.save();
+            }
+            Message::CheckUpdates => return self.check_updates(true),
+            Message::UpdateTick => {
+                if rymplayer::updates::due(self.config.auto_update_check, self.config.last_update_check) {
+                    return self.check_updates(false);
+                }
+            }
+            Message::Updated(result, asked) => match result {
+                Ok(Some(r)) => self.dialog = Some(Dialog::Update(r)),
+                Ok(None) if asked => self.status = tr("You have the latest version").into(),
+                Err(e) if asked => self.status = format!("{}: {e}", tr("Couldn't check for updates")),
+                _ => {}
+            },
+            Message::OpenLink(url) => {
+                let _ = rymplayer::updates::open_link(&url);
+                self.dialog = None;
+            }
+            Message::Store(Ok(list)) => {
+                let news: Vec<String> = rymplayer::plugins::updates(&self.config.plugins, &list).iter().map(|p| p.name().to_string()).collect();
+                if !news.is_empty() {
+                    self.status = format!("{}: {}", tr("Plugin updates"), news.join(", "));
+                }
+                self.store = Some(list);
+            }
+            Message::Store(Err(e)) => self.status = e,
+            Message::SetPlugin(p, on) => {
+                if on {
+                    self.config.plugins.insert(p.id.clone(), p.version.clone());
+                } else {
+                    self.config.plugins.remove(&p.id);
+                }
+                self.config.save();
+                self.status = tr(if on { "Plugin installed" } else { "Plugin removed" }).into();
+            }
+            Message::WatchVideo(t) => {
+                self.status = tr("Opening the video...").into();
+                let id = t.video_id.clone();
+                return Task::perform(async move { rymplayer::video::links(&id).await }, move |r| Message::VideoLinks(t.clone(), s(r)));
+            }
+            Message::VideoLinks(t, result) => match (result, rymplayer::vlc::find()) {
+                (Ok((video, audio)), Some(exe)) => {
+                    if self.is_playing()
+                        && let Some(a) = &self.audio
+                    {
+                        a.toggle();
+                    }
+                    match rymplayer::video::watch_in_vlc(&exe, &video, audio.as_deref(), &format!("{} - {}", t.artist, t.title)) {
+                        Ok(child) => {
+                            self.vlc = Some(child);
+                            self.status.clear();
+                        }
+                        Err(e) => self.status = format!("{}: {e}", tr("Can't open the video")),
+                    }
+                }
+                (_, None) => {
+                    let _ = rymplayer::updates::open_link(&rymplayer::video::watch_url(&t.video_id));
+                    self.status = tr("VLC isn't installed: opening YouTube in the browser").into();
+                }
+                (Err(e), _) => self.status = format!("{}: {e}", tr("Can't open the video")),
+            },
+            Message::DownloadVideo(t) => {
+                self.status = format!("{} \"{}\"...", tr("Downloading"), t.title);
+                let url = rymplayer::video::watch_url(&t.video_id);
+                return Task::perform(async move { rymplayer::video::download(&url, true).await }, |r| Message::Downloaded(s(r)));
+            }
+            Message::OpenLinkDialog => self.dialog = Some(Dialog::Link(String::new(), true)),
+            Message::LinkChanged(text) => {
+                if let Some(Dialog::Link(url, _)) = &mut self.dialog {
+                    *url = text;
+                }
+            }
+            Message::LinkKind(video) => {
+                if let Some(Dialog::Link(_, v)) = &mut self.dialog {
+                    *v = video;
+                }
+            }
+            Message::DownloadLink => {
+                let Some(Dialog::Link(url, video)) = self.dialog.take() else { return Task::none() };
+                if url.trim().is_empty() {
+                    return Task::none();
+                }
+                self.status = format!("{} {}", tr("Downloading"), url.trim());
+                return Task::perform(async move { rymplayer::video::download(&url, video).await }, |r| Message::Downloaded(s(r)));
+            }
             Message::ToggleLanguage => {
                 self.config.arabic = !self.config.arabic;
                 rymplayer::i18n::set_arabic(self.config.arabic);
@@ -1228,6 +1354,20 @@ impl Gui {
     }
 
     /// Plays row `i`; the queue becomes the list's songs.
+    fn check_updates(&mut self, asked: bool) -> Task<Message> {
+        self.config.last_update_check = rymplayer::updates::now();
+        self.config.save();
+        if asked {
+            self.status = tr("Checking for updates...").into();
+        }
+        let beta = self.config.beta_updates;
+        Task::perform(rymplayer::updates::check(beta), move |r| Message::Updated(s(r), asked))
+    }
+
+    pub fn has_video(&self) -> bool {
+        self.config.plugins.contains_key(rymplayer::plugins::VIDEO)
+    }
+
     fn play_list(&mut self, i: usize) -> Task<Message> {
         let Some(vid) = self.tracks.get(i).map(|t| t.video_id.clone()) else { return Task::none() };
         self.queue = self.tracks.iter().filter(|t| t.link.is_none()).cloned().collect();

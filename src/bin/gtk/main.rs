@@ -174,6 +174,7 @@ button.play:hover { background: @accent@; }
 .bar { background: @bar@; border-top: 1px solid @divider@; padding: 8px 14px; }
 .lyrics { border-radius: 14px; margin: 10px; padding: 26px 28px; }
 .lyric { font-size: 25px; font-weight: 800; padding: 7px 0; transition: color 300ms ease; }
+.store-card { background: @input@; border-radius: 12px; padding: 14px 16px; }
 .toast { background: @menu@; color: @text@; border-radius: 10px; padding: 10px 16px; margin: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
 popover > contents { background: @menu@; color: @text@; border-radius: 10px; padding: 6px; }
 popover button { background: transparent; border: none; box-shadow: none; color: @text@; padding: 8px 12px; border-radius: 6px; }
@@ -237,6 +238,8 @@ enum Page {
     Library,
     History,
     Settings,
+    /// Plugin store.
+    Plugins,
     /// A playlist, album, mix, radio or search results.
     Songs(String),
 }
@@ -264,6 +267,12 @@ enum Ev {
     ArtistFound(String, anyhow::Result<Option<String>>),
     /// The liked songs batch download, after each song.
     Batch(stream::Batch),
+    /// A newer RyM on GitHub (None: up to date); true when asked from the settings.
+    Update(anyhow::Result<Option<rymplayer::updates::Release>>, bool),
+    /// The plugin store's list.
+    Store(anyhow::Result<Vec<rymplayer::plugins::Plugin>>),
+    /// A video's picture and sound links, to watch it.
+    VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
     Done,
 }
 
@@ -338,6 +347,8 @@ struct Ui {
     batch_bar: Option<glib::WeakRef<gtk::ProgressBar>>,
     /// When Previous was last pressed: twice in a row goes back even mid-song.
     last_prev: Instant,
+    /// The plugin store's list once loaded.
+    store: Option<Vec<rymplayer::plugins::Plugin>>,
     /// What the player bar shows now, so the ticker only changes what changed.
     shown_playing: Option<bool>,
     shown_len: f32,
@@ -598,6 +609,8 @@ fn build(app: &Application) {
     header.set_title_widget(Some(&search));
     let refresh = icon_button("view-refresh-symbolic", tr("Refresh: new songs on top (F5)"), &[]);
     header.pack_end(&refresh);
+    let from_link = icon_button("folder-download-symbolic", tr("Download from a link"), &[]);
+    header.pack_end(&from_link);
     window.set_titlebar(Some(&header));
 
     // Rail.
@@ -805,6 +818,7 @@ fn build(app: &Application) {
         batch_label: None,
         batch_bar: None,
         last_prev: Instant::now() - Duration::from_secs(60),
+        store: None,
         shown_playing: None,
         shown_len: 0.0,
         shown_pos: None,
@@ -814,6 +828,8 @@ fn build(app: &Application) {
     if ui.borrow().audio.is_none() {
         toast(&ui, tr("No audio device found"));
     }
+    from_link.set_visible(has_video(&ui));
+    FROM_LINK.with(|f| *f.borrow_mut() = Some(from_link.downgrade()));
 
     // ---- signals
     for (page, b) in ui.borrow().w.rail.iter() {
@@ -833,6 +849,21 @@ fn build(app: &Application) {
     {
         let ui = ui.clone();
         refresh.connect_clicked(move |_| refresh_home(&ui));
+    }
+    {
+        let ui = ui.clone();
+        from_link.connect_clicked(move |_| link_dialog(&ui));
+    }
+    {
+        // Updates: at start when it's been 12 hours, then checked hourly whether it's time again.
+        let ui2 = ui.clone();
+        glib::timeout_add_seconds_local(3600, move || {
+            auto_update_check(&ui2);
+            glib::ControlFlow::Continue
+        });
+        auto_update_check(&ui);
+        // The store's list, for plugin updates.
+        post(&ui, async { Ev::Store(rymplayer::plugins::store().await) });
     }
     {
         // F5 refreshes, Ctrl+F goes to the search box, space pauses (outside the search box).
@@ -1053,6 +1084,7 @@ fn page_name(p: &Page) -> &'static str {
         Page::Library => "library",
         Page::History => "history",
         Page::Settings => "settings",
+        Page::Plugins => "plugins",
         Page::Songs(_) => "songs",
     }
 }
@@ -1093,6 +1125,7 @@ fn render_page(ui: &Shared) {
         Page::Songs(title) => list_page(ui, title, false, &mut wants),
         Page::Library => library_page(ui, &mut wants),
         Page::Settings => settings_page(ui),
+        Page::Plugins => plugins_page(ui),
     };
     ui.borrow().w.content.append(&body);
     want_covers(ui, wants);
@@ -1532,6 +1565,46 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         page.append(&setting_row(tr("Play songs in"), tr("VLC: each song opens in VLC"), &player));
     }
 
+    page.append(&label(tr("Updates"), &["shelf"]));
+    let auto = gtk::Switch::new();
+    auto.set_active(config.auto_update_check);
+    {
+        let ui = ui.clone();
+        auto.connect_active_notify(move |w| {
+            let mut s = ui.borrow_mut();
+            s.config.auto_update_check = w.is_active();
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Check for updates automatically"), tr("Every 12 hours, and when the app opens"), &auto));
+    let beta = gtk::Switch::new();
+    beta.set_active(config.beta_updates);
+    {
+        let ui = ui.clone();
+        beta.connect_active_notify(move |w| {
+            let mut s = ui.borrow_mut();
+            s.config.beta_updates = w.is_active();
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Beta updates"), tr("Test versions (pre-releases) count as updates too"), &beta));
+    let check = Button::with_label(tr("Check for updates"));
+    check.add_css_class("ghost");
+    {
+        let ui = ui.clone();
+        check.connect_clicked(move |_| check_updates(&ui, true));
+    }
+    page.append(&setting_row(&format!("{} {}", tr("You have"), rymplayer::VERSION), "", &check));
+
+    page.append(&label(tr("Plugins"), &["shelf"]));
+    let store = Button::with_label(tr("Plugin store"));
+    store.add_css_class("pill");
+    {
+        let ui = ui.clone();
+        store.connect_clicked(move |_| go(&ui, Page::Plugins));
+    }
+    page.append(&setting_row(tr("Plugins"), tr("Add features to RyM; without them it stays a music player"), &store));
+
     let signed = signed_in(ui);
     let account = Button::with_label(if signed { tr("Sign out") } else { tr("Sign in with Google") });
     account.add_css_class(if signed { "ghost" } else { "pill" });
@@ -1545,6 +1618,224 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         &account,
     ));
     page.upcast()
+}
+
+thread_local! {
+    /// The header's "Download from a link" button: shown while the video plugin is installed.
+    static FROM_LINK: RefCell<Option<glib::WeakRef<Button>>> = const { RefCell::new(None) };
+}
+
+fn has_video(ui: &Shared) -> bool {
+    ui.borrow().config.plugins.contains_key(rymplayer::plugins::VIDEO)
+}
+
+// ---------------------------------------------------------------- updates
+
+fn check_updates(ui: &Shared, asked: bool) {
+    let beta = {
+        let mut s = ui.borrow_mut();
+        s.config.last_update_check = rymplayer::updates::now();
+        s.config.save();
+        s.config.beta_updates
+    };
+    if asked {
+        toast(ui, tr("Checking for updates..."));
+    }
+    post(ui, async move { Ev::Update(rymplayer::updates::check(beta).await, asked) });
+}
+
+fn auto_update_check(ui: &Shared) {
+    let due = {
+        let s = ui.borrow();
+        rymplayer::updates::due(s.config.auto_update_check, s.config.last_update_check)
+    };
+    if due {
+        check_updates(ui, false);
+    }
+}
+
+/// The new version, its patch notes and a download button.
+fn show_update(ui: &Shared, r: &rymplayer::updates::Release) {
+    let parent = ui.borrow().w.window.clone();
+    let win = gtk::Window::builder().transient_for(&parent).modal(true).default_width(560).default_height(560).title(tr("New update")).build();
+    win.add_css_class("rym");
+    let col = gtk::Box::new(Orientation::Vertical, 12);
+    col.set_margin_top(20);
+    col.set_margin_bottom(20);
+    col.set_margin_start(22);
+    col.set_margin_end(22);
+    let kind = if r.beta { tr("New beta") } else { tr("New update") };
+    col.append(&label(&format!("{kind}: RyM {}", r.version), &["heading"]));
+    col.append(&label(&format!("{} {}", tr("You have"), rymplayer::VERSION), &["dim"]));
+    col.append(&label(tr("What's new"), &["shelf"]));
+    let notes = gtk::Label::new(Some(&r.plain_notes().join("\n")));
+    notes.set_wrap(true);
+    notes.set_xalign(0.0);
+    notes.set_yalign(0.0);
+    notes.set_selectable(true);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_child(Some(&notes));
+    scroll.set_vexpand(true);
+    col.append(&scroll);
+    let buttons = gtk::Box::new(Orientation::Horizontal, 10);
+    buttons.set_halign(Align::End);
+    let later = Button::with_label(tr("Later"));
+    later.add_css_class("ghost");
+    let get = Button::with_label(tr("Download"));
+    get.add_css_class("pill");
+    let file = if cfg!(windows) { "RyM-GTK-Windows.zip" } else { "RyM-linux-x86_64.tar.gz" };
+    let url = r.download_for(file);
+    {
+        let win = win.clone();
+        later.connect_clicked(move |_| win.close());
+    }
+    {
+        let win = win.clone();
+        get.connect_clicked(move |_| {
+            let _ = rymplayer::updates::open_link(&url);
+            win.close();
+        });
+    }
+    buttons.append(&later);
+    buttons.append(&get);
+    col.append(&buttons);
+    win.set_child(Some(&col));
+    win.present();
+}
+
+// ---------------------------------------------------------------- plugins
+
+fn plugins_page(ui: &Shared) -> gtk::Widget {
+    let page = page_box();
+    page.append(&label(tr("Plugin store"), &["heading"]));
+    page.append(&label(tr("Add features to RyM; without them it stays a music player"), &["dim"]));
+    let store = ui.borrow().store.clone();
+    let Some(list) = store else {
+        post(ui, async { Ev::Store(rymplayer::plugins::store().await) });
+        page.append(&note(tr("Loading the store...")));
+        return page.upcast();
+    };
+    for p in list {
+        let installed = ui.borrow().config.plugins.get(&p.id).cloned();
+        let card = gtk::Box::new(Orientation::Horizontal, 16);
+        card.add_css_class("store-card");
+        let text = gtk::Box::new(Orientation::Vertical, 4);
+        text.set_hexpand(true);
+        text.append(&label(p.name(), &["title"]));
+        let d = label(p.description(), &["dim", "small"]);
+        d.set_wrap(true);
+        d.set_ellipsize(gtk::pango::EllipsizeMode::None);
+        text.append(&d);
+        let status = match &installed {
+            Some(v) => format!("{} {v}", tr("Installed")),
+            None => format!("{} {}", tr("Version"), p.version),
+        };
+        text.append(&label(&status, &["dim", "small"]));
+        card.append(&text);
+        let actions = gtk::Box::new(Orientation::Vertical, 6);
+        actions.set_valign(Align::Center);
+        let newer = installed.as_deref().is_some_and(|v| rymplayer::updates::newer(&p.version, v));
+        let main = Button::with_label(match (&installed, newer) {
+            (None, _) => tr("Install"),
+            (Some(_), true) => tr("Update"),
+            (Some(_), false) => tr("Remove"),
+        });
+        main.add_css_class(if installed.is_some() && !newer { "ghost" } else { "pill" });
+        {
+            let ui = ui.clone();
+            let p = p.clone();
+            let remove = installed.is_some() && !newer;
+            main.connect_clicked(move |_| set_plugin(&ui, &p, !remove));
+        }
+        actions.append(&main);
+        if installed.is_some() && newer {
+            let remove = Button::with_label(tr("Remove"));
+            remove.add_css_class("ghost");
+            let ui = ui.clone();
+            let p = p.clone();
+            remove.connect_clicked(move |_| set_plugin(&ui, &p, false));
+            actions.append(&remove);
+        }
+        card.append(&actions);
+        page.append(&card);
+    }
+    page.upcast()
+}
+
+/// Installs (or updates) a plugin, or removes it; its features appear or go at once.
+fn set_plugin(ui: &Shared, p: &rymplayer::plugins::Plugin, on: bool) {
+    {
+        let mut s = ui.borrow_mut();
+        if on {
+            s.config.plugins.insert(p.id.clone(), p.version.clone());
+        } else {
+            s.config.plugins.remove(&p.id);
+        }
+        s.config.save();
+    }
+    let video = has_video(ui);
+    FROM_LINK.with(|f| {
+        if let Some(b) = f.borrow().as_ref().and_then(glib::WeakRef::upgrade) {
+            b.set_visible(video);
+        }
+    });
+    toast(ui, tr(if on { "Plugin installed" } else { "Plugin removed" }));
+    render(ui);
+}
+
+/// Video plugin: the song's video in VLC (picture and sound streamed together).
+fn watch_video(ui: &Shared, t: &Track) {
+    toast(ui, tr("Opening the video..."));
+    let t = t.clone();
+    post(ui, async move {
+        let links = rymplayer::video::links(&t.video_id).await;
+        Ev::VideoLinks(t, links)
+    });
+}
+
+fn download_link(ui: &Shared, url: String, video: bool) {
+    toast(ui, &format!("{} {url}", tr("Downloading")));
+    post(ui, async move { Ev::Downloaded(rymplayer::video::download(&url, video).await) });
+}
+
+/// Video plugin: download from YouTube or any site yt-dlp knows, as a video or just the sound.
+fn link_dialog(ui: &Shared) {
+    let parent = ui.borrow().w.window.clone();
+    let win = gtk::Window::builder().transient_for(&parent).modal(true).default_width(520).title(tr("Download from a link")).build();
+    win.add_css_class("rym");
+    let col = gtk::Box::new(Orientation::Vertical, 12);
+    col.set_margin_top(20);
+    col.set_margin_bottom(20);
+    col.set_margin_start(22);
+    col.set_margin_end(22);
+    col.append(&label(tr("Download from a link"), &["heading"]));
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some(tr("Paste a link from YouTube or any site")));
+    entry.add_css_class("search");
+    col.append(&entry);
+    let kind = gtk::DropDown::from_strings(&[tr("Video"), tr("Audio only")]);
+    col.append(&kind);
+    let get = Button::with_label(tr("Download"));
+    get.add_css_class("pill");
+    get.set_halign(Align::End);
+    let go = {
+        let (ui, win, entry, kind) = (ui.clone(), win.clone(), entry.clone(), kind.clone());
+        move || {
+            let url = entry.text().trim().to_string();
+            if !url.is_empty() {
+                download_link(&ui, url, kind.selected() == 0);
+                win.close();
+            }
+        }
+    };
+    {
+        let go = go.clone();
+        get.connect_clicked(move |_| go());
+    }
+    entry.connect_activate(move |_| go());
+    col.append(&get);
+    win.set_child(Some(&col));
+    win.present();
 }
 
 /// Right-click (or a long press on touch screens) on a song: play next, add to queue, radio,
@@ -1589,6 +1880,10 @@ fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
     ];
     if !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id) {
         items.push((tr("Go to artist"), Box::new(|ui: &Shared, t: &Track| go_artist(ui, t))));
+    }
+    if has_video(ui) && !rymplayer::local::is_local(&t.video_id) {
+        items.push((tr("Watch video"), Box::new(|ui: &Shared, t: &Track| watch_video(ui, t))));
+        items.push((tr("Download video"), Box::new(|ui: &Shared, t: &Track| download_link(ui, rymplayer::video::watch_url(&t.video_id), true))));
     }
     for (text, act) in items {
         let b = Button::with_label(text);
@@ -2349,6 +2644,57 @@ fn poll_events(ui: &Shared) {
                 }
             }
             Ev::ArtistFound(..) => toast(ui, tr("Artist not found")),
+            Ev::Update(result, asked) => match result {
+                Ok(Some(r)) => show_update(ui, &r),
+                Ok(None) if asked => toast(ui, tr("You have the latest version")),
+                Err(e) if asked => toast(ui, &format!("{}: {e}", tr("Couldn't check for updates"))),
+                _ => {}
+            },
+            Ev::Store(result) => {
+                match result {
+                    Ok(list) => {
+                        let news: Vec<String> = {
+                            let s = ui.borrow();
+                            rymplayer::plugins::updates(&s.config.plugins, &list).iter().map(|p| p.name().to_string()).collect()
+                        };
+                        if !news.is_empty() {
+                            toast(ui, &format!("{}: {}", tr("Plugin updates"), news.join(", ")));
+                        }
+                        ui.borrow_mut().store = Some(list);
+                    }
+                    Err(e) => toast(ui, &e.to_string()),
+                }
+                if ui.borrow().page == Page::Plugins {
+                    render(ui);
+                }
+            }
+            Ev::VideoLinks(t, result) => {
+                let msg = match (result, vlc::find()) {
+                    (Ok((video, audio)), Some(exe)) => {
+                        // The song pauses while the video plays.
+                        if let Some(a) = &ui.borrow().audio
+                            && a.is_playing()
+                        {
+                            a.toggle();
+                        }
+                        match rymplayer::video::watch_in_vlc(&exe, &video, audio.as_deref(), &format!("{} - {}", t.artist, t.title)) {
+                            Ok(child) => {
+                                ui.borrow_mut().vlc = Some(child);
+                                None
+                            }
+                            Err(e) => Some(format!("{}: {e}", tr("Can't open the video"))),
+                        }
+                    }
+                    (_, None) => {
+                        let _ = rymplayer::updates::open_link(&rymplayer::video::watch_url(&t.video_id));
+                        Some(tr("VLC isn't installed: opening YouTube in the browser").to_string())
+                    }
+                    (Err(e), _) => Some(format!("{}: {e}", tr("Can't open the video"))),
+                };
+                if let Some(m) = msg {
+                    toast(ui, &m);
+                }
+            }
             Ev::Batch(b) => {
                 ui.borrow_mut().batch = Some(b);
                 update_batch(ui);

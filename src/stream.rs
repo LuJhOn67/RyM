@@ -363,7 +363,7 @@ fn write_at(file: &std::fs::File, buf: &[u8], offset: u64) -> std::io::Result<()
 }
 
 /// yt-dlp wants a Netscape cookie file; this converts the browser's `Cookie:` header.
-fn write_cookie_file(header: &str, path: &Path) -> Result<()> {
+pub(crate) fn write_cookie_file(header: &str, path: &Path) -> Result<()> {
     let mut out = String::from("# Netscape HTTP Cookie File\n");
     for pair in header.split(';') {
         let Some((name, value)) = pair.trim().split_once('=') else { continue };

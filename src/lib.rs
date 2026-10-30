@@ -14,7 +14,11 @@ pub mod local;
 pub mod login;
 pub mod lyrics;
 pub mod page_cache;
+pub mod plugins;
+pub mod radio;
 pub mod stream;
+pub mod updates;
+pub mod video;
 pub mod vlc;
 
 use std::path::PathBuf;

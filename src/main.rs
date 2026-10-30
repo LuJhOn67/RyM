@@ -58,6 +58,8 @@ enum Input {
     NewPlaylist,
     /// How many liked songs to download (empty = all).
     DownloadCount,
+    /// Video plugin: a link from YouTube or any site to download.
+    Link,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +106,12 @@ enum Event {
     ArtistFound(String, Result<Option<String>, String>),
     /// The liked songs batch download, after each song.
     Batch(stream::Batch),
+    /// A newer RyM on GitHub (None: up to date); true when asked with U.
+    Update(Result<Option<rymplayer::updates::Release>, String>, bool),
+    /// The plugin store's list.
+    Store(Result<Vec<rymplayer::plugins::Plugin>, String>),
+    /// A video's picture and sound links, to watch it.
+    VideoLinks(Track, Result<(String, Option<String>), String>),
     /// The account's liked songs, re-read now and then so likes made on the phone show here.
     Liked(Result<Vec<Track>, String>),
     /// A playlist was made; the song to put in it, if it was made from the picker.
@@ -166,6 +174,13 @@ struct App {
     /// Selected row while the song menu is open, and the song it's for.
     song_menu: Option<usize>,
     menu_song: Option<Track>,
+    /// A newer RyM, shown in a popup with its patch notes until closed.
+    pub update: Option<rymplayer::updates::Release>,
+    /// The plugin store: its list once loaded, and the selected row while open.
+    pub store: Option<Vec<rymplayer::plugins::Plugin>>,
+    pub store_sel: Option<usize>,
+    /// When the hourly "is it time to look for updates" last ran.
+    update_tick: Instant,
     /// When Previous was last pressed: twice in a row goes back even mid-song.
     last_prev: Instant,
     /// Song the picker (or a new playlist) is for.
@@ -212,6 +227,10 @@ impl App {
             picker: None,
             song_menu: None,
             menu_song: None,
+            update: None,
+            store: None,
+            store_sel: None,
+            update_tick: Instant::now(),
             last_prev: Instant::now() - Duration::from_secs(60),
             pick_song: None,
             playlists: Vec::new(),
@@ -222,6 +241,8 @@ impl App {
     fn start(&mut self) {
         self.config = Config::load();
         rymplayer::i18n::set_arabic(self.config.arabic);
+        self.auto_update_check();
+        self.spawn(async { Event::Store(s(rymplayer::plugins::store().await)) });
         stream::use_source(self.config.source);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
@@ -453,6 +474,43 @@ impl App {
                 self.focus = Focus::Tracks;
             }
             Event::ArtistFound(..) => self.status = tr("Artist not found").into(),
+            Event::Update(result, asked) => match result {
+                Ok(Some(r)) => self.update = Some(r),
+                Ok(None) if asked => self.status = tr("You have the latest version").into(),
+                Err(e) if asked => self.status = format!("{}: {e}", tr("Couldn't check for updates")),
+                _ => {}
+            },
+            Event::Store(result) => match result {
+                Ok(list) => {
+                    let news: Vec<String> = rymplayer::plugins::updates(&self.config.plugins, &list).iter().map(|p| p.name().to_string()).collect();
+                    if !news.is_empty() {
+                        self.status = format!("{}: {}", tr("Plugin updates"), news.join(", "));
+                    }
+                    self.store = Some(list);
+                }
+                Err(e) => self.status = e,
+            },
+            Event::VideoLinks(t, result) => match (result, rymplayer::vlc::find()) {
+                (Ok((video, audio)), Some(exe)) => {
+                    if self.is_playing()
+                        && let Some(a) = &self.audio
+                    {
+                        a.toggle();
+                    }
+                    match rymplayer::video::watch_in_vlc(&exe, &video, audio.as_deref(), &format!("{} - {}", t.artist, t.title)) {
+                        Ok(child) => {
+                            self.vlc = Some(child);
+                            self.status.clear();
+                        }
+                        Err(e) => self.status = format!("{}: {e}", tr("Can't open the video")),
+                    }
+                }
+                (_, None) => {
+                    let _ = rymplayer::updates::open_link(&rymplayer::video::watch_url(&t.video_id));
+                    self.status = tr("VLC isn't installed: opening YouTube in the browser").into();
+                }
+                (Err(e), _) => self.status = format!("{}: {e}", tr("Can't open the video")),
+            },
             Event::Batch(b) => {
                 let mut words = format!("{} {} / {}", tr("Downloading songs"), b.done, b.total);
                 for (n, what) in [(b.saved, tr("saved")), (b.skipped, tr("already there")), (b.failed, tr("failed"))] {
@@ -518,6 +576,21 @@ impl App {
             self.settings_key(sel, k.code);
             return true;
         }
+        if let Some(r) = self.update.clone() {
+            match k.code {
+                KeyCode::Enter => {
+                    let _ = rymplayer::updates::open_link(&r.download_for(if cfg!(windows) { "RyM.exe" } else { "RyM-linux-x86_64.tar.gz" }));
+                    self.update = None;
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.update = None,
+                _ => {}
+            }
+            return true;
+        }
+        if let Some(sel) = self.store_sel {
+            self.store_key(sel, k.code);
+            return true;
+        }
         if let Some(sel) = self.song_menu {
             self.song_menu_key(sel, k.code);
             return true;
@@ -561,6 +634,26 @@ impl App {
             KeyCode::Char('h') => self.open(Page::History, tr("History").into()),
             KeyCode::Char('a') => self.open_picker(),
             KeyCode::Char('o') => self.open_song_menu(),
+            KeyCode::Char('U') => self.check_updates(true),
+            KeyCode::Char('P') => {
+                self.store_sel = Some(0);
+                if self.store.is_none() {
+                    self.spawn(async { Event::Store(s(rymplayer::plugins::store().await)) });
+                }
+            }
+            KeyCode::Char('v') => {
+                if let Some(t) = self.target_song() {
+                    self.watch_video(t);
+                }
+            }
+            KeyCode::Char('V') => {
+                if self.has_video() {
+                    self.buffer.clear();
+                    self.input = Some(Input::Link);
+                } else {
+                    self.status = tr("Install the video plugin first (P)").into();
+                }
+            }
             KeyCode::Char('A') => {
                 if let Some(t) = self.target_song() {
                     self.go_artist(t);
@@ -616,6 +709,13 @@ impl App {
     fn submit(&mut self, input: Input) {
         let text = std::mem::take(&mut self.buffer).trim().to_string();
         self.input = None;
+        if input == Input::Link {
+            if !text.is_empty() {
+                self.status = format!("{} {text}", tr("Downloading"));
+                self.spawn(async move { Event::Downloaded(s(rymplayer::video::download(&text, true).await)) });
+            }
+            return;
+        }
         if input == Input::DownloadCount {
             self.download_all(text.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(5000));
             return;
@@ -633,7 +733,7 @@ impl App {
                 self.focus = Focus::Tracks;
                 self.spawn(async move { Event::Tracks(Page::Search, s(api.search(text).await)) });
             }
-            Input::DownloadCount => {}
+            Input::DownloadCount | Input::Link => {}
             Input::NewPlaylist => {
                 let Some(api) = self.api.clone() else { return };
                 let song = self.pick_song.take().map(|t| t.video_id);
@@ -883,6 +983,10 @@ impl App {
             if !t.artist.is_empty() {
                 rows.push((tr("Go to artist"), 'a'));
             }
+            if self.has_video() {
+                rows.push((tr("Watch video"), 'v'));
+                rows.push((tr("Download video"), 'V'));
+            }
         }
         rows
     }
@@ -929,6 +1033,12 @@ impl App {
             }
             'l' => self.like(t),
             'a' => self.go_artist(t),
+            'v' => self.watch_video(t),
+            'V' => {
+                let url = rymplayer::video::watch_url(&t.video_id);
+                self.status = format!("{} \"{}\"...", tr("Downloading"), t.title);
+                self.spawn(async move { Event::Downloaded(s(rymplayer::video::download(&url, true).await)) });
+            }
             _ => {}
         }
     }
@@ -1264,7 +1374,86 @@ impl App {
         self.spawn(async move { Event::Rated(vid.clone(), like, s(api.rate(vid, like).await)) });
     }
 
+    fn has_video(&self) -> bool {
+        self.config.plugins.contains_key(rymplayer::plugins::VIDEO)
+    }
+
+    /// Video plugin: the song's video in VLC (or on YouTube in the browser without VLC).
+    fn watch_video(&mut self, t: Track) {
+        if !self.has_video() {
+            self.status = tr("Install the video plugin first (P)").into();
+            return;
+        }
+        if rymplayer::local::is_local(&t.video_id) {
+            return;
+        }
+        self.status = tr("Opening the video...").into();
+        self.spawn(async move {
+            let links = rymplayer::video::links(&t.video_id).await;
+            Event::VideoLinks(t, s(links))
+        });
+    }
+
+    fn check_updates(&mut self, asked: bool) {
+        self.config.last_update_check = rymplayer::updates::now();
+        self.config.save();
+        if asked {
+            self.status = tr("Checking for updates...").into();
+        }
+        let beta = self.config.beta_updates;
+        self.spawn(async move { Event::Update(s(rymplayer::updates::check(beta).await), asked) });
+    }
+
+    /// At start, then hourly: a look on GitHub when it's been 12 hours.
+    fn auto_update_check(&mut self) {
+        if rymplayer::updates::due(self.config.auto_update_check, self.config.last_update_check) {
+            self.check_updates(false);
+        }
+    }
+
+    /// The plugin store's rows: the store's plugins with whether they're installed.
+    pub fn store_rows(&self) -> Vec<(String, String)> {
+        let Some(list) = &self.store else { return Vec::new() };
+        list.iter()
+            .map(|p| {
+                let state = match self.config.plugins.get(&p.id) {
+                    Some(v) if rymplayer::updates::newer(&p.version, v) => format!("{} {} → {}", tr("Update"), v, p.version),
+                    Some(v) => format!("{} {v}", tr("Installed")),
+                    None => format!("{} {}", tr("Version"), p.version),
+                };
+                (format!("{} · {}", p.name(), p.description()), state)
+            })
+            .collect()
+    }
+
+    fn store_key(&mut self, sel: usize, code: KeyCode) {
+        let last = self.store.as_ref().map_or(0, |l| l.len().saturating_sub(1));
+        match code {
+            KeyCode::Esc | KeyCode::Char('P') | KeyCode::Char('q') => self.store_sel = None,
+            KeyCode::Up | KeyCode::Char('k') => self.store_sel = Some(sel.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.store_sel = Some((sel + 1).min(last)),
+            KeyCode::Enter => {
+                let Some(p) = self.store.as_ref().and_then(|l| l.get(sel)).cloned() else { return };
+                // Installed and current: remove; otherwise install (or update).
+                let current = self.config.plugins.get(&p.id).is_some_and(|v| !rymplayer::updates::newer(&p.version, v));
+                if current {
+                    self.config.plugins.remove(&p.id);
+                    self.status = tr("Plugin removed").into();
+                } else {
+                    self.config.plugins.insert(p.id.clone(), p.version.clone());
+                    self.status = tr("Plugin installed").into();
+                }
+                self.config.save();
+            }
+            _ => {}
+        }
+    }
+
     fn tick(&mut self) {
+        if self.update_tick.elapsed() > Duration::from_secs(3600) {
+            self.update_tick = Instant::now();
+            self.auto_update_check();
+        }
         if self.logged_in() && self.likes_synced.elapsed() > SYNC_EVERY {
             self.likes_synced = Instant::now();
             if let Some(api) = self.api.clone() {

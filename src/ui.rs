@@ -190,6 +190,17 @@ fn draw_main(f: &mut Frame, app: &mut App) {
     if let Some(sel) = app.song_menu {
         draw_song_menu(f, app, th, sel);
     }
+    if let Some(sel) = app.store_sel {
+        draw_store(f, app, th, sel);
+    }
+    if app.update.is_some() {
+        draw_update(f, app, th);
+    }
+    if app.input == Some(Input::Link) {
+        let area = centered(f.area(), 72, 3);
+        popup_bg(f, th, area);
+        f.render_widget(typed(app, th).block(pane(th, i18n::tr("Paste a link from YouTube or any site (Enter / Esc)"), true)), area);
+    }
     if app.input == Some(Input::DownloadCount) {
         let area = centered(f.area(), 64, 3);
         popup_bg(f, th, area);
@@ -207,6 +218,41 @@ fn popup_bg(f: &mut Frame, th: &Theme, area: Rect) {
     f.render_widget(Clear, area);
     if let Some(bg) = th.bg {
         f.render_widget(Block::default().style(Style::new().bg(bg)), area);
+    }
+}
+
+/// A newer RyM: its version and patch notes; Enter opens the download.
+fn draw_update(f: &mut Frame, app: &mut App, th: &Theme) {
+    let Some(r) = &app.update else { return };
+    let area = centered(f.area(), 76, f.area().height.saturating_sub(4).min(26));
+    popup_bg(f, th, area);
+    let kind = if r.beta { i18n::tr("New beta") } else { i18n::tr("New update") };
+    let title = format!("{kind}: RyM {} ({} {})", r.version, i18n::tr("You have"), rymplayer::VERSION);
+    let block = pane(th, &title, true).title_bottom(Line::from(format!(" {} ", t("Enter download  Esc later")).fg(th.dim)));
+    let mut lines = vec![Line::from(t("What's new").fg(th.accent).bold()), Line::default()];
+    lines.extend(r.plain_notes().iter().map(|l| Line::from(show(l).fg(th.text))));
+    app.areas.popup = area;
+    f.render_widget(Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: false }), area);
+}
+
+/// The plugin store (`P`): each plugin with whether it's installed; Enter installs or removes.
+fn draw_store(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
+    let rows = app.store_rows();
+    let area = centered(f.area(), 90, rows.len() as u16 * 2 + 3);
+    popup_bg(f, th, area);
+    let block = pane(th, i18n::tr("Plugin store"), true).title_bottom(Line::from(format!(" {} ", t("Enter install / remove  Esc close")).fg(th.dim)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    app.areas.popup = area;
+    if rows.is_empty() {
+        f.render_widget(Paragraph::new(t("Loading the store...").fg(th.dim)), inner);
+        return;
+    }
+    for (i, (name, state)) in rows.iter().enumerate() {
+        let r = Rect::new(inner.x, inner.y + 2 * i as u16, inner.width, 2);
+        let style = if i == sel { cursor_style(th, true) } else { Style::new() };
+        let text = vec![Line::from(format!(" {}", show(name)).fg(th.text)), Line::from(format!(" {}", show(state)).fg(th.accent))];
+        f.render_widget(Paragraph::new(text).style(style), r);
     }
 }
 
@@ -490,6 +536,8 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("o", "song menu"),
         ("A", "artist"),
         ("D", "download all"),
+        ("U", "updates"),
+        ("P", "plugins"),
         ("tab", "switch"),
         (",", "settings"),
         ("q", "quit"),
@@ -540,7 +588,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
 
 /// The key hints' words as the static text the translations are keyed on.
 fn word(v: &str) -> &'static str {
-    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "artist", "download all", "switch", "settings", "quit"]
+    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
         .into_iter()
         .find(|w| *w == v)
         .unwrap_or("")
