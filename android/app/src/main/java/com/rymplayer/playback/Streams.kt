@@ -91,6 +91,22 @@ object Streams {
         }
     }
 
+    /**
+     * Gets NewPipe and YouTube's player code (needed to unlock every link) ready when the app
+     * opens, so the first song tapped doesn't wait for them.
+     */
+    fun warmUp() {
+        scope.async {
+            runCatching {
+                initNewPipe()
+                YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(
+                    "dQw4w9WgXcQ",
+                    "https://rr1---sn-warm.googlevideo.com/videoplayback?n=AAAAAAAAAAAAAAAA",
+                )
+            }.onFailure { android.util.Log.w("RyM", "warm-up: ${it.message}") }
+        }
+    }
+
     /** The song's stream link (not a cached file), for an outside player. */
     suspend fun streamLink(videoId: String): String = kotlinx.coroutines.withContext(Dispatchers.IO) { cachedLink(videoId).url }
 

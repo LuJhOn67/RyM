@@ -23,7 +23,10 @@ import com.rymplayer.data.parseDuration
 import com.rymplayer.playback.Player
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** The song a menu is open for, and its place in the queue when opened from "Up next". */
@@ -74,6 +77,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lyricsJob: Job? = null
 
     init {
+        com.rymplayer.playback.Streams.warmUp()
         com.rymplayer.playback.Streams.connections = prefs.getInt("dl_connections", 8)
         com.rymplayer.playback.Streams.pieceMb = prefs.getInt("dl_piece_mb", 0)
         val cookie = prefs.getString("cookie", null)
@@ -105,8 +109,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     playlists = lists
                     PageCache.savePlaylists(getApplication(), lists)
-                    liked.clear()
-                    liked += likedSongs.map { it.videoId }
+                    syncLiked(likedSongs)
                 } catch (e: SignedOutException) {
                     status = "Your session ended. Sign in again."
                     signOut()
@@ -128,6 +131,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         signedIn = false
         playlists = emptyList()
         liked.clear()
+        localLikes.clear()
         stack.clear()
         // The saved home and playlists were this account's.
         PageCache.clear(getApplication())
@@ -180,21 +184,92 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!homeLoading && System.currentTimeMillis() - homeLoadedAt > 30 * 60 * 1000L) loadHome()
     }
 
+    /**
+     * A fresh home feed: YouTube's page (rested items left out, see [FeedMemory]) under a
+     * "New for you" shelf made from the radio of a few liked or recently played songs, different
+     * ones each time. The liked songs are read on the way, so hearts are up to date too.
+     */
     fun loadHome() {
+        if (homeLoading && homeJob?.isActive == true) return
         homeLoading = true
-        viewModelScope.launch {
+        homeJob = viewModelScope.launch {
+            val ctx = getApplication<Application>()
             // A failed refresh keeps what's on screen (the saved feed) instead of emptying it.
-            runCatching { api.home() }
+            runCatching {
+                coroutineScope {
+                    val user = api.signedIn
+                    val page = async { api.home() }
+                    val likedSongs = async { if (user) runCatching { api.playlist(LIKED_ID) }.getOrNull() else null }
+                    val played = async { if (user) runCatching { api.history() }.getOrDefault(emptyList()) else emptyList() }
+                    val arranged = FeedMemory.arrange(ctx, page.await())
+                    val likedList = likedSongs.await()
+                    likedList?.let(::syncLiked)
+                    val history = played.await()
+                    val pool = likedList.orEmpty().take(60) + history.take(40) + arranged.filter { it.link == null }
+                    val seeds = FeedMemory.pickSeeds(ctx, pool, 3)
+                    val radios = seeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }.awaitAll()
+                    val known = (likedList.orEmpty() + history + arranged).map { it.videoId }.toSet() + seeds
+                    FeedMemory.pickNew(ctx, radios, known) + arranged
+                }
+            }
                 .onFailure { if (home.isEmpty()) status = it.message.orEmpty() }
                 .onSuccess { fresh ->
-                    home = FeedMemory.arrange(getApplication(), fresh)
-                    PageCache.saveTracks(getApplication(), "home", home)
+                    home = fresh
+                    PageCache.saveTracks(ctx, "home", home)
                     homeLoadedAt = System.currentTimeMillis()
                 }
             // Songs at the top start right away when tapped.
             com.rymplayer.playback.Streams.prefetchLinks(home.filter { it.link == null }.take(8).map { it.videoId })
             homeLoading = false
         }
+    }
+
+    private var homeJob: Job? = null
+
+    // ---------------------------------------------------------------- liked songs, kept in step
+
+    /** Likes made here lately, with when: they win over a synced list YouTube may not have updated yet. */
+    private val localLikes = HashMap<String, Pair<Boolean, Long>>()
+    private var syncJob: Job? = null
+
+    /** The account's liked songs as YouTube Music has them now (likes from the PC show up here). */
+    private fun syncLiked(songs: List<Track>) {
+        val now = System.currentTimeMillis()
+        localLikes.entries.removeAll { now - it.value.second > 60_000 }
+        val ids = LinkedHashSet(songs.map { it.videoId })
+        var shown = songs
+        for ((id, change) in localLikes) {
+            if (change.first) ids += id else { ids -= id; shown = shown.filter { it.videoId != id } }
+        }
+        if (liked.toSet() != ids) {
+            liked.clear()
+            liked += ids
+        }
+        likedPages().forEach { pages[it] = shown }
+    }
+
+    private fun likedPages() = pages.keys.filter { it.kind == Screen.Kind.Playlist && it.id == LIKED_ID }
+
+    fun syncLikesNow() {
+        if (!api.signedIn || syncJob?.isActive == true) return
+        syncJob = viewModelScope.launch { runCatching { api.playlist(LIKED_ID) }.onSuccess(::syncLiked) }
+    }
+
+    private var foregroundJob: Job? = null
+
+    /** App on screen: liked songs are re-read every two minutes (and right away). */
+    fun onForeground() {
+        if (foregroundJob?.isActive == true) return
+        foregroundJob = viewModelScope.launch {
+            while (isActive) {
+                syncLikesNow()
+                delay(120_000)
+            }
+        }
+    }
+
+    fun onBackground() {
+        foregroundJob?.cancel()
     }
 
     private fun load(page: Screen.Songs) {
@@ -289,12 +364,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleLike(t: Track) {
         val like = t.videoId !in liked
-        if (like) liked += t.videoId else liked -= t.videoId
+        setLiked(t, like)
         viewModelScope.launch {
             runCatching { api.rate(t.videoId, if (like) MusicApi.Rating.Like else MusicApi.Rating.None) }.onFailure {
-                if (like) liked -= t.videoId else liked += t.videoId
+                setLiked(t, !like)
                 status = "Couldn't save the like"
             }
+        }
+    }
+
+    /** Hearts and the Liked Music page follow at once. */
+    private fun setLiked(t: Track, like: Boolean) {
+        localLikes[t.videoId] = like to System.currentTimeMillis()
+        if (like) { if (t.videoId !in liked) liked += t.videoId } else liked -= t.videoId
+        for (key in likedPages()) {
+            val list = pages[key].orEmpty()
+            pages[key] = if (like) (if (list.none { it.videoId == t.videoId }) listOf(t) + list else list) else list.filter { it.videoId != t.videoId }
         }
     }
 

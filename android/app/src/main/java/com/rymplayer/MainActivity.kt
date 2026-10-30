@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.viewModels
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -53,6 +54,19 @@ import com.rymplayer.ui.SongsPage
 import com.rymplayer.ui.coverColor
 
 class MainActivity : ComponentActivity() {
+    private val vm: AppViewModel by viewModels()
+
+    // Liked songs stay in step with the PC while the app is on screen.
+    override fun onStart() {
+        super.onStart()
+        vm.onForeground()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        vm.onBackground()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
