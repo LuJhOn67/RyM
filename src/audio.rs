@@ -44,9 +44,14 @@ struct FileSource {
 impl FileSource {
     fn open(path: &Path) -> Result<Self> {
         let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-        let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+        Self::from_source(Box::new(file), path.extension().and_then(|e| e.to_str()))
+    }
+
+    /// Decodes any byte source (a file, or a song still arriving); `ext` helps guess the format.
+    fn from_source(source: Box<dyn symphonia::core::io::MediaSource>, ext: Option<&str>) -> Result<Self> {
+        let mss = MediaSourceStream::new(source, MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if let Some(ext) = ext {
             hint.with_extension(ext);
         }
         let reader = symphonia::default::get_probe().probe(
@@ -174,6 +179,25 @@ impl Audio {
     }
 
     /// `known_secs`: length from YouTube Music, used when the file doesn't say (WebM).
+    /// Plays a song that is still downloading: it starts from what has arrived and waits for the rest.
+    pub fn play_arriving(&mut self, song: &crate::arriving::Arriving, known_secs: Option<f32>) -> Result<()> {
+        let src = FileSource::from_source(Box::new(song.reader()), Some(&song.ext))?;
+        self.duration = src.total_duration().or(known_secs.or(song.seconds).map(Duration::from_secs_f32));
+        self.loaded = true;
+        self.player.clear();
+        self.player.append(src);
+        self.player.play();
+        Ok(())
+    }
+
+    /// A cached file or a song still arriving.
+    pub fn play(&mut self, song: &crate::stream::Playable, known_secs: Option<f32>) -> Result<()> {
+        match song {
+            crate::stream::Playable::File(path) => self.play_file(path, known_secs),
+            crate::stream::Playable::Arriving(a) => self.play_arriving(a, known_secs),
+        }
+    }
+
     pub fn play_file(&mut self, path: &Path, known_secs: Option<f32>) -> Result<()> {
         let src = FileSource::open(path)?;
         self.duration = src.total_duration().or(known_secs.map(Duration::from_secs_f32));
@@ -253,5 +277,76 @@ mod seek_tests {
         println!("seek: {r:?}");
         let rest = src.by_ref().count() as f64 / src.channels as f64 / src.rate as f64;
         println!("seconds left after seeking to 60s: {rest:.1}");
+    }
+}
+
+#[cfg(test)]
+mod arriving_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+
+    /// A real cached song served by a local server (no internet), decoded while it arrives, gives
+    /// the same audio as decoding the file: `cargo test --lib arriving_decodes -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn arriving_decodes_like_the_file() {
+        let song = std::fs::read_dir(crate::stream::cache_dir())
+            .expect("a song cache")
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "webm"))
+            .expect("a cached webm song");
+        let data = Arc::new(std::fs::read(&song).unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/audio", listener.local_addr().unwrap());
+        let served = data.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut conn) = conn else { continue };
+                let data = served.clone();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(conn.try_clone().unwrap());
+                    let mut range = (0, data.len() - 1);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                            let (a, b) = r.trim().split_once('-').unwrap();
+                            range = (a.parse().unwrap(), b.parse::<usize>().unwrap().min(data.len() - 1));
+                        }
+                    }
+                    let (a, b) = range;
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        data.len(),
+                        b - a + 1
+                    );
+                    let _ = conn.write_all(head.as_bytes());
+                    for piece in data[a..=b].chunks(32 << 10) {
+                        let _ = conn.write_all(piece);
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                });
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("rym-arriving-decode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let started = std::time::Instant::now();
+        let a = crate::arriving::Arriving::start(url, Vec::new(), "webm".into(), None, dir.join("s.webm")).await.unwrap();
+        let ready = started.elapsed();
+        let (streamed, from_file) = tokio::task::spawn_blocking(move || {
+            let streamed = FileSource::from_source(Box::new(a.reader()), Some("webm")).unwrap().count();
+            let from_file = FileSource::open(&song).unwrap().count();
+            (streamed, from_file)
+        })
+        .await
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("ready to play after {ready:?}; {streamed} samples streamed, {from_file} from the file");
+        assert_eq!(streamed, from_file);
     }
 }

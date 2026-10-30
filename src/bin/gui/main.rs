@@ -120,7 +120,8 @@ pub enum Message {
     /// Play a single song and let YouTube Music's radio fill the queue after it.
     PlaySong(Track),
     PlayAll,
-    Fetched(String, Result<PathBuf, String>),
+    /// The song to play: from the cache, or still arriving (it plays while it downloads).
+    Fetched(String, Result<stream::Playable, String>),
     Toggle,
     Next,
     Prev,
@@ -706,14 +707,14 @@ impl Gui {
                 }
                 self.loading = false;
                 match result {
-                    Ok(path) => {
+                    Ok(song) => {
                         self.failures = 0;
                         let known = self
                             .now_playing()
                             .and_then(|t| parse_duration(&t.duration))
                             .or_else(|| stream::cached_duration(&vid));
                         if let Some(a) = &mut self.audio
-                            && let Err(e) = a.play_file(&path, known)
+                            && let Err(e) = a.play(&song, known)
                         {
                             self.status = format!("Can't play: {e}");
                         }
@@ -1079,7 +1080,7 @@ impl Gui {
             a.stop();
         }
         let vid = track.video_id.clone();
-        let fetch = Task::perform(stream::fetch(vid.clone()), {
+        let fetch = Task::perform(stream::open(vid.clone()), {
             let vid = vid.clone();
             move |r| Message::Fetched(vid.clone(), s(r))
         });

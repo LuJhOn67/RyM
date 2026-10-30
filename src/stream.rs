@@ -55,6 +55,65 @@ pub fn cached_duration(video_id: &str) -> Option<f32> {
     std::fs::read_to_string(cache_dir().join(format!("{video_id}.secs"))).ok()?.trim().parse().ok()
 }
 
+/// A song ready to play: a file in the cache, or one still arriving that plays while it downloads.
+#[derive(Debug, Clone)]
+pub enum Playable {
+    File(PathBuf),
+    Arriving(crate::arriving::Arriving),
+}
+
+/// Opens a song for playback: the cached file, or the stream, ready after its first 128 KB (the
+/// rest keeps downloading and is cached when done). In the default mode a link YouTube refuses
+/// from InnerTube is fetched again through yt-dlp.
+pub async fn open(video_id: String) -> Result<Playable> {
+    if let Some(p) = cached(&video_id) {
+        return Ok(Playable::File(p));
+    }
+    let dir = cache_dir();
+    tokio::fs::create_dir_all(&dir).await?;
+    let start = |(url, headers, ext, secs): (String, Vec<(String, String)>, String, Option<f32>)| {
+        let save_to = dir.join(format!("{video_id}.{ext}"));
+        if let Some(secs) = secs {
+            let _ = std::fs::write(dir.join(format!("{video_id}.secs")), secs.to_string());
+        }
+        crate::arriving::Arriving::start(url, headers, ext, secs, save_to)
+    };
+    let arriving = match SOURCE.load(Ordering::Relaxed) {
+        1 => start(ytdlp_link(&video_id).await?).await?,
+        2 => start(innertube_link(&video_id).await?).await?,
+        _ => {
+            let quick = match innertube_link(&video_id).await {
+                Ok(link) => start(link).await,
+                Err(e) => Err(e),
+            };
+            match quick {
+                Ok(a) => a,
+                Err(e) => start(ytdlp_link(&video_id).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?).await?,
+            }
+        }
+    };
+    Ok(Playable::Arriving(arriving))
+}
+
+/// The InnerTube link for a song with the header its stream wants, its file type and length.
+async fn innertube_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
+    let a = crate::innertube::audio(video_id).await?;
+    Ok((a.url, vec![("User-Agent".to_string(), a.user_agent.to_string())], a.ext.to_string(), a.seconds))
+}
+
+/// A song's direct link and the headers to send with it, for an outside player (VLC).
+pub async fn link(video_id: &str) -> Result<(String, Vec<(String, String)>)> {
+    let (url, headers, ..) = match SOURCE.load(Ordering::Relaxed) {
+        1 => ytdlp_link(video_id).await?,
+        2 => innertube_link(video_id).await?,
+        _ => match innertube_link(video_id).await {
+            Ok(l) => l,
+            Err(e) => ytdlp_link(video_id).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?,
+        },
+    };
+    Ok((url, headers))
+}
+
 pub async fn fetch(video_id: String) -> Result<PathBuf> {
     if let Some(p) = cached(&video_id) {
         return Ok(p);

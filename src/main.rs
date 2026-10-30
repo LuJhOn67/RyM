@@ -84,7 +84,8 @@ enum Event {
     Radio(Result<Vec<Track>, String>),
     Playlists(Result<Vec<Playlist>, String>),
     Tracks(Page, Result<Vec<Track>, String>),
-    Fetched(String, Result<PathBuf, String>),
+    /// The song to play: from the cache, or still arriving (it plays while it downloads).
+    Fetched(String, Result<stream::Playable, String>),
     Lyrics(String, Result<Option<Lyrics>, String>),
     Rated(String, bool, Result<(), String>),
     /// A playlist was made; the song to put in it, if it was made from the picker.
@@ -330,12 +331,12 @@ impl App {
                 }
                 self.loading = false;
                 match result {
-                    Ok(path) => {
+                    Ok(song) => {
                         self.failures = 0;
                         let known = parse_duration(&self.now_playing().map(|t| t.duration.clone()).unwrap_or_default())
                             .or_else(|| stream::cached_duration(&vid));
                         if let Some(a) = &mut self.audio {
-                            match a.play_file(&path, known) {
+                            match a.play(&song, known) {
                                 Ok(()) => self.status.clear(),
                                 Err(e) => self.status = format!("Can't play: {e}"),
                             }
@@ -867,7 +868,7 @@ impl App {
 
         let vid = track.video_id.clone();
         let v = vid.clone();
-        self.spawn(async move { Event::Fetched(v.clone(), s(stream::fetch(v).await)) });
+        self.spawn(async move { Event::Fetched(v.clone(), s(stream::open(v).await)) });
 
         let v = vid.clone();
         let dur = parse_duration(&track.duration);

@@ -2,6 +2,7 @@
 //! Used by the terminal app (`RymPlayer`) and the windowed app (`RymPlayer-GUI`).
 
 pub mod api;
+pub mod arriving;
 pub mod audio;
 pub mod config;
 pub mod innertube;
