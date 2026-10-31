@@ -147,6 +147,27 @@ pub fn open_link(url: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+mod live {
+    /// GitHub's real list, read by a 6.6 app and by this one: prints what each would be offered.
+    #[tokio::test]
+    #[ignore]
+    async fn offers_from_github() {
+        let list: serde_json::Value = super::github()
+            .get(format!("https://api.github.com/repos/{}/releases?per_page=30", super::REPO))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let list = list.as_array().unwrap();
+        let old = super::pick(list, false, "6.6").expect("6.6 should be offered an update");
+        println!("6.6 is offered {} ({} files, notes {} lines, zip {})", old.version, old.files.len(), old.plain_notes().len(), old.download_for("RyM-GTK-Windows.zip"));
+        println!("{} is offered {:?}", crate::VERSION, super::pick(list, false, crate::VERSION).map(|r| r.version));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
