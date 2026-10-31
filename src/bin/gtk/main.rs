@@ -2321,11 +2321,11 @@ fn render_queue(ui: &Shared) {
 /// shows another source's lyrics.
 fn fill_sources(ui: &Shared) {
     let Some(t) = now_playing(ui) else { return };
-    let (pop, found) = {
+    let (pop, found, shown) = {
         let s = ui.borrow();
         let pop = s.w.sources.popover();
         let found = s.alt_lyrics.as_ref().filter(|(id, _)| *id == t.video_id).map(|(_, l)| l.clone());
-        (pop, found)
+        (pop, found, s.lyrics.clone())
     };
     let Some(pop) = pop else { return };
     let col = gtk::Box::new(Orientation::Vertical, 0);
@@ -2334,8 +2334,9 @@ fn fill_sources(ui: &Shared) {
             col.append(&label(tr("Looking for lyrics..."), &["dim"]));
             let api = api_of(ui);
             let tr2 = t.clone();
+            let shown = shown.clone();
             post(ui, async move {
-                let list = rymplayer::lyrics::sources(api, tr2.clone()).await;
+                let list = rymplayer::lyrics::sources(api, tr2.clone(), shown).await;
                 Ev::LyricsSources(tr2.video_id, list)
             });
         }
@@ -2343,14 +2344,16 @@ fn fill_sources(ui: &Shared) {
         Some(list) => {
             for l in list {
                 let kind = if l.synced.is_empty() { tr("not synced") } else { tr("synced") };
-                let b = Button::with_label(&format!("{} · {kind}", l.source));
+                let mark = if shown.as_ref().is_some_and(|s| rymplayer::lyrics::same(s, &l)) { "✓ " } else { "" };
+                let b = Button::with_label(&format!("{mark}{} · {kind}", l.source));
                 if let Some(lab) = b.child().and_downcast::<Label>() {
                     lab.set_xalign(0.0);
                 }
-                let (ui, pop2) = (ui.clone(), pop.clone());
+                let (ui, pop2, vid) = (ui.clone(), pop.clone(), t.video_id.clone());
                 b.connect_clicked(move |_| {
                     pop2.popdown();
                     ui.borrow().w.side.set_visible_child_name("lyrics");
+                    rymplayer::lyrics::choose(&vid, &l);
                     show_lyrics(&ui, Some(l.clone()));
                 });
                 col.append(&b);

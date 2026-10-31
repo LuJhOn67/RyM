@@ -107,12 +107,12 @@ impl Queue {
             return;
         }
         self.songs.remove(i);
-        if let Some(c) = self.current
-            && i < c
-        {
-            self.current = Some(c - 1);
+        match self.current {
+            Some(c) if i < c => self.current = Some(c - 1),
+            // One of the added songs waiting after the playing one.
+            Some(c) if i <= c + self.added => self.added -= 1,
+            _ => {}
         }
-        self.added = self.added.saturating_sub(1);
     }
 }
 
@@ -183,5 +183,18 @@ mod tests {
         assert_eq!(q.now().unwrap().video_id, "b");
         q.remove(0);
         assert_eq!(q.now().unwrap().video_id, "b");
+    }
+
+    #[test]
+    fn removing_a_later_song_keeps_the_added_ones_in_order() {
+        let mut q = Queue::default();
+        q.start(vec![t("a"), t("b"), t("c")], 0);
+        q.add(t("x"));
+        q.remove(3);
+        q.add(t("y"));
+        assert_eq!(ids(&q), ["a", "x", "y", "b"]);
+        q.remove(1);
+        q.add(t("z"));
+        assert_eq!(ids(&q), ["a", "y", "z", "b"]);
     }
 }

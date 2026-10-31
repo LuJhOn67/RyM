@@ -535,7 +535,12 @@ impl App {
             },
             Event::LyricsSources(vid, list) => {
                 if self.now_playing().is_some_and(|t| t.video_id == vid) {
-                    self.alt_lyrics = Some((vid, list, 0));
+                    // The ones showing are in the list: L shows the next source.
+                    let at = match &self.lyrics {
+                        Some(shown) => list.iter().position(|l| lyrics::same(l, shown)).map_or(0, |p| (p + 1) % list.len()),
+                        None => 0,
+                    };
+                    self.alt_lyrics = Some((vid, list, at));
                     self.show_lyrics_source();
                 }
             }
@@ -1475,20 +1480,21 @@ impl App {
             Some((id, _, _)) if *id == t.video_id => self.lyrics_status = tr("No lyrics for this song").into(),
             _ => {
                 self.status = tr("Looking for lyrics...").into();
-                let api = self.api.clone();
+                let (api, shown) = (self.api.clone(), self.lyrics.clone());
                 self.spawn(async move {
                     let vid = t.video_id.clone();
-                    Event::LyricsSources(vid, lyrics::sources(api, t).await)
+                    Event::LyricsSources(vid, lyrics::sources(api, t, shown).await)
                 });
             }
         }
     }
 
     fn show_lyrics_source(&mut self) {
-        let Some((_, list, at)) = &self.alt_lyrics else { return };
+        let Some((vid, list, at)) = &self.alt_lyrics else { return };
         match list.get(*at) {
             Some(l) => {
                 self.status = format!("{}: {} ({}/{})", tr("Lyrics sources"), l.source, at + 1, list.len());
+                lyrics::choose(vid, l);
                 self.lyrics = Some(l.clone());
             }
             None => self.status = tr("No lyrics for this song").into(),

@@ -229,8 +229,8 @@ pub async fn lrclib(title: String, artist: String, album: String, duration: Opti
 /// Every source's lyrics for a song, for the lyrics view's source switcher: LRCLIB's matches
 /// (synced first, then the closest length; different texts only), YouTube Music's own, and
 /// lyrics.ovh, all asked at once. Each is labelled with where it came from ("LRCLIB 2" for
-/// LRCLIB's second match).
-pub async fn sources(api: Option<Api>, t: Track) -> Vec<Lyrics> {
+/// LRCLIB's second match). The lyrics `shown` now come first, so they can be picked again.
+pub async fn sources(api: Option<Api>, t: Track, shown: Option<Lyrics>) -> Vec<Lyrics> {
     let duration = crate::parse_duration(&t.duration);
     let local = crate::local::is_local(&t.video_id);
     let (lrc, ytm, ovh) = tokio::join!(
@@ -243,21 +243,42 @@ pub async fn sources(api: Option<Api>, t: Track) -> Vec<Lyrics> {
         },
         lyrics_ovh(&t.title, &t.artist),
     );
-    let mut out: Vec<Lyrics> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    for l in lrc.into_iter().chain(ytm).chain(ovh) {
-        // The same words with the same timing under another source only once (another timing
-        // stays: that's what switching is for when the lines run early or late).
-        let words: String = l.plain.iter().chain(l.synced.iter().map(|(_, s)| s)).flat_map(|s| s.chars()).filter(|c| c.is_alphanumeric()).take(400).collect::<String>().to_lowercase();
-        let timing: String = l.synced.iter().take(6).map(|(at, _)| format!("{:.0},", at * 2.0)).collect();
-        let key = format!("{timing}|{words}");
-        if seen.iter().any(|w| *w == key) {
+    distinct(shown.into_iter().chain(lrc).chain(ytm).chain(ovh))
+}
+
+/// The same words with the same timing: the same lyrics, whatever the source.
+fn key(l: &Lyrics) -> String {
+    let words: String = l.plain.iter().chain(l.synced.iter().map(|(_, s)| s)).flat_map(|s| s.chars()).filter(|c| c.is_alphanumeric()).take(400).collect::<String>().to_lowercase();
+    let timing: String = l.synced.iter().take(6).map(|(at, _)| format!("{:.0},", at * 2.0)).collect();
+    format!("{timing}|{words}")
+}
+
+pub fn same(a: &Lyrics, b: &Lyrics) -> bool {
+    key(a) == key(b)
+}
+
+/// The same lyrics under another source only once (another timing stays: that's what switching
+/// is for when the lines run early or late); LRCLIB's matches numbered "LRCLIB", "LRCLIB 2", ...
+pub fn distinct(list: impl IntoIterator<Item = Lyrics>) -> Vec<Lyrics> {
+    let mut seen = std::collections::HashSet::new();
+    let mut n = 0;
+    let mut out = Vec::new();
+    for mut l in list {
+        if !seen.insert(key(&l)) {
             continue;
         }
-        seen.push(key);
+        if l.source.starts_with("LRCLIB") {
+            n += 1;
+            l.source = if n == 1 { "LRCLIB".into() } else { format!("LRCLIB {n}") };
+        }
         out.push(l);
     }
     out
+}
+
+/// The lyrics picked in the switcher are the song's lyrics from now on.
+pub fn choose(video_id: &str, l: &Lyrics) {
+    keep(video_id, &Some(l.clone()));
 }
 
 /// LRCLIB: every usable match of the exact lookup and the searches, synced first.
@@ -294,16 +315,10 @@ async fn lrclib_all(title: String, artist: String, duration: Option<f32>) -> Vec
         }
     }
     hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-    hits.into_iter()
-        .take(4)
-        .enumerate()
-        .map(|(i, (_, _, mut l))| {
-            if i > 0 {
-                l.source = format!("LRCLIB {}", i + 1);
-            }
-            l
-        })
-        .collect()
+    // Both searches often find the same entries: four different ones.
+    let mut all = distinct(hits.into_iter().map(|(_, _, l)| l));
+    all.truncate(4);
+    all
 }
 
 /// lyrics.ovh: plain lyrics by artist and title (no timing).
@@ -397,6 +412,22 @@ mod tests {
 }
 
 #[cfg(test)]
+mod distinct_tests {
+    use super::*;
+
+    #[test]
+    fn other_timings_stay_and_lrclib_is_numbered() {
+        let words: Vec<String> = ["one", "two", "three", "four"].map(String::from).to_vec();
+        let timed = |shift: f32| Lyrics { synced: words.iter().enumerate().map(|(i, w)| (i as f32 * 2.0 + shift, w.clone())).collect(), plain: words.clone(), source: "LRCLIB".into() };
+        let plain = Lyrics { synced: Vec::new(), plain: words.clone(), source: "lyrics.ovh".into() };
+        let ytm = Lyrics { source: "YouTube Music".into(), ..plain.clone() };
+        let out = distinct([timed(0.0), timed(0.0), timed(1.5), plain, ytm]);
+        assert_eq!(out.iter().map(|l| l.source.as_str()).collect::<Vec<_>>(), ["LRCLIB", "LRCLIB 2", "lyrics.ovh"]);
+        assert!(same(&out[0], &timed(0.0)) && !same(&out[0], &out[1]));
+    }
+}
+
+#[cfg(test)]
 mod sources_probe {
     /// Every source for a well-known song; prints sources and line counts only.
     #[tokio::test]
@@ -413,7 +444,7 @@ mod sources_probe {
             artist_id: None,
             link: None,
         };
-        for l in super::sources(None, t).await {
+        for l in super::sources(None, t, None).await {
             println!("{}: {} synced, {} plain", l.source, l.synced.len(), l.plain.len());
         }
     }
