@@ -534,6 +534,9 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("F5/u", "refresh"),
         ("a", "add to playlist"),
         ("o", "song menu"),
+        ("Q", "up next"),
+        ("L", "lyrics source"),
+        ("s", "share"),
         ("A", "artist"),
         ("D", "download all"),
         ("U", "updates"),
@@ -588,7 +591,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
 
 /// The key hints' words as the static text the translations are keyed on.
 fn word(v: &str) -> &'static str {
-    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
+    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "up next", "lyrics source", "share", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
         .into_iter()
         .find(|w| *w == v)
         .unwrap_or("")
@@ -673,8 +676,8 @@ mod tests {
             })
             .collect();
         a.track_state.select(Some(1));
-        a.queue = a.tracks.clone();
-        a.current = Some(1);
+        a.q.songs = a.tracks.clone();
+        a.q.current = Some(1);
         a.liked.set("v2", true);
         a.lyrics = Some(lyrics::Lyrics {
             synced: lyrics::parse_lrc("[00:00.00]first line\n[00:05.00]second line\n[00:10.00]third line"),

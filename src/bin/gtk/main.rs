@@ -174,6 +174,15 @@ button.play:hover { background: @accent@; }
 .bar { background: @bar@; border-top: 1px solid @divider@; padding: 8px 14px; }
 .lyrics { border-radius: 14px; margin: 10px; padding: 26px 28px; }
 .lyric { font-size: 25px; font-weight: 800; padding: 7px 0; transition: color 300ms ease; }
+.qrow { border-radius: 10px; padding: 6px 8px; transition: background-color 180ms ease, box-shadow 200ms ease, padding 200ms ease; }
+.qrow:hover { background: @hover@; }
+.qrow.now { background: @selected@; }
+.qrow.now .title { color: @accent@; }
+.qrow.past { opacity: 0.55; }
+.qrow.lifted { background: @menu@; padding: 10px 12px; box-shadow: 0 8px 22px rgba(0,0,0,0.45); }
+.qrow.drop-here { box-shadow: inset 0 3px @accent@; }
+stackswitcher button { background: transparent; border: none; box-shadow: none; color: @dim@; font-weight: 700; }
+stackswitcher button:checked { color: @text@; background: @input@; }
 .store-card { background: @input@; border-radius: 12px; padding: 14px 16px; }
 .toast { background: @menu@; color: @text@; border-radius: 10px; padding: 10px 16px; margin: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
 popover > contents { background: @menu@; color: @text@; border-radius: 10px; padding: 6px; }
@@ -273,6 +282,8 @@ enum Ev {
     Store(anyhow::Result<Vec<rymplayer::plugins::Plugin>>),
     /// A video's picture and sound links, to watch it.
     VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
+    /// Every source's lyrics for a song (the source switcher).
+    LyricsSources(String, Vec<Lyrics>),
     Done,
 }
 
@@ -290,6 +301,11 @@ struct Widgets {
     lyrics_panel: gtk::Revealer,
     lyrics_box: gtk::Box,
     lyrics_scroll: gtk::ScrolledWindow,
+    /// The side panel: lyrics or the queue ("Up next").
+    side: gtk::Stack,
+    queue_box: gtk::Box,
+    /// The lyrics' source switcher.
+    sources: gtk::MenuButton,
     bar_cover: gtk::Picture,
     bar_title: Label,
     bar_artist: Label,
@@ -321,8 +337,17 @@ struct Ui {
     liked_tracks: Vec<Track>,
     likes_synced: Instant,
 
-    queue: Vec<Track>,
-    current: Option<usize>,
+    /// What plays: the songs, the playing one, and the ones added to play after it.
+    q: rymplayer::queue::Queue,
+    /// Songs played this session (Up next leaves them out).
+    played: HashSet<String>,
+    /// The song (request) whose end already moved the queue on, so it moves only once.
+    ended_for: u64,
+    /// Every source's lyrics for a song, once looked up (the source switcher).
+    alt_lyrics: Option<(String, Vec<Lyrics>)>,
+    /// A queue row was held for 2 s: it's lifted and can be dragged.
+    armed: Option<usize>,
+    held: bool,
     request_id: u64,
     loading: bool,
     radio_pending: bool,
@@ -571,7 +596,7 @@ fn signed_in(ui: &Shared) -> bool {
 
 fn now_playing(ui: &Shared) -> Option<Track> {
     let s = ui.borrow();
-    s.current.and_then(|i| s.queue.get(i).cloned())
+    s.q.current.and_then(|i| s.q.songs.get(i).cloned())
 }
 
 // ---------------------------------------------------------------- window
@@ -671,10 +696,41 @@ fn build(app: &Application) {
     lyrics_scroll.set_vexpand(true);
     lyrics_scroll.set_size_request(440, -1);
     lyrics_scroll.add_css_class("lyrics");
+    // Up next: the queue, reordered by holding a row for 2 s and dragging it.
+    let queue_box = gtk::Box::new(Orientation::Vertical, 2);
+    queue_box.set_margin_start(10);
+    queue_box.set_margin_end(10);
+    let queue_scroll = gtk::ScrolledWindow::new();
+    queue_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+    queue_scroll.set_child(Some(&queue_box));
+    queue_scroll.set_vexpand(true);
+    let side = gtk::Stack::new();
+    side.set_transition_type(gtk::StackTransitionType::Crossfade);
+    side.add_titled(&lyrics_scroll, Some("lyrics"), tr("Lyrics"));
+    side.add_titled(&queue_scroll, Some("queue"), tr("Up next"));
+    let switcher = gtk::StackSwitcher::new();
+    switcher.set_stack(Some(&side));
+    switcher.set_hexpand(true);
+    let sources = gtk::MenuButton::new();
+    sources.set_icon_name("view-list-symbolic");
+    sources.set_tooltip_text(Some(tr("Lyrics sources")));
+    sources.add_css_class("icon");
+    sources.set_popover(Some(&gtk::Popover::new()));
+    let side_head = gtk::Box::new(Orientation::Horizontal, 6);
+    side_head.set_margin_top(10);
+    side_head.set_margin_start(10);
+    side_head.set_margin_end(10);
+    side_head.append(&switcher);
+    side_head.append(&sources);
+    let side_box = gtk::Box::new(Orientation::Vertical, 0);
+    side_box.set_size_request(440, -1);
+    side_box.append(&side_head);
+    side_box.append(&side);
+    lyrics_scroll.set_size_request(-1, -1);
     let lyrics_panel = gtk::Revealer::new();
     lyrics_panel.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
     lyrics_panel.set_reveal_child(true);
-    lyrics_panel.set_child(Some(&lyrics_scroll));
+    lyrics_panel.set_child(Some(&side_box));
 
     let middle = gtk::Box::new(Orientation::Horizontal, 0);
     middle.append(&rail_box);
@@ -692,12 +748,15 @@ fn build(app: &Application) {
     names.append(&bar_artist);
     names.set_hexpand(true);
     let bar_heart = heart_button(tr("Like"));
+    let bar_share = icon_button("send-to-symbolic", tr("Share"), &["dim"]);
+    bar_share.set_valign(Align::Center);
     bar_heart.set_valign(Align::Center);
     let left = gtk::Box::new(Orientation::Horizontal, 12);
     left.set_size_request(320, -1);
     left.append(&bar_cover);
     left.append(&names);
     left.append(&bar_heart);
+    left.append(&bar_share);
 
     let prev = icon_button("media-skip-backward-symbolic", tr("Previous"), &[]);
     let play = Button::from_icon_name("media-playback-start-symbolic");
@@ -779,6 +838,9 @@ fn build(app: &Application) {
             lyrics_panel,
             lyrics_box,
             lyrics_scroll,
+            side,
+            queue_box,
+            sources: sources.clone(),
             bar_cover,
             bar_title,
             bar_artist,
@@ -798,8 +860,12 @@ fn build(app: &Application) {
         liked: Likes::default(),
         liked_tracks: Vec::new(),
         likes_synced: Instant::now(),
-        queue: Vec::new(),
-        current: None,
+        q: Default::default(),
+        played: HashSet::new(),
+        ended_for: 0,
+        alt_lyrics: None,
+        armed: None,
+        held: false,
         request_id: 0,
         loading: false,
         radio_pending: false,
@@ -884,6 +950,10 @@ fn build(app: &Application) {
         window.add_controller(keys);
     }
     {
+        let ui2 = ui.clone();
+        sources.set_create_popup_func(move |_| fill_sources(&ui2));
+    }
+    {
         // The bar's cover opens the lyrics (it never skips the song).
         let ui2 = ui.clone();
         let click = gtk::GestureClick::new();
@@ -904,6 +974,14 @@ fn build(app: &Application) {
         let s = ui.borrow();
         s.w.bar_artist.add_controller(click);
         s.w.bar_artist.set_cursor_from_name(Some("pointer"));
+    }
+    {
+        let ui = ui.clone();
+        bar_share.connect_clicked(move |_| {
+            if let Some(t) = now_playing(&ui) {
+                share(&ui, &t);
+            }
+        });
     }
     {
         let ui = ui.clone();
@@ -1878,6 +1956,9 @@ fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
         (if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))),
         (tr("Download"), Box::new(|ui: &Shared, t: &Track| download(ui, t.clone()))),
     ];
+    if !rymplayer::local::is_local(&t.video_id) {
+        items.push((tr("Share"), Box::new(|ui: &Shared, t: &Track| share(ui, t))));
+    }
     if !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id) {
         items.push((tr("Go to artist"), Box::new(|ui: &Shared, t: &Track| go_artist(ui, t))));
     }
@@ -1985,7 +2066,7 @@ fn refresh_hearts(ui: &Shared) {
             }
         }
     }
-    let on = s.current.and_then(|i| s.queue.get(i)).is_some_and(|t| s.liked.contains(&t.video_id));
+    let on = s.q.current.and_then(|i| s.q.songs.get(i)).is_some_and(|t| s.liked.contains(&t.video_id));
     if on {
         s.w.bar_heart.add_css_class("on");
     } else {
@@ -2054,53 +2135,229 @@ fn sync_likes(ui: &Shared) {
 
 // ---------------------------------------------------------------- playback
 
-/// Plays `songs` from `i`; the queue becomes them.
+/// Plays `songs` from `i`. What was played stays above them, so Previous goes back to it.
 fn play_list(ui: &Shared, songs: &[Track], i: usize) {
     if songs.is_empty() {
         return;
     }
-    ui.borrow_mut().queue = songs.to_vec();
-    play_at(ui, i.min(songs.len() - 1));
+    let at = ui.borrow_mut().q.start(songs.to_vec(), i);
+    play_at(ui, at);
 }
 
-/// One song, then YouTube Music's radio after it.
+/// One song, then YouTube Music's radio after it (Up next made for it); what was played stays above.
 fn play_with_radio(ui: &Shared, t: Track) {
-    ui.borrow_mut().queue = vec![t];
-    play_at(ui, 0);
+    let at = ui.borrow_mut().q.start(vec![t], 0);
+    play_at(ui, at);
     continue_with_radio(ui);
 }
 
 fn play_next(ui: &Shared, t: Track) {
-    let empty = {
-        let mut s = ui.borrow_mut();
-        match s.current {
-            Some(i) => {
-                s.queue.insert(i + 1, t);
-                false
-            }
-            None => {
-                s.queue = vec![t];
-                true
-            }
-        }
-    };
-    if empty {
-        play_at(ui, 0);
-    } else {
-        toast(ui, tr("Plays next"));
-    }
-}
-
-fn add_to_queue(ui: &Shared, t: Track) {
     let start = {
         let mut s = ui.borrow_mut();
-        s.queue.push(t);
-        s.current.is_none().then_some(s.queue.len() - 1)
+        let idle = s.q.current.is_none();
+        s.q.play_next(t);
+        idle.then_some(s.q.current).flatten()
     };
     match start {
         Some(i) => play_at(ui, i),
-        None => toast(ui, tr("Added to the queue")),
+        None => {
+            toast(ui, tr("Plays next"));
+            render_queue(ui);
+        }
     }
+}
+
+/// Right after the playing song (after songs added before it), not at the end of the queue.
+fn add_to_queue(ui: &Shared, t: Track) {
+    let start = {
+        let mut s = ui.borrow_mut();
+        s.q.add(t).then_some(s.q.current).flatten()
+    };
+    match start {
+        Some(i) => play_at(ui, i),
+        None => {
+            toast(ui, tr("Added to the queue"));
+            render_queue(ui);
+        }
+    }
+}
+
+fn move_in_queue(ui: &Shared, from: usize, to: usize) {
+    ui.borrow_mut().q.move_song(from, to);
+    render_queue(ui);
+}
+
+/// Copies the song's link (with its name) and says so.
+fn share(ui: &Shared, t: &Track) {
+    let text = format!("{} - {}\n{}", t.title, t.artist, rymplayer::queue::share_link(t));
+    ui.borrow().w.window.clipboard().set_text(&text);
+    toast(ui, tr("Link copied"));
+}
+
+/// The queue in the side panel: played songs dimmed, the playing one marked. A click plays a
+/// song; holding a row for 2 s lifts it, and it can be dragged to another place.
+fn render_queue(ui: &Shared) {
+    let mut wants = Wants::new();
+    let (songs, current, qb) = {
+        let s = ui.borrow();
+        (s.q.songs.clone(), s.q.current, s.w.queue_box.clone())
+    };
+    clear(&qb);
+    if songs.is_empty() {
+        qb.append(&note(tr("Nothing playing")));
+        return;
+    }
+    for (i, t) in songs.iter().enumerate() {
+        let row = gtk::Box::new(Orientation::Horizontal, 10);
+        row.add_css_class("qrow");
+        if Some(i) == current {
+            row.add_css_class("now");
+        } else if current.is_some_and(|c| i < c) {
+            row.add_css_class("past");
+        }
+        row.append(&cover(&ui.borrow(), t.thumb.as_ref(), ROW_PX, 36, "cover", &mut wants));
+        let names = gtk::Box::new(Orientation::Vertical, 1);
+        names.set_valign(Align::Center);
+        names.set_hexpand(true);
+        names.append(&label(&t.title, &["title"]));
+        names.append(&label(&t.artist, &["dim", "small"]));
+        row.append(&names);
+        if Some(i) != current {
+            let x = icon_button("window-close-symbolic", tr("Remove from queue"), &["dim"]);
+            x.set_valign(Align::Center);
+            let ui = ui.clone();
+            x.connect_clicked(move |_| {
+                ui.borrow_mut().q.remove(i);
+                render_queue(&ui);
+            });
+            row.append(&x);
+        }
+        // A click plays it (not when the press was a 2 s hold).
+        let click = gtk::GestureClick::new();
+        {
+            let ui = ui.clone();
+            click.connect_pressed(move |_, _, _, _| ui.borrow_mut().held = false);
+        }
+        {
+            let ui = ui.clone();
+            click.connect_released(move |_, _, _, _| {
+                if !std::mem::take(&mut ui.borrow_mut().held) {
+                    play_at(&ui, i);
+                }
+            });
+        }
+        row.add_controller(click);
+        // Holding 2 s lifts the row ("pops out"); letting go puts it down ("pops in").
+        let hold = gtk::GestureLongPress::new();
+        hold.set_delay_factor(4.0);
+        {
+            let (ui, row) = (ui.clone(), row.clone());
+            hold.connect_pressed(move |_, _, _| {
+                let mut s = ui.borrow_mut();
+                s.armed = Some(i);
+                s.held = true;
+                row.add_css_class("lifted");
+            });
+        }
+        {
+            let row = row.clone();
+            hold.connect_end(move |_, _| row.remove_css_class("lifted"));
+        }
+        row.add_controller(hold);
+        let drag = gtk::DragSource::new();
+        drag.set_actions(gdk::DragAction::MOVE);
+        {
+            let ui = ui.clone();
+            drag.connect_prepare(move |_, _, _| {
+                (ui.borrow().armed == Some(i)).then(|| gdk::ContentProvider::for_value(&(i as u32).to_value()))
+            });
+        }
+        {
+            let (ui, row) = (ui.clone(), row.clone());
+            drag.connect_drag_begin(move |src, _| {
+                src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&row))), 20, 20);
+                let _ = &ui;
+            });
+        }
+        {
+            let (ui, row) = (ui.clone(), row.clone());
+            drag.connect_drag_end(move |_, _, _| {
+                ui.borrow_mut().armed = None;
+                row.remove_css_class("lifted");
+            });
+        }
+        row.add_controller(drag);
+        let drop = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+        {
+            let row = row.clone();
+            drop.connect_enter(move |_, _, _| {
+                row.add_css_class("drop-here");
+                gdk::DragAction::MOVE
+            });
+        }
+        {
+            let row = row.clone();
+            drop.connect_leave(move |_| row.remove_css_class("drop-here"));
+        }
+        {
+            let (ui, row) = (ui.clone(), row.clone());
+            drop.connect_drop(move |_, value, _, _| {
+                row.remove_css_class("drop-here");
+                if let Ok(from) = value.get::<u32>() {
+                    let ui = ui.clone();
+                    // After the drag has finished with the old rows.
+                    glib::idle_add_local_once(move || move_in_queue(&ui, from as usize, i));
+                }
+                true
+            });
+        }
+        row.add_controller(drop);
+        qb.append(&row);
+    }
+    want_covers(ui, wants);
+}
+
+/// The lyrics' sources for the playing song: looked up when the switcher opens, then one tap
+/// shows another source's lyrics.
+fn fill_sources(ui: &Shared) {
+    let Some(t) = now_playing(ui) else { return };
+    let (pop, found) = {
+        let s = ui.borrow();
+        let pop = s.w.sources.popover();
+        let found = s.alt_lyrics.as_ref().filter(|(id, _)| *id == t.video_id).map(|(_, l)| l.clone());
+        (pop, found)
+    };
+    let Some(pop) = pop else { return };
+    let col = gtk::Box::new(Orientation::Vertical, 0);
+    match found {
+        None => {
+            col.append(&label(tr("Looking for lyrics..."), &["dim"]));
+            let api = api_of(ui);
+            let tr2 = t.clone();
+            post(ui, async move {
+                let list = rymplayer::lyrics::sources(api, tr2.clone()).await;
+                Ev::LyricsSources(tr2.video_id, list)
+            });
+        }
+        Some(list) if list.is_empty() => col.append(&label(tr("No lyrics for this song"), &["dim"])),
+        Some(list) => {
+            for l in list {
+                let kind = if l.synced.is_empty() { tr("not synced") } else { tr("synced") };
+                let b = Button::with_label(&format!("{} · {kind}", l.source));
+                if let Some(lab) = b.child().and_downcast::<Label>() {
+                    lab.set_xalign(0.0);
+                }
+                let (ui, pop2) = (ui.clone(), pop.clone());
+                b.connect_clicked(move |_| {
+                    pop2.popdown();
+                    ui.borrow().w.side.set_visible_child_name("lyrics");
+                    show_lyrics(&ui, Some(l.clone()));
+                });
+                col.append(&b);
+            }
+        }
+    }
+    pop.set_child(Some(&col));
 }
 
 fn download(ui: &Shared, t: Track) {
@@ -2112,9 +2369,10 @@ fn play_at(ui: &Shared, i: usize) {
     let mut wants = Wants::new();
     let (track, id, api, in_vlc) = {
         let mut s = ui.borrow_mut();
-        let Some(track) = s.queue.get(i).cloned() else { return };
+        let Some(track) = s.q.songs.get(i).cloned() else { return };
         s.request_id += 1;
-        s.current = Some(i);
+        s.q.went_to(i);
+        s.played.insert(track.video_id.clone());
         s.loading = true;
         s.lyrics = None;
         s.lyric_line = None;
@@ -2153,6 +2411,7 @@ fn play_at(ui: &Shared, i: usize) {
         }
         clear(&s.w.lyrics_box);
         s.w.lyrics_box.append(&label(tr("Looking for lyrics…"), &["lyrics-note"]));
+        s.alt_lyrics = None;
         let in_vlc = s.config.play_in_vlc && vlc::find().is_some();
         if !in_vlc {
             vlc::stop(&mut s.vlc);
@@ -2161,6 +2420,7 @@ fn play_at(ui: &Shared, i: usize) {
     };
     want_covers(ui, wants);
     refresh_hearts(ui);
+    render_queue(ui);
 
     log(&format!("play {} ({}){}", track.title, track.video_id, if in_vlc { " in VLC" } else { "" }));
     {
@@ -2192,7 +2452,7 @@ fn play_at(ui: &Shared, i: usize) {
 fn prefetch_next(ui: &Shared) {
     let (next, api) = {
         let s = ui.borrow();
-        (s.current.and_then(|i| s.queue.get(i + 1)).cloned(), s.api.clone())
+        (s.q.current.and_then(|i| s.q.songs.get(i + 1)).cloned(), s.api.clone())
     };
     if let Some(t) = next.clone() {
         post(ui, async move {
@@ -2211,7 +2471,7 @@ fn prefetch_next(ui: &Shared) {
 fn toggle_playback(ui: &Shared) {
     let (loaded, current) = {
         let s = ui.borrow();
-        (s.audio.as_ref().is_some_and(Audio::is_loaded), s.current)
+        (s.audio.as_ref().is_some_and(Audio::is_loaded), s.q.current)
     };
     if loaded {
         if let Some(a) = &ui.borrow().audio {
@@ -2232,7 +2492,7 @@ fn toggle_playback(ui: &Shared) {
 fn skip(ui: &Shared) {
     let (current, len) = {
         let s = ui.borrow();
-        (s.current, s.queue.len())
+        (s.q.current, s.q.songs.len())
     };
     match current {
         Some(i) if i + 1 < len => play_at(ui, i + 1),
@@ -2248,7 +2508,7 @@ fn previous(ui: &Shared) {
         let mut s = ui.borrow_mut();
         let again = s.last_prev.elapsed() < Duration::from_millis(1500);
         s.last_prev = Instant::now();
-        (s.current, s.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position), again)
+        (s.q.current, s.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position), again)
     };
     match current {
         Some(i) if (pos < 3.0 || again) && i > 0 => play_at(ui, i - 1),
@@ -2406,7 +2666,8 @@ fn tick(ui: &Shared) {
         }
         s.lyric_line = line;
     }
-    if loaded && finished && s.current.is_some() {
+    if loaded && finished && s.q.current.is_some() && s.ended_for != s.request_id {
+        s.ended_for = s.request_id;
         if let Some(a) = &mut s.audio {
             a.stop();
         }
@@ -2557,7 +2818,7 @@ fn poll_events(ui: &Shared) {
                     continue;
                 }
                 s.loading = false;
-                let Some(t) = s.current.and_then(|i| s.queue.get(i).cloned()) else { continue };
+                let Some(t) = s.q.current.and_then(|i| s.q.songs.get(i).cloned()) else { continue };
                 let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
                 let started = match (result, &mut s.audio) {
                     (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()),
@@ -2584,7 +2845,7 @@ fn poll_events(ui: &Shared) {
                     continue;
                 }
                 s.loading = false;
-                let Some(t) = s.current.and_then(|i| s.queue.get(i).cloned()) else { continue };
+                let Some(t) = s.q.current.and_then(|i| s.q.songs.get(i).cloned()) else { continue };
                 let msg = match (result, vlc::find()) {
                     (Ok((url, headers)), Some(exe)) => {
                         vlc::stop(&mut s.vlc);
@@ -2607,6 +2868,16 @@ fn poll_events(ui: &Shared) {
                     ui.borrow().w.lyrics_provider.load_from_string(&lyrics_css(bg));
                 }
             }
+            Ev::LyricsSources(vid, list) => {
+                let open = {
+                    let mut s = ui.borrow_mut();
+                    s.alt_lyrics = Some((vid, list));
+                    s.w.sources.is_active()
+                };
+                if open {
+                    fill_sources(ui);
+                }
+            }
             Ev::Lyrics(vid, found) => {
                 log(&format!("  lyrics for {vid}: {}", found.as_ref().map_or("none".to_string(), |l| format!("{} synced lines, from {}", l.synced.len(), l.source))));
                 if now_playing(ui).is_some_and(|t| t.video_id == vid) {
@@ -2624,15 +2895,24 @@ fn poll_events(ui: &Shared) {
                 ui.borrow_mut().radio_pending = false;
                 if let Ok(tracks) = result {
                     let mut s = ui.borrow_mut();
-                    let fresh: Vec<Track> = tracks.into_iter().filter(|t| !s.queue.iter().any(|q| q.video_id == t.video_id)).collect();
-                    let at_end = s.current.is_some_and(|i| i + 1 >= s.queue.len()) && !s.loading && s.audio.as_ref().is_some_and(|a| !a.is_loaded());
-                    let next = s.queue.len();
-                    s.queue.extend(fresh);
+                    // No repeats, nothing played or queued already, same artist moved up.
+                    let fresh: Vec<Track> = match s.q.now().cloned() {
+                        Some(seed) => {
+                            let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
+                            let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
+                            rymplayer::radio::tidy(tracks, &seed, &s.played, &queued, &heard)
+                        }
+                        None => tracks,
+                    };
+                    let at_end = s.q.current.is_some_and(|i| i + 1 >= s.q.songs.len()) && !s.loading && s.audio.as_ref().is_some_and(|a| !a.is_loaded());
+                    let next = s.q.songs.len();
+                    s.q.songs.extend(fresh);
                     drop(s);
-                    if at_end && next < ui.borrow().queue.len() {
+                    if at_end && next < ui.borrow().q.songs.len() {
                         play_at(ui, next);
                     } else {
                         prefetch_next(ui);
+                        render_queue(ui);
                     }
                 }
             }

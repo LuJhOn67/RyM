@@ -226,6 +226,101 @@ pub async fn lrclib(title: String, artist: String, album: String, duration: Opti
     Ok(answers.into_iter().flatten().flatten().next())
 }
 
+/// Every source's lyrics for a song, for the lyrics view's source switcher: LRCLIB's matches
+/// (synced first, then the closest length; different texts only), YouTube Music's own, and
+/// lyrics.ovh, all asked at once. Each is labelled with where it came from ("LRCLIB 2" for
+/// LRCLIB's second match).
+pub async fn sources(api: Option<Api>, t: Track) -> Vec<Lyrics> {
+    let duration = crate::parse_duration(&t.duration);
+    let local = crate::local::is_local(&t.video_id);
+    let (lrc, ytm, ovh) = tokio::join!(
+        lrclib_all(t.title.clone(), t.artist.clone(), duration),
+        async {
+            match api {
+                Some(api) if !local => api.lyrics(t.video_id.clone()).await.ok().flatten(),
+                _ => None,
+            }
+        },
+        lyrics_ovh(&t.title, &t.artist),
+    );
+    let mut out: Vec<Lyrics> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for l in lrc.into_iter().chain(ytm).chain(ovh) {
+        // The same words with the same timing under another source only once (another timing
+        // stays: that's what switching is for when the lines run early or late).
+        let words: String = l.plain.iter().chain(l.synced.iter().map(|(_, s)| s)).flat_map(|s| s.chars()).filter(|c| c.is_alphanumeric()).take(400).collect::<String>().to_lowercase();
+        let timing: String = l.synced.iter().take(6).map(|(at, _)| format!("{:.0},", at * 2.0)).collect();
+        let key = format!("{timing}|{words}");
+        if seen.iter().any(|w| *w == key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(l);
+    }
+    out
+}
+
+/// LRCLIB: every usable match of the exact lookup and the searches, synced first.
+async fn lrclib_all(title: String, artist: String, duration: Option<f32>) -> Vec<Lyrics> {
+    let client = client();
+    let (clean, first) = (clean_title(&title), first_artist(&artist).to_string());
+    let mut urls = Vec::new();
+    if let Ok(mut u) = reqwest::Url::parse("https://lrclib.net/api/search") {
+        u.query_pairs_mut().append_pair("track_name", &title).append_pair("artist_name", &artist);
+        urls.push(u);
+    }
+    if let Ok(mut u) = reqwest::Url::parse("https://lrclib.net/api/search") {
+        u.query_pairs_mut().append_pair("q", &format!("{clean} {first}"));
+        urls.push(u);
+    }
+    let mut jobs = tokio::task::JoinSet::new();
+    for u in urls {
+        jobs.spawn(async move { get_json::<Vec<LrcLibEntry>>(client, u).await.ok().flatten().unwrap_or_default() });
+    }
+    let mut hits: Vec<(bool, f32, Lyrics)> = Vec::new();
+    while let Some(Ok(list)) = jobs.join_next().await {
+        for h in list {
+            let off = match (duration, h.duration) {
+                (Some(a), Some(b)) => (a - b).abs(),
+                _ => 0.0,
+            };
+            if off > 15.0 {
+                continue;
+            }
+            let l = h.into_lyrics();
+            if l.is_usable() {
+                hits.push((l.synced.is_empty(), off, l));
+            }
+        }
+    }
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    hits.into_iter()
+        .take(4)
+        .enumerate()
+        .map(|(i, (_, _, mut l))| {
+            if i > 0 {
+                l.source = format!("LRCLIB {}", i + 1);
+            }
+            l
+        })
+        .collect()
+}
+
+/// lyrics.ovh: plain lyrics by artist and title (no timing).
+async fn lyrics_ovh(title: &str, artist: &str) -> Option<Lyrics> {
+    let mut url = reqwest::Url::parse("https://api.lyrics.ovh/v1/").ok()?;
+    // "/v1/" ends in an empty piece: drop it, or the link gets "//".
+    url.path_segments_mut().ok()?.pop_if_empty().push(first_artist(artist)).push(&clean_title(title));
+    #[derive(Deserialize)]
+    struct Answer {
+        lyrics: Option<String>,
+    }
+    let a: Answer = get_json(client(), url).await.ok().flatten()?;
+    let plain: Vec<String> = a.lyrics?.lines().map(|l| l.trim().to_string()).collect();
+    let l = Lyrics { synced: Vec::new(), plain, source: "lyrics.ovh".into() };
+    l.is_usable().then_some(l)
+}
+
 /// Prefers synced lyrics, then the closest duration (within 10 s).
 fn best_hit(hits: Vec<LrcLibEntry>, duration: Option<f32>) -> Option<Lyrics> {
     let off = |h: &LrcLibEntry| match (duration, h.duration) {
@@ -298,5 +393,28 @@ mod tests {
         assert_eq!(clean_title("Nothing Ever (feat. Kasane Teto) [Live]"), "Nothing Ever");
         assert_eq!(first_artist("Nino, ROUND TABLE featuring Nino"), "Nino");
         assert_eq!(first_artist("Vacations"), "Vacations");
+    }
+}
+
+#[cfg(test)]
+mod sources_probe {
+    /// Every source for a well-known song; prints sources and line counts only.
+    #[tokio::test]
+    #[ignore]
+    async fn sources_for_a_known_song() {
+        let t = crate::api::Track {
+            video_id: "fJ9rUzIMcZQ".into(),
+            title: "Bohemian Rhapsody".into(),
+            artist: "Queen".into(),
+            album: String::new(),
+            duration: "5:55".into(),
+            thumb: None,
+            album_id: None,
+            artist_id: None,
+            link: None,
+        };
+        for l in super::sources(None, t).await {
+            println!("{}: {} synced, {} plain", l.source, l.synced.len(), l.plain.len());
+        }
     }
 }

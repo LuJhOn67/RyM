@@ -1,6 +1,6 @@
 [package]
 name = "rymplayer"
-version = "6.6.0"
+version = "6.7.0"
 edition = "2024"
 autobins = false
 build = "build.rs"
@@ -30,6 +30,7 @@ gtk = { package = "gtk4", version = "0.11.5", optional = true, features = ["v4_1
 lofty = "0.25.5"
 ar-reshaper = "1.5.0"
 unicode-bidi = "0.3.18"
+arboard = { version = "3", default-features = false }
 
 [features]
 default = ["webview"]

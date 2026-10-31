@@ -15,6 +15,7 @@ pub mod login;
 pub mod lyrics;
 pub mod page_cache;
 pub mod plugins;
+pub mod queue;
 pub mod radio;
 pub mod stream;
 pub mod updates;
@@ -23,8 +24,8 @@ pub mod vlc;
 
 use std::path::PathBuf;
 
-/// The version shown in the apps ("6.6").
-pub const VERSION: &str = "6.6";
+/// The version shown in the apps ("6.7").
+pub const VERSION: &str = "6.7";
 
 pub fn data_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "RymPlayer")

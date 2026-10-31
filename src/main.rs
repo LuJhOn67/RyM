@@ -76,6 +76,8 @@ enum Page {
     Radio(String),
     /// An artist's songs, albums and singles.
     Artist(String),
+    /// The queue ("Up next"): played songs, the playing one, what comes next.
+    Queue,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +108,8 @@ enum Event {
     ArtistFound(String, Result<Option<String>, String>),
     /// The liked songs batch download, after each song.
     Batch(stream::Batch),
+    /// Every source's lyrics for a song (L switches between them).
+    LyricsSources(String, Vec<Lyrics>),
     /// A newer RyM on GitHub (None: up to date); true when asked with U.
     Update(Result<Option<rymplayer::updates::Release>, String>, bool),
     /// The plugin store's list.
@@ -147,8 +151,12 @@ struct App {
     tracks: Vec<Track>,
     track_state: TableState,
 
-    queue: Vec<Track>,
-    current: Option<usize>,
+    /// What plays: the songs, the playing one, and the ones added to play after it.
+    pub q: rymplayer::queue::Queue,
+    /// Songs played this session (Up next leaves them out).
+    played: std::collections::HashSet<String>,
+    /// Every source's lyrics for the playing song once looked up, and which one shows (L).
+    alt_lyrics: Option<(String, Vec<Lyrics>, usize)>,
     loading: bool,
     audio: Option<Audio>,
     pos: f32,
@@ -208,8 +216,9 @@ impl App {
             page_title: tr("Search").into(),
             tracks: Vec::new(),
             track_state: TableState::default(),
-            queue: Vec::new(),
-            current: None,
+            q: Default::default(),
+            played: Default::default(),
+            alt_lyrics: None,
             loading: false,
             audio: None,
             pos: 0.0,
@@ -309,7 +318,7 @@ impl App {
     }
 
     fn now_playing(&self) -> Option<&Track> {
-        self.current.and_then(|i| self.queue.get(i))
+        self.q.current.and_then(|i| self.q.songs.get(i))
     }
 
     // ------------------------------------------------------------ background results
@@ -333,16 +342,29 @@ impl App {
                 self.radio_pending = false;
                 match result {
                     Ok(tracks) => {
-                        let fresh: Vec<Track> = tracks
-                            .into_iter()
-                            .filter(|t| !self.queue.iter().any(|q| q.video_id == t.video_id))
-                            .collect();
+                        // No repeats, nothing played or queued already, same artist moved up.
+                        let fresh: Vec<Track> = match self.q.now().cloned() {
+                            Some(seed) => {
+                                let queued: std::collections::HashSet<String> = self.q.songs.iter().map(|t| t.video_id.clone()).collect();
+                                let heard = rymplayer::radio::artists_of(self.q.songs.iter().take(self.q.current.map_or(0, |c| c + 1)));
+                                rymplayer::radio::tidy(tracks, &seed, &self.played, &queued, &heard)
+                            }
+                            None => tracks,
+                        };
                         if fresh.is_empty() {
                             self.status = tr("Radio has nothing new to play").into();
                             return;
                         }
-                        self.queue.extend(fresh);
-                        self.next();
+                        // Move on only when the queue had run out (not when the radio was asked
+                        // for a song that just started).
+                        let ended = self.q.current.is_some_and(|c| c + 1 >= self.q.songs.len())
+                            && !self.loading
+                            && self.audio.as_ref().is_some_and(|a| !a.is_loaded());
+                        self.q.songs.extend(fresh);
+                        self.sync_queue_page();
+                        if ended {
+                            self.next();
+                        }
                     }
                     Err(e) => self.status = format!("Radio: {e}"),
                 }
@@ -511,6 +533,12 @@ impl App {
                 }
                 (Err(e), _) => self.status = format!("{}: {e}", tr("Can't open the video")),
             },
+            Event::LyricsSources(vid, list) => {
+                if self.now_playing().is_some_and(|t| t.video_id == vid) {
+                    self.alt_lyrics = Some((vid, list, 0));
+                    self.show_lyrics_source();
+                }
+            }
             Event::Batch(b) => {
                 let mut words = format!("{} {} / {}", tr("Downloading songs"), b.done, b.total);
                 for (n, what) in [(b.saved, tr("saved")), (b.skipped, tr("already there")), (b.failed, tr("failed"))] {
@@ -634,6 +662,24 @@ impl App {
             KeyCode::Char('h') => self.open(Page::History, tr("History").into()),
             KeyCode::Char('a') => self.open_picker(),
             KeyCode::Char('o') => self.open_song_menu(),
+            KeyCode::Char('Q') => self.show_queue(),
+            KeyCode::Char('L') => self.next_lyrics_source(),
+            KeyCode::Char('s') => {
+                if let Some(t) = self.target_song() {
+                    self.share(&t);
+                }
+            }
+            // Up next: move the selected song up or down, or take it out.
+            KeyCode::Char('K') if self.page == Page::Queue => self.move_selected(-1),
+            KeyCode::Char('J') if self.page == Page::Queue => self.move_selected(1),
+            KeyCode::Up if self.page == Page::Queue && k.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected(-1),
+            KeyCode::Down if self.page == Page::Queue && k.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected(1),
+            KeyCode::Char('x') | KeyCode::Delete if self.page == Page::Queue => {
+                if let Some(i) = self.track_state.selected() {
+                    self.q.remove(i);
+                    self.sync_queue_page();
+                }
+            }
             KeyCode::Char('U') => self.check_updates(true),
             KeyCode::Char('P') => {
                 self.store_sel = Some(0);
@@ -770,8 +816,7 @@ impl App {
         }
         self.api = None;
         self.tracks.clear();
-        self.queue.clear();
-        self.current = None;
+        self.q = Default::default();
         self.lyrics = None;
         self.liked.clear();
         self.nav = vec![NavItem::ForYou];
@@ -834,14 +879,20 @@ impl App {
             && let Some(t) = self.tracks.get(i).cloned()
         {
             // A search result: the song, then a radio of songs like it (not the other results).
-            self.queue = vec![t];
-            self.play(0);
+            let at = self.q.start(vec![t], 0);
+            self.play(at);
             self.continue_with_radio();
             return;
         }
-        self.queue = self.tracks.iter().filter(|t| t.link.is_none()).cloned().collect();
-        if let Some(q) = self.queue.iter().position(|t| t.video_id == vid) {
-            self.play(q);
+        if self.page == Page::Queue {
+            self.play(i);
+            return;
+        }
+        // The list's songs after what was played (Previous goes back to it).
+        let songs: Vec<Track> = self.tracks.iter().filter(|t| t.link.is_none()).cloned().collect();
+        if let Some(pos) = songs.iter().position(|t| t.video_id == vid) {
+            let at = self.q.start(songs, pos);
+            self.play(at);
         }
     }
 
@@ -888,7 +939,7 @@ impl App {
                 Page::Mix(id) => api.mix_tracks(id).await,
                 Page::Radio(vid) => api.radio(vid).await,
                 Page::Artist(id) => api.artist_page(id).await,
-                Page::Search | Page::Local => Ok(Vec::new()),
+                Page::Search | Page::Local | Page::Queue => Ok(Vec::new()),
             };
             Event::Tracks(page, s(r))
         });
@@ -983,6 +1034,7 @@ impl App {
             if !t.artist.is_empty() {
                 rows.push((tr("Go to artist"), 'a'));
             }
+            rows.push((tr("Share"), 's'));
             if self.has_video() {
                 rows.push((tr("Watch video"), 'v'));
                 rows.push((tr("Download video"), 'V'));
@@ -1014,18 +1066,23 @@ impl App {
         let Some(t) = self.menu_song.take() else { return };
         let Some(&(_, what)) = self.song_menu_rows_for(&t).get(i) else { return };
         match what {
-            'n' => match self.current {
-                Some(c) => self.queue.insert(c + 1, t),
-                None => {
-                    self.queue = vec![t];
-                    self.play(0);
+            's' => self.share(&t),
+            'n' => {
+                let idle = self.q.current.is_none();
+                self.q.play_next(t);
+                if idle && let Some(c) = self.q.current {
+                    self.play(c);
                 }
-            },
+                self.sync_queue_page();
+            }
             'q' => {
-                self.queue.push(t);
-                if self.current.is_none() {
-                    self.play(self.queue.len() - 1);
+                // Right after the playing song (after songs added before it).
+                if self.q.add(t)
+                    && let Some(c) = self.q.current
+                {
+                    self.play(c);
                 }
+                self.sync_queue_page();
             }
             'd' => {
                 self.status = format!("{} \"{}\"...", tr("Downloading"), t.title);
@@ -1247,8 +1304,10 @@ impl App {
     // ------------------------------------------------------------ playback
 
     fn play(&mut self, i: usize) {
-        let Some(track) = self.queue.get(i).cloned() else { return };
-        self.current = Some(i);
+        let Some(track) = self.q.songs.get(i).cloned() else { return };
+        self.q.went_to(i);
+        self.played.insert(track.video_id.clone());
+        self.alt_lyrics = None;
         self.pos = 0.0;
         self.lyrics = None;
         self.lyrics_status = tr("Loading lyrics...").into();
@@ -1287,7 +1346,7 @@ impl App {
 
     /// The next song (and its lyrics) download while this one plays.
     fn prefetch_next(&self) {
-        let next = self.current.and_then(|i| self.queue.get(i + 1));
+        let next = self.q.current.and_then(|i| self.q.songs.get(i + 1));
         if let Some(t) = next {
             tokio::spawn(lyrics::prefetch(self.api.clone(), t.clone()));
         }
@@ -1299,8 +1358,8 @@ impl App {
     }
 
     fn next(&mut self) {
-        let Some(i) = self.current else { return };
-        if i + 1 < self.queue.len() {
+        let Some(i) = self.q.current else { return };
+        if i + 1 < self.q.songs.len() {
             self.play(i + 1);
         } else {
             self.continue_with_radio();
@@ -1308,7 +1367,7 @@ impl App {
     }
 
     fn prev(&mut self) {
-        let Some(i) = self.current else { return };
+        let Some(i) = self.q.current else { return };
         // Like most players: restart the song unless we're at its start, or Previous was
         // pressed twice in a row. The player's own position, not the last drawn one.
         let pos = self.audio.as_ref().filter(|a| a.is_loaded()).map_or(0.0, Audio::position);
@@ -1372,6 +1431,80 @@ impl App {
             }
         }
         self.spawn(async move { Event::Rated(vid.clone(), like, s(api.rate(vid, like).await)) });
+    }
+
+    /// Up next as a page: played songs, the playing one, what comes next.
+    fn show_queue(&mut self) {
+        self.page = Page::Queue;
+        self.page_title = tr("Up next").into();
+        self.busy = false;
+        self.focus = Focus::Tracks;
+        self.tracks = self.q.songs.clone();
+        self.track_state.select(self.q.current.or((!self.tracks.is_empty()).then_some(0)));
+    }
+
+    /// Keeps the Up next page in step after the queue changed.
+    fn sync_queue_page(&mut self) {
+        if self.page == Page::Queue {
+            let sel = self.track_state.selected();
+            self.tracks = self.q.songs.clone();
+            let last = self.tracks.len().saturating_sub(1);
+            self.track_state.select(sel.map(|s| s.min(last)));
+        }
+    }
+
+    fn move_selected(&mut self, by: i32) {
+        let Some(i) = self.track_state.selected() else { return };
+        let to = i as i32 + by;
+        if to < 0 || to as usize >= self.q.songs.len() {
+            return;
+        }
+        self.q.move_song(i, to as usize);
+        self.sync_queue_page();
+        self.track_state.select(Some(to as usize));
+    }
+
+    /// L: the next lyrics source for the playing song (looked up the first time).
+    fn next_lyrics_source(&mut self) {
+        let Some(t) = self.now_playing().cloned() else { return };
+        match &mut self.alt_lyrics {
+            Some((id, list, at)) if *id == t.video_id && !list.is_empty() => {
+                *at = (*at + 1) % list.len();
+                self.show_lyrics_source();
+            }
+            Some((id, _, _)) if *id == t.video_id => self.lyrics_status = tr("No lyrics for this song").into(),
+            _ => {
+                self.status = tr("Looking for lyrics...").into();
+                let api = self.api.clone();
+                self.spawn(async move {
+                    let vid = t.video_id.clone();
+                    Event::LyricsSources(vid, lyrics::sources(api, t).await)
+                });
+            }
+        }
+    }
+
+    fn show_lyrics_source(&mut self) {
+        let Some((_, list, at)) = &self.alt_lyrics else { return };
+        match list.get(*at) {
+            Some(l) => {
+                self.status = format!("{}: {} ({}/{})", tr("Lyrics sources"), l.source, at + 1, list.len());
+                self.lyrics = Some(l.clone());
+            }
+            None => self.status = tr("No lyrics for this song").into(),
+        }
+    }
+
+    /// Copies the song's link (with its name) to the clipboard.
+    fn share(&mut self, t: &Track) {
+        if rymplayer::local::is_local(&t.video_id) {
+            return;
+        }
+        let text = format!("{} - {}\n{}", t.title, t.artist, rymplayer::queue::share_link(t));
+        self.status = match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
+            Ok(()) => tr("Link copied").into(),
+            Err(e) => format!("{}: {e}", tr("Share")),
+        };
     }
 
     fn has_video(&self) -> bool {
