@@ -118,7 +118,7 @@ impl Queue {
 
 /// A song's link for sharing.
 pub fn share_link(t: &Track) -> String {
-    format!("https://music.youtube.com/watch?v={}", t.video_id)
+    crate::soundcloud::share_link(&t.video_id).unwrap_or_else(|| format!("https://music.youtube.com/watch?v={}", t.video_id))
 }
 
 #[cfg(test)]

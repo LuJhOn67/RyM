@@ -143,6 +143,20 @@ fun SearchPage(vm: AppViewModel) {
             keyboardActions = KeyboardActions(onSearch = { vm.search() }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         )
+        // With the SoundCloud plugin: where the search looks.
+        if (vm.hasPlugin(com.rymplayer.data.Plugins.SOUNDCLOUD)) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.FilterChip(!vm.searchSoundCloud, { vm.searchSoundCloud = false }, { Text("YouTube Music") })
+                androidx.compose.material3.FilterChip(vm.searchSoundCloud, { vm.searchSoundCloud = true }, { Text("SoundCloud") })
+            }
+        }
+        val links = listOfNotNull(
+            "Spotify".takeIf { vm.hasPlugin(com.rymplayer.data.Plugins.SPOTIFY) },
+            "SoundCloud".takeIf { vm.hasPlugin(com.rymplayer.data.Plugins.SOUNDCLOUD) },
+        )
+        if (links.isNotEmpty()) {
+            Text("${tr("You can also paste a link from")} ${links.joinToString(" / ")}", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
     }
 }
 
@@ -246,7 +260,7 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
                 when {
                     t.link != null -> vm.openLink(t)
                     // A search result: the song, then a radio of songs like it.
-                    page.kind == Screen.Kind.Results -> vm.playRadio(t)
+                    page.kind == Screen.Kind.Results || page.kind == Screen.Kind.SoundCloud -> vm.playRadio(t)
                     else -> vm.playFrom(tracks, i)
                 }
             }

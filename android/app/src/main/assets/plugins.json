@@ -8,7 +8,39 @@
       "version": "1.0.0",
       "description": "Watch a song's music video, download videos, and download from YouTube or any site yt-dlp supports. Without it RyM stays an audio-only music player.",
       "description_ar": "شاهد فيديو الأغنية، حمّل الفيديوهات، وحمّل من يوتيوب أو أي موقع يدعمه yt-dlp. بدونها يبقى RyM مشغّل موسيقى صوت بس.",
-      "platforms": ["windows", "linux", "android"]
+      "platforms": [
+        "windows",
+        "linux",
+        "android"
+      ]
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify to YTMusic",
+      "name_ar": "Spotify to YTMusic",
+      "version": "1.0.0",
+      "description": "Paste a Spotify song, album or playlist link in the search box: its songs are found on YouTube Music, ready to play or download. Spotify's own sound is locked, so only the song list is read.",
+      "description_ar": "الصق رابط أغنية أو ألبوم أو قائمة تشغيل من سبوتيفاي في مربع البحث: تُوجد أغانيها على YouTube Music جاهزة للتشغيل أو التنزيل. صوت سبوتيفاي نفسه مقفل، لذلك تُقرأ قائمة الأغاني فقط.",
+      "platforms": [
+        "windows",
+        "linux",
+        "android"
+      ],
+      "min_app": "6.7"
+    },
+    {
+      "id": "soundcloud",
+      "name": "SoundCloud",
+      "name_ar": "ساوند كلاود",
+      "version": "1.0.0",
+      "description": "Search SoundCloud, play its songs and download them, or open a SoundCloud song, set or artist link from the search box.",
+      "description_ar": "ابحث في ساوند كلاود، شغّل أغانيه ونزّلها، أو افتح رابط أغنية أو مجموعة أو فنان من ساوند كلاود من مربع البحث.",
+      "platforms": [
+        "windows",
+        "linux",
+        "android"
+      ],
+      "min_app": "6.7"
     }
   ]
 }

@@ -9,4 +9,6 @@
 -keep class com.yausername.** { *; }
 -keep class com.fasterxml.jackson.** { *; }
 -dontwarn com.fasterxml.jackson.**
+# It unpacks Python and yt-dlp with Commons Compress, which makes its zip field types by reflection.
+-keep class org.apache.commons.compress.** { *; }
 -dontwarn org.apache.commons.compress.**

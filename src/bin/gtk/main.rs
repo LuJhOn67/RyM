@@ -631,7 +631,12 @@ fn build(app: &Application) {
     search.set_placeholder_text(Some(tr("Search songs, albums, artists")));
     search.set_primary_icon_name(Some("system-search-symbolic"));
     search.set_width_chars(46);
-    header.set_title_widget(Some(&search));
+    let search_in = gtk::DropDown::from_strings(&["YouTube Music", "SoundCloud"]);
+    search_in.set_tooltip_text(Some(tr("Search on")));
+    let search_row = gtk::Box::new(Orientation::Horizontal, 6);
+    search_row.append(&search_in);
+    search_row.append(&search);
+    header.set_title_widget(Some(&search_row));
     let refresh = icon_button("view-refresh-symbolic", tr("Refresh: new songs on top (F5)"), &[]);
     header.pack_end(&refresh);
     let from_link = icon_button("folder-download-symbolic", tr("Download from a link"), &[]);
@@ -896,6 +901,8 @@ fn build(app: &Application) {
     }
     from_link.set_visible(has_video(&ui));
     FROM_LINK.with(|f| *f.borrow_mut() = Some(from_link.downgrade()));
+    search_in.set_visible(has_plugin(&ui, rymplayer::plugins::SOUNDCLOUD));
+    SEARCH_IN.with(|f| *f.borrow_mut() = Some(search_in.downgrade()));
 
     // ---- signals
     for (page, b) in ui.borrow().w.rail.iter() {
@@ -1127,10 +1134,33 @@ fn open_link(ui: &Shared, t: &Track) {
 }
 
 fn search_songs(ui: &Shared, q: String) {
+    use rymplayer::{plugins, soundcloud, spotify};
+    if soundcloud::is_link(&q) || searching_soundcloud(ui) {
+        if !has_plugin(ui, plugins::SOUNDCLOUD) {
+            toast(ui, tr("Install the SoundCloud plugin to open SoundCloud links"));
+            return;
+        }
+        if soundcloud::is_link(&q) {
+            open_songs(ui, "SoundCloud".into(), soundcloud::open_link(q));
+        } else {
+            open_songs(ui, format!("SoundCloud: \"{q}\""), soundcloud::search(q));
+            ui.borrow_mut().from_search = true;
+        }
+        return;
+    }
     let Some(api) = api_of(ui) else {
         toast(ui, tr("Still connecting to YouTube Music"));
         return;
     };
+    if spotify::is_link(&q) {
+        if !has_plugin(ui, plugins::SPOTIFY) {
+            toast(ui, tr("Install the Spotify plugin to open Spotify links"));
+            return;
+        }
+        toast(ui, tr("Finding the Spotify songs on YouTube Music..."));
+        open_songs(ui, "Spotify".into(), spotify::import(api, q));
+        return;
+    }
     open_songs(ui, format!("{} \"{q}\"", tr("Results for")), api.search(q));
     ui.borrow_mut().from_search = true;
 }
@@ -1701,10 +1731,21 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
 thread_local! {
     /// The header's "Download from a link" button: shown while the video plugin is installed.
     static FROM_LINK: RefCell<Option<glib::WeakRef<Button>>> = const { RefCell::new(None) };
+    /// Where the search looks (YouTube Music or SoundCloud): shown with the SoundCloud plugin.
+    static SEARCH_IN: RefCell<Option<glib::WeakRef<gtk::DropDown>>> = const { RefCell::new(None) };
 }
 
 fn has_video(ui: &Shared) -> bool {
-    ui.borrow().config.plugins.contains_key(rymplayer::plugins::VIDEO)
+    has_plugin(ui, rymplayer::plugins::VIDEO)
+}
+
+fn has_plugin(ui: &Shared, id: &str) -> bool {
+    ui.borrow().config.plugins.contains_key(id)
+}
+
+/// The search box looks on SoundCloud (its plugin installed and picked next to the box).
+fn searching_soundcloud(ui: &Shared) -> bool {
+    has_plugin(ui, rymplayer::plugins::SOUNDCLOUD) && SEARCH_IN.with(|f| f.borrow().as_ref().and_then(glib::WeakRef::upgrade).is_some_and(|d| d.selected() == 1))
 }
 
 // ---------------------------------------------------------------- updates
@@ -1857,6 +1898,15 @@ fn set_plugin(ui: &Shared, p: &rymplayer::plugins::Plugin, on: bool) {
             b.set_visible(video);
         }
     });
+    let soundcloud = has_plugin(ui, rymplayer::plugins::SOUNDCLOUD);
+    SEARCH_IN.with(|f| {
+        if let Some(d) = f.borrow().as_ref().and_then(glib::WeakRef::upgrade) {
+            d.set_visible(soundcloud);
+            if !soundcloud {
+                d.set_selected(0);
+            }
+        }
+    });
     toast(ui, tr(if on { "Plugin installed" } else { "Plugin removed" }));
     render(ui);
 }
@@ -1953,16 +2003,18 @@ fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
         (tr("Play next"), Box::new(|ui: &Shared, t: &Track| play_next(ui, t.clone()))),
         (tr("Add to queue"), Box::new(|ui: &Shared, t: &Track| add_to_queue(ui, t.clone()))),
         (tr("Start radio"), Box::new(|ui: &Shared, t: &Track| play_with_radio(ui, t.clone()))),
-        (if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))),
         (tr("Download"), Box::new(|ui: &Shared, t: &Track| download(ui, t.clone()))),
     ];
+    if rymplayer::is_youtube(&t.video_id) {
+        items.insert(3, (if liked { tr("Remove from liked songs") } else { tr("Add to liked songs") }, Box::new(|ui: &Shared, t: &Track| toggle_like(ui, t))));
+    }
     if !rymplayer::local::is_local(&t.video_id) {
         items.push((tr("Share"), Box::new(|ui: &Shared, t: &Track| share(ui, t))));
     }
-    if !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id) {
+    if !t.artist.is_empty() && rymplayer::is_youtube(&t.video_id) {
         items.push((tr("Go to artist"), Box::new(|ui: &Shared, t: &Track| go_artist(ui, t))));
     }
-    if has_video(ui) && !rymplayer::local::is_local(&t.video_id) {
+    if has_video(ui) && rymplayer::is_youtube(&t.video_id) {
         items.push((tr("Watch video"), Box::new(|ui: &Shared, t: &Track| watch_video(ui, t))));
         items.push((tr("Download video"), Box::new(|ui: &Shared, t: &Track| download_link(ui, rymplayer::video::watch_url(&t.video_id), true))));
     }
@@ -1989,7 +2041,7 @@ fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
 /// An artist's name that opens their page when clicked.
 fn artist_label(ui: &Shared, t: &Track, classes: &[&str]) -> Label {
     let l = label(&t.artist, classes);
-    if t.link.is_none() && !t.artist.is_empty() && !rymplayer::local::is_local(&t.video_id) {
+    if t.link.is_none() && !t.artist.is_empty() && rymplayer::is_youtube(&t.video_id) {
         l.set_cursor_from_name(Some("pointer"));
         let click = gtk::GestureClick::new();
         let (weak, t) = (Rc::downgrade(ui), t.clone());
@@ -2096,6 +2148,10 @@ fn sync_liked(ui: &Shared, tracks: Vec<Track>) {
 }
 
 fn toggle_like(ui: &Shared, t: &Track) {
+    if !rymplayer::is_youtube(&t.video_id) {
+        toast(ui, tr("Likes are for YouTube Music songs"));
+        return;
+    }
     let Some(api) = api_of(ui).filter(Api::logged_in) else {
         toast(ui, tr("Sign in to like songs"));
         return;
@@ -2534,7 +2590,7 @@ fn continue_with_radio(ui: &Shared) {
         }
         s.radio_pending = true;
     }
-    post(ui, async move { Ev::Radio(api.radio(t.video_id).await) });
+    post(ui, async move { Ev::Radio(rymplayer::radio::for_track(api, t).await) });
 }
 
 fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {

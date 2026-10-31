@@ -39,7 +39,7 @@ pub async fn look_ahead(video_ids: Vec<String>) {
     let limit = LIMIT.get_or_init(|| tokio::sync::Semaphore::new(2));
     let wanted: Vec<String> = video_ids
         .into_iter()
-        .filter(|id| !id.is_empty() && cached(id).is_none() && !ahead().lock().is_ok_and(|m| m.contains_key(id)))
+        .filter(|id| crate::is_youtube(id) && !id.is_empty() && cached(id).is_none() && !ahead().lock().is_ok_and(|m| m.contains_key(id)))
         .take(4)
         .collect();
     let mut jobs = tokio::task::JoinSet::new();
@@ -95,7 +95,7 @@ pub fn cached(video_id: &str) -> Option<PathBuf> {
         return p.is_file().then_some(p);
     }
     let dir = cache_dir();
-    ["webm", "m4a", "opus", "mp4"]
+    ["webm", "m4a", "opus", "mp4", "mp3"]
         .iter()
         .map(|ext| dir.join(format!("{video_id}.{ext}")))
         .find(|p| p.exists())
@@ -119,6 +119,10 @@ pub enum Playable {
 pub async fn open(video_id: String) -> Result<Playable> {
     if let Some(p) = cached(&video_id) {
         return Ok(Playable::File(p));
+    }
+    // SoundCloud sends songs in pieces (HLS): yt-dlp joins them, then the song plays.
+    if crate::soundcloud::is_soundcloud(&video_id) {
+        return Ok(Playable::File(fetch(video_id).await?));
     }
     let dir = cache_dir();
     tokio::fs::create_dir_all(&dir).await?;
@@ -159,6 +163,10 @@ async fn innertube_link(video_id: &str) -> Result<Found> {
 
 /// A song's direct link and the headers to send with it, for an outside player (VLC).
 pub async fn link(video_id: &str) -> Result<(String, Vec<(String, String)>)> {
+    if crate::soundcloud::is_soundcloud(video_id) {
+        let (url, headers, ..) = ytdlp_link(video_id).await?;
+        return Ok((url, headers));
+    }
     let (url, headers, ..) = match SOURCE.load(Ordering::Relaxed) {
         1 => ytdlp_link(video_id).await?,
         2 => innertube_link(video_id).await?,
@@ -197,7 +205,7 @@ pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<
     let dir = music_dir();
     tokio::fs::create_dir_all(&dir).await?;
     let name = file_name(artist, title);
-    if !DOWNLOAD_BEST.load(Ordering::Relaxed) {
+    if !DOWNLOAD_BEST.load(Ordering::Relaxed) || crate::soundcloud::is_soundcloud(video_id) {
         // Fast: the same file playback uses (in seconds, about 160 kbps).
         let src = fetch(video_id.to_string()).await?;
         let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");
@@ -384,7 +392,10 @@ fn file_name(artist: &str, title: &str) -> String {
 
 async fn download(video_id: &str, dir: &Path) -> Result<PathBuf> {
     let base = dir.join(video_id);
-    let (secs, path) = match SOURCE.load(Ordering::Relaxed) {
+    let source = if crate::soundcloud::is_soundcloud(video_id) { 3 } else { SOURCE.load(Ordering::Relaxed) };
+    let (secs, path) = match source {
+        // SoundCloud: yt-dlp downloads and joins the pieces itself.
+        3 => ytdlp(video_id, &PathBuf::from(format!("{}.%(ext)s", base.display()))).await?,
         // yt-dlp with your account keeps up with YouTube (Premium: 256 kbps Opus), but takes
         // 6-7 s per song to get the link.
         1 => ytdlp_parallel(video_id, &base).await?,
@@ -440,11 +451,17 @@ async fn ytdlp_parallel(video_id: &str, base: &Path) -> Result<(Option<f32>, Pat
     ytdlp(video_id, &PathBuf::from(format!("{}.%(ext)s", base.display()))).await
 }
 
+/// The page yt-dlp opens for a song.
+fn page(video_id: &str) -> String {
+    crate::soundcloud::url(video_id).unwrap_or_else(|| format!("https://music.youtube.com/watch?v={video_id}"))
+}
+
 fn ytdlp_command(video_id: &str) -> Result<tokio::process::Command> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args(["--js-runtimes", "node", "-f", "774/251/141/140/bestaudio", "--no-playlist"]);
     if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
         && !cookie.trim().is_empty()
+        && crate::is_youtube(video_id)
     {
         let file = crate::data_dir().join("cookies-ytdlp.txt");
         write_cookie_file(&cookie, &file)?;
@@ -459,7 +476,7 @@ fn ytdlp_command(video_id: &str) -> Result<tokio::process::Command> {
 /// The chosen format's link, the headers yt-dlp would send with it, its file type and length.
 async fn ytdlp_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
     let mut cmd = ytdlp_command(video_id)?;
-    cmd.arg("-j").arg(format!("https://music.youtube.com/watch?v={video_id}"));
+    cmd.arg("-j").arg(page(video_id));
     let output = cmd.output().await.map_err(|e| anyhow!("yt-dlp not found (pip install -U yt-dlp yt-dlp-ejs): {e}"))?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
@@ -483,14 +500,19 @@ async fn ytdlp(video_id: &str, out: &Path) -> Result<(Option<f32>, PathBuf)> {
     cmd.args(["--js-runtimes", "node", "-f", "774/251/141/140/bestaudio", "--no-playlist", "--no-progress", "--no-part"])
         .args(["--print", "after_move:%(duration)s\t%(filepath)s", "-o"])
         .arg(out);
+    if crate::soundcloud::is_soundcloud(video_id) {
+        // Joined by yt-dlp itself (no ffmpeg needed), eight pieces at a time.
+        cmd.args(["--downloader", "m3u8:native", "-N", "8"]);
+    }
     if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
         && !cookie.trim().is_empty()
+        && crate::is_youtube(video_id)
     {
         let file = crate::data_dir().join("cookies-ytdlp.txt");
         write_cookie_file(&cookie, &file)?;
         cmd.arg("--cookies").arg(file);
     }
-    cmd.arg(format!("https://music.youtube.com/watch?v={video_id}"));
+    cmd.arg(page(video_id));
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let output = cmd.output().await.map_err(|e| anyhow!("yt-dlp not found (pip install -U yt-dlp yt-dlp-ejs): {e}"))?;

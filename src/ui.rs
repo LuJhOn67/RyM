@@ -324,10 +324,15 @@ fn draw_top(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let sw = mid.width.min(60);
     let search = Rect::new(mid.x + (mid.width - sw) / 2, mid.y, sw, 3);
     let active = app.input == Some(Input::Search);
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(if active { th.accent } else { th.faint }));
+    // With the SoundCloud plugin, Tab in the box picks where the search looks.
+    if app.has_plugin(rymplayer::plugins::SOUNDCLOUD) {
+        let on = if app.search_sc { "SoundCloud" } else { "YouTube Music" };
+        block = block.title(Line::from(format!(" {on} (Tab) ").fg(th.dim)));
+    }
     let text = if active {
         typed(app, th)
     } else {

@@ -75,6 +75,7 @@ object Streams {
 
     suspend fun playable(ctx: Context, videoId: String): String {
         cachedFile(ctx, videoId)?.let { return Uri.fromFile(it).toString() }
+        if (com.rymplayer.data.SoundCloud.isSoundCloud(videoId)) return com.rymplayer.data.SoundCloud.streamUrl(ctx, videoId)
         return kotlinx.coroutines.withContext(Dispatchers.IO) {
             runCatching { cachedLink(videoId).url }.getOrElse { refused ->
                 // Some songs YouTube won't give the visionOS app ("This video is not available"):
@@ -117,7 +118,7 @@ object Streams {
 
     /** Links for songs about to be tapped (the first ones of a page), a few at a time. */
     fun prefetchLinks(videoIds: List<String>) {
-        videoIds.filter { it.isNotEmpty() && links[it] == null }.forEach(::prefetchLink)
+        videoIds.filter { it.isNotEmpty() && com.rymplayer.data.isYouTube(it) && links[it] == null }.forEach(::prefetchLink)
     }
 
     /** At most two lookups run ahead at once, so they don't slow down the song being played. */
@@ -178,6 +179,9 @@ object Streams {
     }
 
     private fun download(ctx: Context, videoId: String): File {
+        if (com.rymplayer.data.SoundCloud.isSoundCloud(videoId)) {
+            return com.rymplayer.data.YtDlp.downloadAudio(ctx, com.rymplayer.data.SoundCloud.url(videoId), dir(ctx), videoId).also { trim(ctx) }
+        }
         val found = cachedLink(videoId)
         val (url, ext) = found.url to found.ext
         val part = File(dir(ctx), "$videoId.part")

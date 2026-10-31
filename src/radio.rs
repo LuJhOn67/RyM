@@ -7,6 +7,18 @@ use std::collections::HashSet;
 
 use crate::api::Track;
 
+/// YouTube Music's radio for a song. A SoundCloud song or a file on this device has none: the
+/// radio of the same song found on YouTube Music by its name stands in.
+pub async fn for_track(api: crate::api::Api, t: Track) -> anyhow::Result<Vec<Track>> {
+    if crate::is_youtube(&t.video_id) {
+        return api.radio(t.video_id).await;
+    }
+    let first = t.artist.split([',', '&']).next().unwrap_or_default().trim().to_string();
+    let found = api.clone().search(format!("{} {first}", t.title)).await?;
+    let seed = found.into_iter().next().ok_or_else(|| anyhow::anyhow!("No radio for \"{}\"", t.title))?;
+    api.radio(seed.video_id).await
+}
+
 /// How many places a song by the playing artist moves up; one heard this session, one place.
 const SAME_ARTIST_LIFT: usize = 3;
 const SESSION_ARTIST_LIFT: usize = 1;

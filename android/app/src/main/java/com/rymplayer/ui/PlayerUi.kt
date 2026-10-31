@@ -181,12 +181,13 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Marquee(t.title, 22, FontWeight.Bold, Color.White)
-                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, modifier = Modifier.clickable { vm.goArtist(t) })
+                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, modifier = Modifier.clickable(enabled = com.rymplayer.data.isYouTube(t.videoId)) { vm.goArtist(t) })
                 }
-                if (vm.hasVideo) {
+                val youtube = com.rymplayer.data.isYouTube(t.videoId)
+                if (vm.hasVideo && youtube) {
                     IconButton({ vm.watchVideo(t) }) { Icon(Icons.Default.OndemandVideo, tr("Watch video"), tint = Color.White) }
                 }
-                if (vm.api.signedIn) {
+                if (vm.api.signedIn && youtube) {
                     val liked = t.videoId in vm.liked
                     IconButton({ vm.toggleLike(t) }) {
                         Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, tr("Like"), tint = if (liked) MaterialTheme.colorScheme.primary else Color.White)

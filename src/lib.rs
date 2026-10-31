@@ -17,6 +17,8 @@ pub mod page_cache;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
+pub mod soundcloud;
+pub mod spotify;
 pub mod stream;
 pub mod updates;
 pub mod video;
@@ -31,6 +33,12 @@ pub fn data_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "RymPlayer")
         .map(|d| d.data_local_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// A YouTube (Music) song: not a file on this device, not a SoundCloud song. Likes, radio,
+/// artist pages and videos are for these.
+pub fn is_youtube(id: &str) -> bool {
+    !local::is_local(id) && !soundcloud::is_soundcloud(id)
 }
 
 pub fn cookie_path() -> PathBuf {

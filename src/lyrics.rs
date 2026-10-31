@@ -103,7 +103,7 @@ pub async fn for_track(api: Option<Api>, t: Track) -> Option<Lyrics> {
         let (api, vid) = (api.clone(), t.video_id.clone());
         tokio::spawn(async move {
             match api {
-                Some(api) if !crate::local::is_local(&vid) => api.lyrics(vid).await.ok().flatten(),
+                Some(api) if crate::is_youtube(&vid) => api.lyrics(vid).await.ok().flatten(),
                 _ => None,
             }
         })
@@ -232,7 +232,7 @@ pub async fn lrclib(title: String, artist: String, album: String, duration: Opti
 /// LRCLIB's second match). The lyrics `shown` now come first, so they can be picked again.
 pub async fn sources(api: Option<Api>, t: Track, shown: Option<Lyrics>) -> Vec<Lyrics> {
     let duration = crate::parse_duration(&t.duration);
-    let local = crate::local::is_local(&t.video_id);
+    let local = !crate::is_youtube(&t.video_id);
     let (lrc, ytm, ovh) = tokio::join!(
         lrclib_all(t.title.clone(), t.artist.clone(), duration),
         async {

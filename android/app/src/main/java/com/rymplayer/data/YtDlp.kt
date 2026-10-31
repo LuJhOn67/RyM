@@ -82,6 +82,40 @@ object YtDlp {
         return dir.listFiles()?.filter { it.length() > 0 }?.maxByOrNull { it.length() } ?: error("yt-dlp saved nothing")
     }
 
+    /** yt-dlp's JSON for a list or a search, flat (no lookup per song); at most 100 entries. Blocking. */
+    fun flatJson(ctx: Context, what: String): String {
+        prepare(ctx)
+        val request = YoutubeDLRequest(what).apply {
+            addOption("--flat-playlist")
+            addOption("-J")
+            addOption("--playlist-end", "100")
+        }
+        return YoutubeDL.getInstance().execute(request, "rym-list").out
+    }
+
+    /** A song's direct link on any site yt-dlp knows (best sound). Blocking. */
+    fun link(ctx: Context, url: String): String {
+        prepare(ctx)
+        val info = YoutubeDL.getInstance().getInfo(YoutubeDLRequest(url).apply { addOption("-f", "bestaudio/b") })
+        return checkNotNull(info.url) { "yt-dlp gave no link" }
+    }
+
+    /** A song from another site (SoundCloud) into [dir] as `<name>.<ext>`; yt-dlp joins its pieces. Blocking. */
+    fun downloadAudio(ctx: Context, url: String, dir: File, name: String): File {
+        prepare(ctx)
+        dir.listFiles()?.filter { it.name.startsWith("$name.") }?.forEach { it.delete() }
+        val request = YoutubeDLRequest(url).apply {
+            addOption("-f", "bestaudio/b")
+            addOption("--no-playlist")
+            addOption("--no-part")
+            // Songs in pieces (HLS) come eight pieces at a time.
+            addOption("-N", "8")
+            addOption("-o", File(dir, "$name.%(ext)s").absolutePath)
+        }
+        YoutubeDL.getInstance().execute(request, "rym-$name")
+        return dir.listFiles()?.firstOrNull { it.name.startsWith("$name.") && it.length() > 0 } ?: error("yt-dlp finished but the file is missing")
+    }
+
     /** yt-dlp wants a Netscape cookie file; this converts the `Cookie:` header the app signs in with. */
     private fun cookieFile(ctx: Context, header: String): File {
         val text = buildString {

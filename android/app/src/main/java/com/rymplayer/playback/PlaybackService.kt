@@ -34,7 +34,7 @@ class PlaybackService : MediaSessionService() {
         val load = DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 50_000, 500, 2_000).build()
         val exo = ExoPlayer.Builder(this)
             .setLoadControl(load)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, RangedHttpDataSource.Factory())))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, WebDataSource.Factory())))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .build()

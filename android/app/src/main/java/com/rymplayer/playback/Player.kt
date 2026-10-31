@@ -216,7 +216,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         loadJob?.cancel()
         loadJob = scope.launch {
             // Play songs in VLC (Library setting), when it's installed; the built-in player otherwise.
-            if (useVlc && Vlc.installed(context)) {
+            if (useVlc && Vlc.installed(context) && com.rymplayer.data.isYouTube(t.videoId)) {
                 val sent = runCatching { Vlc.open(context, t) }
                     .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "VLC couldn't open it: ${it.message}" }
                 loading = false
@@ -243,7 +243,9 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 .setArtist(t.artist)
                 .apply { thumbSized(t.thumb, 544)?.let { setArtworkUri(Uri.parse(it)) } }
                 .build()
-            c.setMediaItem(MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).build())
+            // SoundCloud's songs come in pieces (HLS).
+            val hls = ".m3u8" in url
+            c.setMediaItem(MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).apply { if (hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }.build())
             c.prepare()
             c.play()
             // The next song's link is looked up while this one plays.
@@ -290,7 +292,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     private fun keepGoing(t: Track) {
         if (index != queue.lastIndex || !::api.isInitialized) return
         scope.launch {
-            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> append(tidy(radio, t)) }
+            runCatching { com.rymplayer.data.Radio.forTrack(api, t) }.getOrNull()?.let { radio -> append(tidy(radio, t)) }
         }
     }
 

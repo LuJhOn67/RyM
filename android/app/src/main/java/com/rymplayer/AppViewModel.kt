@@ -41,7 +41,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -153,6 +153,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     val plugins = androidx.compose.runtime.mutableStateMapOf<String, String>().apply { putAll(com.rymplayer.data.Plugins.installed(app)) }
     val hasVideo: Boolean get() = com.rymplayer.data.Plugins.VIDEO in plugins
+    fun hasPlugin(id: String) = id in plugins
+    /** The search box looks on SoundCloud (its plugin installed and picked on the search page). */
+    var searchSoundCloud by mutableStateOf(false)
 
     fun loadStore() = viewModelScope.launch {
         runCatching { com.rymplayer.data.Plugins.store(getApplication()) }.onSuccess { list ->
@@ -285,7 +288,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun search() {
         val q = query.trim()
-        if (q.isNotEmpty()) open(Screen.Songs(Screen.Kind.Results, q, "${tr("Results for")} \"$q\""))
+        if (q.isEmpty()) return
+        val sp = com.rymplayer.data.Spotify.isLink(q)
+        val scLink = com.rymplayer.data.SoundCloud.isLink(q)
+        val plugins = com.rymplayer.data.Plugins
+        when {
+            sp && !hasPlugin(plugins.SPOTIFY) -> status = tr("Install the Spotify plugin to open Spotify links")
+            scLink && !hasPlugin(plugins.SOUNDCLOUD) -> status = tr("Install the SoundCloud plugin to open SoundCloud links")
+            sp -> {
+                status = tr("Finding the Spotify songs on YouTube Music...")
+                open(Screen.Songs(Screen.Kind.Spotify, q, "Spotify"))
+            }
+            scLink -> open(Screen.Songs(Screen.Kind.SoundCloudLink, q, "SoundCloud"))
+            searchSoundCloud && hasPlugin(plugins.SOUNDCLOUD) -> open(Screen.Songs(Screen.Kind.SoundCloud, q, "SoundCloud: \"$q\""))
+            else -> open(Screen.Songs(Screen.Kind.Results, q, "${tr("Results for")} \"$q\""))
+        }
     }
 
     /** When the feed was last fetched; coming back after half an hour fetches a fresh one. */
@@ -396,9 +413,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.History -> api.history()
                     Screen.Kind.Results -> api.search(page.id)
                     Screen.Kind.Downloads -> Downloads.list(getApplication())
+                    Screen.Kind.SoundCloud -> com.rymplayer.data.SoundCloud.search(getApplication(), page.id)
+                    Screen.Kind.SoundCloudLink -> com.rymplayer.data.SoundCloud.openLink(getApplication(), page.id)
+                    Screen.Kind.Spotify -> com.rymplayer.data.Spotify.import(api, page.id)
                 }
             }
-            r.onFailure { status = it.message.orEmpty() }
+            r.onFailure {
+                android.util.Log.w("RyM", "loading ${page.kind} failed", it)
+                status = it.message ?: it.javaClass.simpleName
+            }
             pages[page] = r.getOrDefault(emptyList())
             com.rymplayer.playback.Streams.prefetchLinks(pages[page].orEmpty().filter { it.link == null }.take(8).map { it.videoId })
         }
@@ -420,7 +443,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // What was played stays above; Up next under it is made for this song.
         player.start(listOf(t), 0)
         viewModelScope.launch {
-            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> player.append(player.tidy(radio, t)) }
+            runCatching { com.rymplayer.data.Radio.forTrack(api, t) }.getOrNull()?.let { radio -> player.append(player.tidy(radio, t)) }
         }
     }
 
@@ -586,7 +609,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         LyricsCache.get(ctx, t.videoId)?.let { return it.lyrics }
         return coroutineScope {
-            val ytm = async { runCatching { api.lyrics(t.videoId) }.getOrNull() }
+            val ytm = async { if (com.rymplayer.data.isYouTube(t.videoId)) runCatching { api.lyrics(t.videoId) }.getOrNull() else null }
             val found = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration)) ?: ytm.await()
             ytm.cancel()
             LyricsCache.put(ctx, t.videoId, found)
@@ -603,7 +626,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         sourcesJob = viewModelScope.launch {
             val found = coroutineScope {
                 val lrc = async { Lrclib.all(t.title, t.artist, parseDuration(t.duration)) }
-                val ytm = async { runCatching { api.lyrics(t.videoId) }.getOrNull() }
+                val ytm = async { if (com.rymplayer.data.isYouTube(t.videoId)) runCatching { api.lyrics(t.videoId) }.getOrNull() else null }
                 val ovh = async { Lrclib.ovh(t.title, t.artist) }
                 // The lyrics shown now stay first, so they can be picked again.
                 listOfNotNull(lyrics) + lrc.await() + listOfNotNull(ytm.await(), ovh.await())

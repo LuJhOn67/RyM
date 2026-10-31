@@ -161,7 +161,7 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
                 if (t.artist.isNotBlank()) {
                     Text(
                         t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp,
-                        modifier = Modifier.weight(1f, fill = false).clickable(enabled = t.link == null) { vm.goArtist(t) },
+                        modifier = Modifier.weight(1f, fill = false).clickable(enabled = t.link == null && com.rymplayer.data.isYouTube(t.videoId)) { vm.goArtist(t) },
                     )
                 }
                 val rest = listOf(t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
@@ -213,10 +213,11 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         item(tr("Play next"), Icons.Default.SkipNext) { vm.player.playNext(t) }()
         item(tr("Add to queue"), Icons.AutoMirrored.Filled.QueueMusic) { vm.player.addToQueue(t) }()
         item(tr("Download"), Icons.Default.Download) { vm.download(t) }()
-        if (com.rymplayer.playback.Vlc.installed(LocalContext.current)) {
+        if (com.rymplayer.playback.Vlc.installed(LocalContext.current) && com.rymplayer.data.isYouTube(t.videoId)) {
             item(tr("Open in VLC"), Icons.Default.PlayArrow) { vm.openInVlc(t) }()
         }
-        if (vm.api.signedIn) {
+        val youtube = com.rymplayer.data.isYouTube(t.videoId)
+        if (vm.api.signedIn && youtube) {
             val liked = t.videoId in vm.liked
             item(if (liked) tr("Remove from liked songs") else tr("Add to liked songs"), if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder) { vm.toggleLike(t) }()
             Row(
@@ -229,9 +230,9 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             }
         }
         t.albumId?.let { id -> item(tr("Go to album"), Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
-        if (t.artist.isNotBlank()) item(tr("Go to artist"), Icons.Default.Person) { vm.goArtist(t) }()
+        if (t.artist.isNotBlank() && youtube) item(tr("Go to artist"), Icons.Default.Person) { vm.goArtist(t) }()
         item(tr("Share"), Icons.Default.Share) { shareSong(context, t) }()
-        if (vm.hasVideo) {
+        if (vm.hasVideo && youtube) {
             item(tr("Watch video"), Icons.Default.PlayArrow) { vm.watchVideo(t) }()
             item(tr("Download video"), Icons.Default.Download) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true) }()
         }
@@ -244,7 +245,8 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
 
 /** Shares the song's link (with its name) through the phone's share sheet. */
 fun shareSong(context: Context, t: Track) {
-    val text = "${t.title} - ${t.artist}\nhttps://music.youtube.com/watch?v=${t.videoId}"
+    val link = if (com.rymplayer.data.SoundCloud.isSoundCloud(t.videoId)) com.rymplayer.data.SoundCloud.shareLink(t.videoId) else "https://music.youtube.com/watch?v=${t.videoId}"
+    val text = "${t.title} - ${t.artist}\n$link"
     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text).putExtra(Intent.EXTRA_TITLE, t.title)
     context.startActivity(Intent.createChooser(send, tr("Share")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }

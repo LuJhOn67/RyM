@@ -73,7 +73,7 @@ object Downloads {
         uriFor(ctx, t.videoId)?.let { return@withContext "already saved" }
         // Best: yt-dlp with the account (256 kbps for Premium, slow on a phone); if it fails, or
         // in fast mode, the file playback uses (about 160 kbps, in seconds).
-        val audio = if (best) {
+        val audio = if (best && isYouTube(t.videoId)) {
             runCatching { YtDlp.download(ctx, t.videoId, cookie) }
                 .onFailure { android.util.Log.w("RyM", "yt-dlp download of ${t.videoId} failed, using the player's file", it) }
                 .getOrElse { Streams.audioFile(ctx, t.videoId) }

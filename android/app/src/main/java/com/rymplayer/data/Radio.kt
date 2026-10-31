@@ -10,6 +10,16 @@ object Radio {
     private const val SAME_ARTIST_LIFT = 3
     private const val SESSION_ARTIST_LIFT = 1
 
+    /**
+     * YouTube Music's radio for a song. A SoundCloud song has none: the radio of the same song
+     * found on YouTube Music by its name stands in.
+     */
+    suspend fun forTrack(api: MusicApi, t: Track): List<Track> {
+        if (isYouTube(t.videoId)) return api.radio(t.videoId)
+        val seed = api.search("${t.title} ${firstArtist(t.artist)}").firstOrNull() ?: return emptyList()
+        return api.radio(seed.videoId)
+    }
+
     fun firstArtist(artist: String): String = artist.split(',', '&').first().trim().lowercase()
 
     /** "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload. */

@@ -153,6 +153,8 @@ struct App {
 
     /// What plays: the songs, the playing one, and the ones added to play after it.
     pub q: rymplayer::queue::Queue,
+    /// The search box looks on SoundCloud (Tab in the box, with the SoundCloud plugin).
+    pub search_sc: bool,
     /// Songs played this session (Up next leaves them out).
     played: std::collections::HashSet<String>,
     /// Every source's lyrics for the playing song once looked up, and which one shows (L).
@@ -217,6 +219,7 @@ impl App {
             tracks: Vec::new(),
             track_state: TableState::default(),
             q: Default::default(),
+            search_sc: false,
             played: Default::default(),
             alt_lyrics: None,
             loading: false,
@@ -597,6 +600,7 @@ impl App {
                     self.buffer.clear();
                 }
                 KeyCode::Enter => self.submit(input),
+                KeyCode::Tab if input == Input::Search && self.has_plugin(rymplayer::plugins::SOUNDCLOUD) => self.search_sc = !self.search_sc,
                 KeyCode::Backspace => {
                     self.buffer.pop();
                 }
@@ -776,13 +780,41 @@ impl App {
         }
         match input {
             Input::Search => {
-                let Some(api) = self.api.clone() else { return };
+                use rymplayer::{plugins, soundcloud, spotify};
+                let sc_link = soundcloud::is_link(&text);
+                let sc = sc_link || (self.search_sc && self.has_plugin(plugins::SOUNDCLOUD));
+                let sp = spotify::is_link(&text);
+                if (sc_link && !self.has_plugin(plugins::SOUNDCLOUD)) || (sp && !self.has_plugin(plugins::SPOTIFY)) {
+                    self.status = tr(if sp { "Install the Spotify plugin to open Spotify links" } else { "Install the SoundCloud plugin to open SoundCloud links" }).into();
+                    return;
+                }
+                let api = self.api.clone();
+                if api.is_none() && !sc {
+                    return;
+                }
                 self.page = Page::Search;
-                self.page_title = format!("Results for \"{text}\"");
+                self.page_title = match (sp, sc_link, sc) {
+                    (true, ..) => "Spotify".into(),
+                    (_, true, _) => "SoundCloud".into(),
+                    (_, _, true) => format!("SoundCloud: \"{text}\""),
+                    _ => format!("Results for \"{text}\""),
+                };
                 self.busy = true;
                 self.tracks.clear();
                 self.focus = Focus::Tracks;
-                self.spawn(async move { Event::Tracks(Page::Search, s(api.search(text).await)) });
+                if sp {
+                    self.status = tr("Finding the Spotify songs on YouTube Music...").into();
+                }
+                self.spawn(async move {
+                    let r = match (sp, sc_link, sc, api) {
+                        (true, _, _, Some(api)) => spotify::import(api, text).await,
+                        (_, true, ..) => soundcloud::open_link(text).await,
+                        (_, _, true, _) => soundcloud::search(text).await,
+                        (_, _, _, Some(api)) => api.search(text).await,
+                        _ => Ok(Vec::new()),
+                    };
+                    Event::Tracks(Page::Search, s(r))
+                });
             }
             Input::DownloadCount | Input::Link => {}
             Input::NewPlaylist => {
@@ -972,24 +1004,31 @@ impl App {
             .flatten()
             .filter(|t| t.link.is_none());
         let Some(seed) = selected.or(self.now_playing()).cloned() else { return };
-        if rymplayer::local::is_local(&seed.video_id) {
-            self.status = tr("Radio is for YouTube Music songs").into();
+        let page = Page::Radio(seed.video_id.clone());
+        self.play_when_loaded = Some(page.clone());
+        if rymplayer::is_youtube(&seed.video_id) {
+            self.open(page, format!("Radio: {}", seed.title));
             return;
         }
-        let page = Page::Radio(seed.video_id);
-        self.play_when_loaded = Some(page.clone());
-        self.open(page, format!("Radio: {}", seed.title));
+        // A SoundCloud song or a file: the radio of the same song found on YouTube Music.
+        let Some(api) = self.api.clone() else { return };
+        self.page = page.clone();
+        self.page_title = format!("Radio: {}", seed.title);
+        self.busy = true;
+        self.tracks.clear();
+        self.track_state.select(None);
+        self.spawn(async move { Event::Tracks(page, s(rymplayer::radio::for_track(api, seed).await)) });
     }
 
     /// Queue ran out: keep going with YouTube Music's radio for the last song.
     fn continue_with_radio(&mut self) {
-        let (Some(api), Some(vid)) = (self.api.clone(), self.now_playing().map(|t| t.video_id.clone())) else { return };
-        if self.radio_pending || rymplayer::local::is_local(&vid) {
+        let (Some(api), Some(t)) = (self.api.clone(), self.now_playing().cloned()) else { return };
+        if self.radio_pending {
             return;
         }
         self.radio_pending = true;
         self.status = tr("Queue finished, continuing with radio...").into();
-        self.spawn(async move { Event::Radio(s(api.radio(vid).await)) });
+        self.spawn(async move { Event::Radio(s(rymplayer::radio::for_track(api, t).await)) });
     }
 
     // ------------------------------------------------------------ settings and playlists
@@ -1033,14 +1072,15 @@ impl App {
         let mut rows = vec![(tr("Play next"), 'n'), (tr("Add to queue"), 'q')];
         if !local {
             rows.push((tr("Download"), 'd'));
-            if self.logged_in() {
+            let youtube = rymplayer::is_youtube(&t.video_id);
+            if self.logged_in() && youtube {
                 rows.push((if self.liked.contains(&t.video_id) { tr("Remove from liked songs") } else { tr("Add to liked songs") }, 'l'));
             }
-            if !t.artist.is_empty() {
+            if !t.artist.is_empty() && youtube {
                 rows.push((tr("Go to artist"), 'a'));
             }
             rows.push((tr("Share"), 's'));
-            if self.has_video() {
+            if self.has_video() && youtube {
                 rows.push((tr("Watch video"), 'v'));
                 rows.push((tr("Download video"), 'V'));
             }
@@ -1418,7 +1458,7 @@ impl App {
 
     fn like(&mut self, t: Track) {
         let Some(api) = self.api.clone() else { return };
-        if rymplayer::local::is_local(&t.video_id) {
+        if !rymplayer::is_youtube(&t.video_id) {
             self.status = tr("Likes are for YouTube Music songs").into();
             return;
         }
@@ -1514,7 +1554,11 @@ impl App {
     }
 
     fn has_video(&self) -> bool {
-        self.config.plugins.contains_key(rymplayer::plugins::VIDEO)
+        self.has_plugin(rymplayer::plugins::VIDEO)
+    }
+
+    pub fn has_plugin(&self, id: &str) -> bool {
+        self.config.plugins.contains_key(id)
     }
 
     /// Video plugin: the song's video in VLC (or on YouTube in the browser without VLC).
@@ -1523,7 +1567,7 @@ impl App {
             self.status = tr("Install the video plugin first (P)").into();
             return;
         }
-        if rymplayer::local::is_local(&t.video_id) {
+        if !rymplayer::is_youtube(&t.video_id) {
             return;
         }
         self.status = tr("Opening the video...").into();

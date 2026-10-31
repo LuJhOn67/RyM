@@ -14,6 +14,10 @@ pub const PLUGINS_REPO: &str = "LuJhOn67/RyM-rustYoutubeMusic-plugins";
 pub const INDEX_URL: &str = "https://raw.githubusercontent.com/LuJhOn67/RyM-rustYoutubeMusic-plugins/main/plugins.json";
 /// YouTube video player and universal downloader.
 pub const VIDEO: &str = "video";
+/// A Spotify link's songs found on YouTube Music.
+pub const SPOTIFY: &str = "spotify";
+/// SoundCloud search, playback and downloads.
+pub const SOUNDCLOUD: &str = "soundcloud";
 
 /// One plugin in the store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -30,6 +34,9 @@ pub struct Plugin {
     /// "windows", "linux", "android".
     #[serde(default)]
     pub platforms: Vec<String>,
+    /// The oldest app version it works in (empty: any).
+    #[serde(default)]
+    pub min_app: String,
 }
 
 impl Plugin {
@@ -60,11 +67,12 @@ const BUILT_IN: &str = include_str!("../assets/plugins.json");
 /// The store's list, from GitHub (the built-in copy when it can't be reached).
 pub async fn store() -> Result<Vec<Plugin>> {
     let online = async {
-        crate::updates::github().get(INDEX_URL).send().await?.error_for_status().map_err(|e| anyhow!("plugins: {e}"))?.text().await.map_err(anyhow::Error::from)
+        // A new link each minute: GitHub keeps serving an old copy for a few minutes otherwise.
+        crate::updates::github().get(format!("{INDEX_URL}?t={}", crate::updates::now() / 60)).send().await?.error_for_status().map_err(|e| anyhow!("plugins: {e}"))?.text().await.map_err(anyhow::Error::from)
     }
     .await;
     let text = online.unwrap_or_else(|_| BUILT_IN.to_string());
-    Ok(parse(&text)?.into_iter().filter(Plugin::for_this_pc).collect())
+    Ok(parse(&text)?.into_iter().filter(|p| p.for_this_pc() && !crate::updates::newer(&p.min_app, crate::VERSION)).collect())
 }
 
 fn parse(text: &str) -> Result<Vec<Plugin>> {

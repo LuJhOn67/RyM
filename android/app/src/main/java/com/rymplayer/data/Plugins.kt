@@ -25,6 +25,10 @@ object Plugins {
     const val INDEX = "https://raw.githubusercontent.com/LuJhOn67/RyM-rustYoutubeMusic-plugins/main/plugins.json"
     const val PAGE = "https://github.com/LuJhOn67/RyM-rustYoutubeMusic-plugins"
     const val VIDEO = "video"
+    /** A Spotify link's songs found on YouTube Music. */
+    const val SPOTIFY = "spotify"
+    /** SoundCloud search, playback and downloads. */
+    const val SOUNDCLOUD = "soundcloud"
 
     data class Plugin(
         val id: String,
@@ -40,23 +44,27 @@ object Plugins {
 
     private val http = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
 
-    fun parse(text: String): List<Plugin> = Json.parseToJsonElement(text).jsonObject["plugins"]?.jsonArray.orEmpty().mapNotNull { e ->
+    /** The store's plugins for Android; ones needing a newer app than [app] are left out. */
+    fun parse(text: String, app: String = ""): List<Plugin> = Json.parseToJsonElement(text).jsonObject["plugins"]?.jsonArray.orEmpty().mapNotNull { e ->
         val o = e.jsonObject
         fun s(k: String) = o[k]?.jsonPrimitive?.contentOrNull.orEmpty()
         val platforms = o["platforms"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
         if (platforms.isNotEmpty() && "android" !in platforms) return@mapNotNull null
+        if (app.isNotEmpty() && Updates.newer(s("min_app"), app)) return@mapNotNull null
         Plugin(s("id"), s("name"), s("name_ar"), s("version"), s("description"), s("description_ar")).takeIf { it.id.isNotEmpty() }
     }
 
     /** The store's list, from GitHub (the copy in the app when it can't be reached). */
     suspend fun store(ctx: Context): List<Plugin> = withContext(Dispatchers.IO) {
         val online = runCatching {
-            http.newCall(Request.Builder().url(INDEX).build()).execute().use { r ->
+            // A new link each minute: GitHub keeps serving an old copy for a few minutes otherwise.
+            http.newCall(Request.Builder().url("$INDEX?t=${System.currentTimeMillis() / 60_000}").build()).execute().use { r ->
                 check(r.isSuccessful) { "plugins: ${r.code}" }
                 r.body?.string().orEmpty()
             }
         }.getOrNull()
-        parse(online ?: ctx.assets.open("plugins.json").bufferedReader().readText())
+        val app = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty()
+        parse(online ?: ctx.assets.open("plugins.json").bufferedReader().readText(), app)
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("plugins", Context.MODE_PRIVATE)
