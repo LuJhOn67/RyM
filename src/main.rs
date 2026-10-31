@@ -155,6 +155,11 @@ struct App {
     pub q: rymplayer::queue::Queue,
     /// The search box looks on SoundCloud (Tab in the box, with the SoundCloud plugin).
     pub search_sc: bool,
+    /// The song left off last time and the second to go on from, until it plays.
+    resume_at: Option<(String, f32)>,
+    /// What the session file last got (song, second, volume, queue length), and when it was checked.
+    session_key: Option<(String, u32, u32, usize)>,
+    session_checked: Instant,
     /// Songs played this session (Up next leaves them out).
     played: std::collections::HashSet<String>,
     /// Every source's lyrics for the playing song once looked up, and which one shows (L).
@@ -220,6 +225,9 @@ impl App {
             track_state: TableState::default(),
             q: Default::default(),
             search_sc: false,
+            resume_at: None,
+            session_key: None,
+            session_checked: Instant::now(),
             played: Default::default(),
             alt_lyrics: None,
             loading: false,
@@ -258,6 +266,15 @@ impl App {
         stream::use_source(self.config.source);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
+        // The last session: its queue, its song paused where it was left, its volume.
+        if let Some(saved) = rymplayer::session::load() {
+            self.volume = saved.volume;
+            self.q = saved.queue();
+            if let Some(t) = self.q.now() {
+                self.resume_at = Some((t.video_id.clone(), saved.position));
+                self.pos = saved.position;
+            }
+        }
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(self.volume);
@@ -302,6 +319,7 @@ impl App {
                 match event::read()? {
                     TermEvent::Key(k) if k.kind == KeyEventKind::Press => {
                         if !self.key(k) {
+                            self.save_session();
                             return Ok(());
                         }
                     }
@@ -439,9 +457,15 @@ impl App {
                         self.failures = 0;
                         let known = parse_duration(&self.now_playing().map(|t| t.duration.clone()).unwrap_or_default())
                             .or_else(|| stream::cached_duration(&vid));
+                        let resume = self.resume_at.take().filter(|(id, at)| *id == vid && *at > 1.0).map(|(_, at)| at);
                         if let Some(a) = &mut self.audio {
                             match a.play(&song, known) {
-                                Ok(()) => self.status.clear(),
+                                Ok(()) => {
+                                    if let Some(at) = resume {
+                                        a.seek(at);
+                                    }
+                                    self.status.clear();
+                                }
                                 Err(e) => self.status = format!("{}: {e}", tr("Can't play")),
                             }
                         }
@@ -723,11 +747,14 @@ impl App {
                 }
             }
             KeyCode::Char('N') => self.new_playlist(None),
-            KeyCode::Char(' ') => {
-                if let Some(a) = &self.audio {
-                    a.toggle();
+            KeyCode::Char(' ') => match &self.audio {
+                Some(a) if a.is_loaded() => a.toggle(),
+                _ => {
+                    if let Some(i) = self.q.current {
+                        self.play(i);
+                    }
                 }
-            }
+            },
             KeyCode::Char('n') => self.next(),
             KeyCode::Char('p') => self.prev(),
             KeyCode::Left => self.seek_by(-5.0),
@@ -1352,6 +1379,11 @@ impl App {
         let Some(track) = self.q.songs.get(i).cloned() else { return };
         self.q.went_to(i);
         self.played.insert(track.video_id.clone());
+        // Another song than the one left off last time: that one's second no longer counts.
+        if self.resume_at.as_ref().is_some_and(|(id, _)| *id != track.video_id) {
+            self.resume_at = None;
+        }
+        self.session_key = None;
         self.alt_lyrics = None;
         self.pos = 0.0;
         self.lyrics = None;
@@ -1633,6 +1665,11 @@ impl App {
     }
 
     fn tick(&mut self) {
+        // What plays and where, kept every 3 seconds (a crash loses at most that much).
+        if self.session_checked.elapsed() > Duration::from_secs(3) {
+            self.session_checked = Instant::now();
+            self.save_session();
+        }
         if self.update_tick.elapsed() > Duration::from_secs(3600) {
             self.update_tick = Instant::now();
             self.auto_update_check();
@@ -1650,6 +1687,22 @@ impl App {
         }
         a.stop();
         self.next();
+    }
+
+    /// Writes what plays, where in it, and the volume to the session file, when any of it changed.
+    fn save_session(&mut self) {
+        let now = self.now_playing().map(|t| t.video_id.clone()).unwrap_or_default();
+        let position = match (&self.resume_at, &self.audio) {
+            (Some((id, at)), _) if *id == now => *at,
+            (_, Some(a)) if a.is_loaded() => a.position(),
+            _ => 0.0,
+        };
+        let key = (now, position as u32, (self.volume * 100.0) as u32, self.q.songs.len());
+        if self.session_key.as_ref() == Some(&key) {
+            return;
+        }
+        rymplayer::session::save(&rymplayer::session::Session::new(&self.q, position, self.volume));
+        self.session_key = Some(key);
     }
 
     fn is_playing(&self) -> bool {

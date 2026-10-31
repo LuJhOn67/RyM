@@ -95,6 +95,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val cookie = prefs.getString("cookie", null)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
+        // What was playing last time, paused where it was left.
+        player.restoreSession()
         player.useVlc = prefs.getBoolean("vlc", false)
     }
 
@@ -334,8 +336,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val likedList = likedSongs.await()
                     likedList?.let(::syncLiked)
                     val history = played.await()
-                    val pool = likedList.orEmpty().take(60) + history.take(40) + arranged.filter { it.link == null }
-                    val seeds = FeedMemory.pickSeeds(ctx, pool, 3)
+                    // What was played lately first (the mood now), then liked songs.
+                    val pool = history.take(30) + likedList.orEmpty().take(60) + arranged.filter { it.link == null }
+                    val seeds = FeedMemory.pickSeeds(ctx, pool, FeedMemory.SEEDS)
                     val radios = seeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }.awaitAll()
                     val known = (likedList.orEmpty() + history + arranged).map { it.videoId }.toSet() + seeds
                     FeedMemory.pickNew(ctx, radios, known) + arranged
@@ -399,6 +402,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onBackground() {
         foregroundJob?.cancel()
+        player.saveSession()
     }
 
     private fun load(page: Screen.Songs) {

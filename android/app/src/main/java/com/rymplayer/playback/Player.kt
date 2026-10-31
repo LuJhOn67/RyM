@@ -121,6 +121,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         ticker = scope.launch {
             while (isActive && controller?.isPlaying == true) {
                 position = (controller?.currentPosition ?: 0L) / 1000f
+                // Where it is, kept every 3 seconds (a crash loses at most that much).
+                if (System.currentTimeMillis() - sessionSavedAt > 3000) saveSession()
                 delay(100)
             }
             position = (controller?.currentPosition ?: 0L) / 1000f
@@ -129,6 +131,47 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
 
     /** Songs played this session (Up next leaves them out). */
     val played = mutableSetOf<String>()
+
+    /** The song left off last time and the millisecond to go on from, until it plays. */
+    private var resumeAt: Pair<String, Long>? = null
+    private var sessionSavedAt = 0L
+    /** The queue the session file holds (its songs are written again only when it changes). */
+    private var savedQueue: List<String> = emptyList()
+
+    /**
+     * What plays, where in it, and the queue around it (100 songs before, 400 after), so the
+     * next start picks up there even after a crash. Written on every new song and every 3 s.
+     */
+    fun saveSession(atMs: Long? = null) {
+        sessionSavedAt = System.currentTimeMillis()
+        val i = index
+        val from = (i - 100).coerceAtLeast(0)
+        val to = (if (i < 0) queue.size else i + 401).coerceAtMost(queue.size)
+        val songs = queue.toList().subList(from, to)
+        val ms = resumeAt?.takeIf { it.first == current?.videoId }?.second ?: atMs ?: (controller?.currentPosition ?: 0L)
+        val ids = songs.map { it.videoId }
+        if (ids != savedQueue) {
+            com.rymplayer.data.PageCache.saveTracks(context, "session", songs)
+            savedQueue = ids
+        }
+        context.getSharedPreferences("session", Context.MODE_PRIVATE).edit()
+            .putInt("index", if (i < 0) -1 else i - from).putLong("ms", ms.coerceAtLeast(0)).apply()
+    }
+
+    /** The last session's queue, its song paused where it was left: play goes on from there. */
+    fun restoreSession() {
+        if (queue.isNotEmpty()) return
+        val songs = com.rymplayer.data.PageCache.loadTracks(context, "session")
+        val prefs = context.getSharedPreferences("session", Context.MODE_PRIVATE)
+        val i = prefs.getInt("index", -1)
+        if (i !in songs.indices) return
+        queue += songs
+        savedQueue = songs.map { it.videoId }
+        index = i
+        val ms = prefs.getLong("ms", 0)
+        resumeAt = songs[i].videoId to ms
+        position = ms / 1000f
+    }
 
     /** How many songs added with "Add to queue" / "Play next" wait right after the playing one. */
     private var added = 0
@@ -206,10 +249,14 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         android.util.Log.w("RyM", "timing: play ${t.title} (${t.videoId})")
         // Moving on to the next song uses up one added song; jumping elsewhere forgets them.
         added = if (i == index + 1) (added - 1).coerceAtLeast(0) else 0
+        // Another song than the one left off last time: that one's place no longer counts.
+        if (resumeAt?.first != t.videoId) resumeAt = null
         index = i
         playCount++
         played += t.videoId
         position = 0f
+        // The player still holds the last song's place: the new one starts at 0.
+        saveSession(0)
         controller?.stop()
         onTrackChanged(t)
         loading = true
@@ -247,6 +294,9 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             val hls = ".m3u8" in url
             c.setMediaItem(MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).apply { if (hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }.build())
             c.prepare()
+            // The song left off last time goes on from where it was.
+            resumeAt?.takeIf { it.first == t.videoId && it.second > 1000 }?.let { c.seekTo(it.second) }
+            resumeAt = null
             c.play()
             // The next song's link is looked up while this one plays.
             Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
@@ -325,6 +375,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
 
     /** Lets go of the service; music keeps playing if it was. */
     fun release() {
+        saveSession()
         QueueBridge.next = null
         QueueBridge.prev = null
         loadJob?.cancel()

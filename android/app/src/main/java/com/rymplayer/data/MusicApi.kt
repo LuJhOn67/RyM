@@ -93,15 +93,19 @@ class MusicApi(private val cookie: String?) {
         var page = browse("FEmusic_home")
         // More pages than one screen needs, so the feed can rotate (see FeedMemory).
         repeat(6) {
-            val list = page.at("contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer")
-                ?: page.at("continuationContents/sectionListContinuation") ?: return out
-            for (shelf in list.at("contents").arr) {
-                val s = shelf.at("musicCarouselShelfRenderer") ?: continue
+            for (s in page.findAll("musicCarouselShelfRenderer")) {
                 val section = s.at("header/musicCarouselShelfBasicHeaderRenderer/title").runsText()
                 s.at("contents").arr.mapNotNullTo(out) { card(it, section) }
             }
-            val token = list.at("continuations/0/nextContinuationData/continuation").str ?: return out
-            page = post("browse", JsonObject(emptyMap()), "&ctoken=$token&continuation=$token&type=next")
+            // The next page's token: the newer `continuationCommand` (in the body) or the older
+            // `nextContinuationData` (in the link). Following only the older one stopped at page one.
+            val newer = page.findAll("continuationCommand").firstNotNullOfOrNull { it.at("token").str }
+            val older = page.findAll("nextContinuationData").firstNotNullOfOrNull { it.at("continuation").str }
+            page = when {
+                newer != null -> post("browse", buildJsonObject { put("browseId", "FEmusic_home"); put("continuation", newer) })
+                older != null -> post("browse", buildJsonObject { put("browseId", "FEmusic_home") }, "&ctoken=$older&continuation=$older&type=next")
+                else -> return out
+            }
         }
         return out
     }

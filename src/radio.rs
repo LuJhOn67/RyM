@@ -24,7 +24,7 @@ const SAME_ARTIST_LIFT: usize = 3;
 const SESSION_ARTIST_LIFT: usize = 1;
 
 /// "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload.
-fn key(t: &Track) -> String {
+pub fn same_song_key(t: &Track) -> String {
     let mut title = t.title.to_lowercase();
     for (open, close) in [('(', ')'), ('[', ']')] {
         while let Some(a) = title.find(open) {
@@ -36,14 +36,14 @@ fn key(t: &Track) -> String {
     format!("{title}|{}", first_artist(&t.artist))
 }
 
-fn first_artist(artist: &str) -> String {
+pub fn first_artist(artist: &str) -> String {
     artist.split([',', '&']).next().unwrap_or_default().trim().to_lowercase()
 }
 
 /// The radio for `seed`, tidied (see the module notes). `played` and `queued` are video ids;
 /// `session_artists` are first artists heard this session (lower case).
 pub fn tidy(radio: Vec<Track>, seed: &Track, played: &HashSet<String>, queued: &HashSet<String>, session_artists: &HashSet<String>) -> Vec<Track> {
-    let mut seen_keys: HashSet<String> = HashSet::from([key(seed)]);
+    let mut seen_keys: HashSet<String> = HashSet::from([same_song_key(seed)]);
     let mut seen_ids: HashSet<String> = HashSet::from([seed.video_id.clone()]);
     let seed_artist = first_artist(&seed.artist);
     let mut kept: Vec<(usize, Track)> = Vec::new();
@@ -51,7 +51,7 @@ pub fn tidy(radio: Vec<Track>, seed: &Track, played: &HashSet<String>, queued: &
         if t.video_id.is_empty() || played.contains(&t.video_id) || queued.contains(&t.video_id) {
             continue;
         }
-        if !seen_ids.insert(t.video_id.clone()) || !seen_keys.insert(key(&t)) {
+        if !seen_ids.insert(t.video_id.clone()) || !seen_keys.insert(same_song_key(&t)) {
             continue;
         }
         let artist = first_artist(&t.artist);

@@ -17,6 +17,7 @@ pub mod page_cache;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
+pub mod session;
 pub mod soundcloud;
 pub mod spotify;
 pub mod stream;

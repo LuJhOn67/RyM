@@ -3,16 +3,25 @@ package com.rymplayer.data
 import android.content.Context
 
 /**
- * Keeps the home feed fresh. YouTube Music sends much the same home page every time, so items
- * shown twice without being opened rest for a few days and new ones come first; anything opened
- * or played is never rested. A "New for you" shelf on top comes from the radio of a few songs the
- * user liked or played lately (different ones each refresh), leaving out songs they already know.
+ * Keeps the home feed fresh (the same rules as the PC apps' src/feed.rs). YouTube Music sends much
+ * the same home page every time, so items seen on three different days (or so) without being
+ * opened rest for two days and new ones come first; opening the app again and again counts once
+ * per six hours; when too much rests, the items seen longest ago come back so the page stays
+ * full; anything opened or played is never rested. A "New for you" shelf on top comes from the
+ * radio of a few songs the user played lately or liked (different ones each refresh), leaving out
+ * songs they already know, the same song under another upload, and more than two by one artist.
  */
 object FeedMemory {
     const val NEW_FOR_YOU = "New for you"
-    private const val TIRED_AFTER = 2
-    private const val REST_MS = 3L * 24 * 60 * 60 * 1000
-    private const val PICKS = 20
+    private const val TIRED_AFTER = 3
+    private const val REST_MS = 2L * 24 * 60 * 60 * 1000
+    /** Showings closer together than this count once. */
+    private const val SHOW_GAP_MS = 6L * 60 * 60 * 1000
+    /** The page keeps at least this many items. */
+    private const val AT_LEAST = 40
+    const val PICKS = 30
+    const val SEEDS = 5
+    private const val PER_ARTIST = 2
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("feed", Context.MODE_PRIVATE)
 
@@ -40,11 +49,17 @@ object FeedMemory {
         val arranged = order.flatMap { section ->
             fresh.filter { it.album == section }.sortedBy { if (shown(key(it)) == 0) 0 else 1 }
         }
-        // A section that lost everything keeps what YouTube sent, so the page never empties.
-        val result = if (arranged.size < 8) items else arranged
+        // Too much rests: the items seen longest ago come back (in YouTube's order).
+        val result = if (arranged.size >= AT_LEAST) arranged else {
+            val have = arranged.map(::key).toSet()
+            val back = items.filter { key(it) !in have }.sortedBy { last(key(it)) }.take(AT_LEAST - arranged.size).map(::key).toSet()
+            items.filter { key(it) in have || key(it) in back }
+        }
         for (t in result) {
             val k = key(t)
-            edit.putInt("n:$k", shown(k) + 1).putLong("t:$k", now)
+            // Opening the app again and again soon after counts as one showing.
+            val n = if (shown(k) == 0 || now - last(k) >= SHOW_GAP_MS) shown(k) + 1 else shown(k)
+            edit.putInt("n:$k", n).putLong("t:$k", now)
         }
         edit.apply()
         return result
@@ -77,6 +92,8 @@ object FeedMemory {
         val p = prefs(ctx)
         val now = System.currentTimeMillis()
         val out = mutableListOf<Track>()
+        val songs = mutableSetOf<String>()
+        val perArtist = mutableMapOf<String, Int>()
         val iters = radios.map { it.iterator() }.toMutableList()
         while (out.size < PICKS && iters.isNotEmpty()) {
             val each = iters.iterator()
@@ -86,7 +103,12 @@ object FeedMemory {
                 val t = it.next()
                 val k = t.videoId
                 val recent = p.getInt("n:$k", 0) > 0 && now - p.getLong("t:$k", 0L) < REST_MS
-                if (k !in known && !recent && out.none { o -> o.videoId == k }) out += t.copy(album = NEW_FOR_YOU)
+                val artist = Radio.firstArtist(t.artist)
+                val crowded = artist.isNotEmpty() && (perArtist[artist] ?: 0) >= PER_ARTIST
+                if (k !in known && !recent && !crowded && out.none { o -> o.videoId == k } && songs.add(Radio.sameSongKey(t))) {
+                    perArtist[artist] = (perArtist[artist] ?: 0) + 1
+                    out += t.copy(album = NEW_FOR_YOU)
+                }
             }
         }
         val edit = p.edit()

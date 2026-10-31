@@ -326,6 +326,11 @@ struct Widgets {
 }
 
 struct Ui {
+    volume: f32,
+    /// The song left off last time and the second to go on from, until it plays.
+    resume_at: Option<(String, f32)>,
+    /// What the session file last got (song, second, volume, queue length): saved again only on a change.
+    session_key: Option<(String, u32, u32, usize)>,
     /// The signed-in Google account (name, handle, picture link).
     account: Option<rymplayer::api::Account>,
     /// The lyrics / Up next panel was closed by hand (songs starting don't open it then).
@@ -370,6 +375,9 @@ struct Ui {
     lyric_line: Option<usize>,
 
     covers: HashMap<String, gdk::Texture>,
+    /// The covers in the order they came: past the newest 500, the oldest are let go (each one
+    /// is a picture on the graphics card; kept forever they pile up over a long session).
+    cover_order: std::collections::VecDeque<String>,
     waiting: HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>,
     requested: HashSet<String>,
     /// Heart buttons on screen, by song, so likes synced from the phone show at once.
@@ -427,6 +435,16 @@ fn log(line: &str) {
 
 fn main() {
     configure_gtk_runtime();
+    // GTK's own warnings and errors (a lost graphics context, say) go to rym-gtk.log too: the
+    // window app has no console to print them to.
+    glib::log_set_writer_func(|level, fields| {
+        if matches!(level, glib::LogLevel::Error | glib::LogLevel::Critical | glib::LogLevel::Warning) {
+            let text = fields.iter().find(|f| f.key() == "MESSAGE").and_then(|f| f.value_str()).unwrap_or_default();
+            let domain = fields.iter().find(|f| f.key() == "GLIB_DOMAIN").and_then(|f| f.value_str()).unwrap_or_default();
+            log(&format!("{level:?} {domain}: {text}"));
+        }
+        glib::LogWriterOutput::Handled
+    });
     if std::env::args().any(|arg| arg == "--login") {
         login::run();
     }
@@ -816,7 +834,10 @@ fn build(app: &Application) {
     let vol_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.set_draw_value(false);
-    volume.set_value(0.8);
+    // The last session: its volume now, its queue once the window is up.
+    let session = rymplayer::session::load();
+    let start_volume = session.as_ref().map_or(0.8, |s| s.volume);
+    volume.set_value(start_volume as f64);
     volume.set_size_request(110, -1);
     let right = gtk::Box::new(Orientation::Horizontal, 8);
     right.set_size_request(320, -1);
@@ -845,7 +866,7 @@ fn build(app: &Application) {
         }
     };
     if let Some(a) = &audio {
-        a.set_volume(0.8);
+        a.set_volume(start_volume);
     }
     let (tx, rx) = mpsc::channel();
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("async runtime");
@@ -882,6 +903,9 @@ fn build(app: &Application) {
             len,
         },
         side_closed: false,
+        volume: start_volume,
+        resume_at: None,
+        session_key: None,
         account: None,
         page: Page::Home,
         page_id: 0,
@@ -907,6 +931,7 @@ fn build(app: &Application) {
         lyrics: None,
         lyric_line: None,
         covers: HashMap::new(),
+        cover_order: Default::default(),
         waiting: HashMap::new(),
         requested: HashSet::new(),
         hearts: Vec::new(),
@@ -1055,10 +1080,11 @@ fn build(app: &Application) {
     {
         let ui = ui.clone();
         volume.connect_value_changed(move |s| {
-            if let Ok(st) = ui.try_borrow()
-                && let Some(a) = &st.audio
-            {
-                a.set_volume(s.value() as f32);
+            if let Ok(mut st) = ui.try_borrow_mut() {
+                st.volume = s.value() as f32;
+                if let Some(a) = &st.audio {
+                    a.set_volume(st.volume);
+                }
             }
         });
     }
@@ -1110,8 +1136,69 @@ fn build(app: &Application) {
         None => post(&ui, async { Ev::Auth(AuthMode::Guest, Api::guest().await) }),
     }
     ui.borrow_mut().home_loading = true;
+    if let Some(saved) = session {
+        restore_session(&ui, &saved);
+    }
+    {
+        // What plays and where, kept every 3 seconds (a crash loses at most that much).
+        let ui = ui.clone();
+        glib::timeout_add_seconds_local(3, move || {
+            save_session(&ui);
+            glib::ControlFlow::Continue
+        });
+    }
+    {
+        let ui = ui.clone();
+        window.connect_close_request(move |_| {
+            save_session(&ui);
+            glib::Propagation::Proceed
+        });
+    }
     render(&ui);
     window.present();
+}
+
+/// The last session's queue, with its song in the bar, paused where it was left: play goes on from there.
+fn restore_session(ui: &Shared, saved: &rymplayer::session::Session) {
+    let mut wants = Wants::new();
+    {
+        let mut s = ui.borrow_mut();
+        s.q = saved.queue();
+        let Some(t) = s.q.now().cloned() else { return };
+        s.resume_at = Some((t.video_id.clone(), saved.position));
+        s.w.bar_title.set_text(&t.title);
+        s.w.bar_artist.set_text(&t.artist);
+        s.w.pos.set_text(&fmt_time(saved.position));
+        s.w.len.set_text(if t.duration.is_empty() { "0:00" } else { &t.duration });
+        let bar = cover(&s, t.thumb.as_ref(), ROW_PX, 52, "cover", &mut wants);
+        match bar.paintable() {
+            Some(p) => s.w.bar_cover.set_paintable(Some(&p)),
+            None => {
+                if let Some((url, px, _)) = wants.pop() {
+                    wants.push((url, px, s.w.bar_cover.clone()));
+                }
+            }
+        }
+    }
+    want_covers(ui, wants);
+    render_queue(ui);
+}
+
+/// Writes what plays, where in it, and the volume to the session file, when any of it changed.
+fn save_session(ui: &Shared) {
+    let Ok(mut s) = ui.try_borrow_mut() else { return };
+    let now = s.q.now().map(|t| t.video_id.clone()).unwrap_or_default();
+    let position = match (&s.resume_at, &s.audio) {
+        (Some((id, at)), _) if *id == now => *at,
+        (_, Some(a)) if a.is_loaded() => a.position(),
+        _ => 0.0,
+    };
+    let key = (now, position as u32, (s.volume * 100.0) as u32, s.q.songs.len());
+    if s.session_key.as_ref() == Some(&key) {
+        return;
+    }
+    rymplayer::session::save(&rymplayer::session::Session::new(&s.q, position, s.volume));
+    s.session_key = Some(key);
 }
 
 // ---------------------------------------------------------------- navigation
@@ -2473,6 +2560,10 @@ fn play_at(ui: &Shared, i: usize) {
             s.w.lyrics_panel.set_reveal_child(true);
         }
         s.played.insert(track.video_id.clone());
+        // Another song than the one left off last time: that one's second no longer counts.
+        if s.resume_at.as_ref().is_some_and(|(id, _)| *id != track.video_id) {
+            s.resume_at = None;
+        }
         s.loading = true;
         s.lyrics = None;
         s.lyric_line = None;
@@ -2521,6 +2612,7 @@ fn play_at(ui: &Shared, i: usize) {
     want_covers(ui, wants);
     refresh_hearts(ui);
     render_queue(ui);
+    save_session(ui);
 
     log(&format!("play {} ({}){}", track.title, track.video_id, if in_vlc { " in VLC" } else { "" }));
     {
@@ -2989,7 +3081,16 @@ fn poll_events(ui: &Shared) {
                         for p in waiting.iter().filter_map(glib::WeakRef::upgrade) {
                             p.set_paintable(Some(&t));
                         }
-                        s.covers.insert(url, t);
+                        if s.covers.insert(url.clone(), t).is_none() {
+                            s.cover_order.push_back(url);
+                        }
+                        while s.cover_order.len() > 500 {
+                            if let Some(old) = s.cover_order.pop_front() {
+                                s.covers.remove(&old);
+                                // Asked again if a page wants it later.
+                                s.requested.remove(&old);
+                            }
+                        }
                     }
                     // Let a later page ask again.
                     None => {
@@ -3005,8 +3106,13 @@ fn poll_events(ui: &Shared) {
                 s.loading = false;
                 let Some(t) = s.q.current.and_then(|i| s.q.songs.get(i).cloned()) else { continue };
                 let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
+                let resume = s.resume_at.take().filter(|(id, at)| *id == t.video_id && *at > 1.0).map(|(_, at)| at);
                 let started = match (result, &mut s.audio) {
-                    (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()),
+                    (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()).map(|()| {
+                        if let Some(at) = resume {
+                            a.seek(at);
+                        }
+                    }),
                     (Ok(_), None) => Err("no audio device".into()),
                     (Err(e), _) => Err(e.to_string()),
                 };

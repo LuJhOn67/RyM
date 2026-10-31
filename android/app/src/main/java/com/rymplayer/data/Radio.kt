@@ -23,6 +23,8 @@ object Radio {
     fun firstArtist(artist: String): String = artist.split(',', '&').first().trim().lowercase()
 
     /** "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload. */
+    fun sameSongKey(t: Track): String = key(t)
+
     private fun key(t: Track): String {
         val title = t.title.lowercase().replace(Regex("""\([^)]*\)|\[[^]]*]"""), "").split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
         return "$title|${firstArtist(t.artist)}"

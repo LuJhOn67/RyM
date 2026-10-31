@@ -1,7 +1,11 @@
 //! A home feed that changes on every refresh. YouTube Music sends much the same page each time, so:
-//! - items shown twice without being opened rest for three days, and never-shown ones come first;
-//! - a "New for you" shelf on top comes from the radio of a few songs the user liked or played
-//!   lately (different songs each refresh), leaving out songs they already know or saw lately.
+//! - items seen on three different days (or so) without being opened rest for two days, and
+//!   never-shown ones come first; opening the app many times in a row doesn't count as seeing
+//!   them again (one showing per six hours);
+//! - when too much rests, the items seen longest ago come back, so the page never runs thin;
+//! - a "New for you" shelf on top comes from the radio of a few songs the user played lately or
+//!   liked (different songs each refresh), leaving out songs they already know or saw lately, the
+//!   same song under another upload, and more than two songs by one artist.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -13,12 +17,18 @@ use serde::{Deserialize, Serialize};
 use crate::api::{Api, LIKED_ID, Track};
 
 pub const NEW_FOR_YOU: &str = "New for you";
-const TIRED_AFTER: u32 = 2;
-const REST_SECS: u64 = 3 * 24 * 60 * 60;
+const TIRED_AFTER: u32 = 3;
+const REST_SECS: u64 = 2 * 24 * 60 * 60;
+/// Showings closer together than this count once.
+const SHOW_GAP_SECS: u64 = 6 * 60 * 60;
+/// The page keeps at least this many items (rested ones come back, longest-unseen first).
+const AT_LEAST: usize = 40;
+/// Songs by one artist in "New for you", at most.
+const PER_ARTIST: usize = 2;
 /// Forgotten after this long, so the file stays small.
 const FORGET_SECS: u64 = 30 * 24 * 60 * 60;
-const SEEDS: usize = 3;
-const PICKS: usize = 20;
+const SEEDS: usize = 5;
+const PICKS: usize = 30;
 
 /// A fresh home feed, and the liked songs fetched on the way (for the hearts).
 pub struct Refreshed {
@@ -42,10 +52,10 @@ pub async fn refresh(api: Api) -> Result<Refreshed> {
     // Seeds: the newest liked songs and history first, then the feed's own songs (guests).
     let liked_list = liked.clone().unwrap_or_default();
     let history = history.unwrap_or_default();
-    let pool: Vec<&Track> = liked_list
+    let pool: Vec<&Track> = history
         .iter()
-        .take(60)
-        .chain(history.iter().take(40))
+        .take(30)
+        .chain(liked_list.iter().take(60))
         .chain(arranged.iter().filter(|t| t.link.is_none()))
         .collect();
     let seeds = memory.pick_seeds(&pool, SEEDS, now);
@@ -167,14 +177,24 @@ impl Memory {
             part.sort_by_key(|t| (shown(t) > 0) as u8);
             arranged.extend(part.into_iter().cloned());
         }
-        // Everything rested at once: show what YouTube sent rather than an empty page.
-        let result = if arranged.len() < 8 { items } else { arranged };
-        for t in &result {
+        // Too much rests: the items seen longest ago come back (in YouTube's order), so the page
+        // never runs thin.
+        if arranged.len() < AT_LEAST {
+            let have: HashSet<String> = arranged.iter().map(key).collect();
+            let mut rested: Vec<&Track> = items.iter().filter(|t| !have.contains(&key(t))).collect();
+            rested.sort_by_key(|t| self.items.get(&key(t)).map_or(0, |s| s.last));
+            let back: HashSet<String> = rested.into_iter().take(AT_LEAST - arranged.len()).map(key).collect();
+            arranged = items.iter().filter(|t| have.contains(&key(t)) || back.contains(&key(t))).cloned().collect();
+        }
+        for t in &arranged {
             let s = self.items.entry(key(t)).or_default();
-            s.shown += 1;
+            // Opening the app again and again soon after counts as one showing.
+            if now.saturating_sub(s.last) >= SHOW_GAP_SECS || s.shown == 0 {
+                s.shown += 1;
+            }
             s.last = now;
         }
-        result
+        arranged
     }
 
     /// Up to `n` seed songs, at random, skipping ones used for the last few refreshes.
@@ -211,13 +231,23 @@ impl Memory {
         let mut lists: Vec<std::vec::IntoIter<Track>> = lists.into_iter().map(Vec::into_iter).collect();
         let mut out: Vec<Track> = Vec::new();
         let mut taken: HashSet<String> = HashSet::new();
+        let mut songs: HashSet<String> = HashSet::new();
+        let mut per_artist: HashMap<String, usize> = HashMap::new();
         while out.len() < PICKS && !lists.is_empty() {
             let mut i = 0;
             while i < lists.len() && out.len() < PICKS {
                 match lists[i].next() {
                     Some(mut t) => {
                         let recent = self.items.get(&t.video_id).is_some_and(|s| s.shown > 0 && now.saturating_sub(s.last) < REST_SECS);
-                        if !known.contains(t.video_id.as_str()) && !recent && taken.insert(t.video_id.clone()) {
+                        let artist = crate::radio::first_artist(&t.artist);
+                        let crowded = !artist.is_empty() && per_artist.get(&artist).is_some_and(|n| *n >= PER_ARTIST);
+                        if !known.contains(t.video_id.as_str())
+                            && !recent
+                            && !crowded
+                            && taken.insert(t.video_id.clone())
+                            && songs.insert(crate::radio::same_song_key(&t))
+                        {
+                            *per_artist.entry(artist).or_default() += 1;
                             t.album = NEW_FOR_YOU.into();
                             out.push(t);
                         }
@@ -261,19 +291,36 @@ mod tests {
     }
 
     #[test]
-    fn items_rest_after_two_showings_and_come_back_later() {
+    fn items_rest_after_three_days_seen_and_the_page_stays_full() {
         let mut m = memory();
-        let feed: Vec<Track> = (0..20).map(|i| song(&format!("a{i}"), "Quick picks")).collect();
+        let feed: Vec<Track> = (0..50).map(|i| song(&format!("a{i}"), "Quick picks")).collect();
         let mut more = feed.clone();
         more.extend((0..10).map(|i| song(&format!("b{i}"), "Mixes")));
-        m.arrange(feed.clone(), 1000);
-        m.arrange(feed.clone(), 2000);
-        // Third time: the 20 shown twice rest; the 10 new ones are shown.
-        let third = m.arrange(more.clone(), 3000);
-        assert_eq!(third.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(), (0..10).map(|i| format!("b{i}")).collect::<Vec<_>>());
-        // Three days later they're back.
-        let later = m.arrange(more, 3000 + REST_SECS + 1);
-        assert_eq!(later.len(), 30);
+        // Opening the app many times within an hour counts as one showing.
+        for t in 0..5 {
+            m.arrange(feed.clone(), 1000 + t * 60);
+        }
+        assert_eq!(m.arrange(more.clone(), 2000).len(), 60);
+        let day = 24 * 60 * 60;
+        m.arrange(feed.clone(), 1000 + day);
+        m.arrange(feed.clone(), 1000 + 2 * day);
+        // Seen on three days: they rest; the new ones stay and the page is filled up to 40
+        // with the ones seen longest ago.
+        let rested = m.arrange(more.clone(), 1000 + 2 * day + 100);
+        assert_eq!(rested.len(), AT_LEAST);
+        assert!((0..10).all(|i| rested.iter().any(|t| t.video_id == format!("b{i}"))));
+        // Two days later everything is back.
+        assert_eq!(m.arrange(more, 1000 + 4 * day + 200).len(), 60);
+    }
+
+    #[test]
+    fn new_picks_hold_two_songs_per_artist_and_no_reuploads() {
+        let mut m = memory();
+        let mut radio: Vec<Track> = (0..6).map(|i| Track { artist: "Band".into(), ..song(&format!("x{i}"), "") }).collect();
+        radio.push(Track { title: "x0 (Official Video)".into(), artist: "Other".into(), ..song("x0v", "") });
+        radio.push(Track { title: "x0".into(), artist: "Band".into(), ..song("dup", "") });
+        let got = m.pick_new(vec![radio], &HashSet::new(), 100);
+        assert_eq!(got.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(), ["x0", "x1", "x0v"]);
     }
 
     #[test]
@@ -291,7 +338,7 @@ mod tests {
     #[test]
     fn new_picks_skip_known_songs_and_change_each_time() {
         let mut m = memory();
-        let radio: Vec<Track> = (0..60).map(|i| song(&format!("r{i}"), "")).collect();
+        let radio: Vec<Track> = (0..80).map(|i| song(&format!("r{i}"), "")).collect();
         let known: HashSet<&str> = ["r0", "r1", "r2"].into();
         let first = m.pick_new(vec![radio.clone()], &known, 100);
         assert_eq!(first.len(), PICKS);

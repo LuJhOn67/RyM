@@ -193,24 +193,14 @@ impl Api {
             .collect())
     }
 
-    /// The home feed ("For you"): songs play, playlists/albums/mixes open. Reads up to three pages.
+    /// The home feed ("For you"): songs play, playlists/albums/mixes open. Reads up to six pages
+    /// (YouTube gives the next page's token in the older `nextContinuationData` or the newer
+    /// `continuationCommand`; only following the older one stopped after the first page).
     pub async fn home(self) -> Result<Vec<Track>> {
         let mut out = Vec::new();
-        let mut continuation = None;
-        for _ in 0..3 {
-            let query = RawBrowse { path: "browse", body: body(&[("browseId", "FEmusic_home")]), ctoken: continuation.take() };
-            let raw = match &self {
-                Api::Guest(y) => y.raw_json_query(query).await,
-                Api::User(y) => y.raw_json_query(query).await,
-            }
-            .map_err(err)?;
-            let json: Value = serde_json::from_str(&raw)?;
-            let list = json
-                .pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer")
-                .or_else(|| json.pointer("/continuationContents/sectionListContinuation"));
-            let Some(list) = list else { break };
-            for shelf in list.get("contents").and_then(Value::as_array).into_iter().flatten() {
-                let Some(shelf) = shelf.get("musicCarouselShelfRenderer") else { continue };
+        let mut page = self.raw_browse(body(&[("browseId", "FEmusic_home")]), None).await?;
+        for n in 0..6 {
+            for shelf in all(&page, "musicCarouselShelfRenderer") {
                 let section = text(shelf.pointer("/header/musicCarouselShelfBasicHeaderRenderer/title"));
                 for item in shelf.get("contents").and_then(Value::as_array).into_iter().flatten() {
                     if let Some(t) = home_item(item, &section) {
@@ -218,13 +208,16 @@ impl Api {
                     }
                 }
             }
-            continuation = list
-                .pointer("/continuations/0/nextContinuationData/continuation")
-                .and_then(Value::as_str)
-                .map(String::from);
-            if continuation.is_none() {
+            if n == 5 {
                 break;
             }
+            let newer = all(&page, "continuationCommand").into_iter().find_map(|c| c.get("token").and_then(Value::as_str)).map(String::from);
+            let older = all(&page, "nextContinuationData").into_iter().find_map(|c| c.get("continuation").and_then(Value::as_str)).map(String::from);
+            page = match (newer, older) {
+                (Some(token), _) => self.raw_browse(body(&[("browseId", "FEmusic_home"), ("continuation", &token)]), None).await?,
+                (None, Some(token)) => self.raw_browse(body(&[("browseId", "FEmusic_home")]), Some(token)).await?,
+                (None, None) => break,
+            };
         }
         Ok(out)
     }
@@ -798,6 +791,21 @@ mod raw_tests {
             "accountPhoto": {"thumbnails": [{"url": "https://yt3.ggpht.com/a=s48"}, {"url": "https://yt3.ggpht.com/a=s88"}]}
         }}}}}}]});
         assert_eq!(super::account_from(&page), Some(super::Account { name: "Some One".into(), handle: "@someone".into(), photo: Some("https://yt3.ggpht.com/a=s88".into()) }));
+    }
+
+    /// The signed-in home feed: how many items and sections come back.
+    #[tokio::test]
+    #[ignore]
+    async fn live_home_pages() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let home = super::Api::with_cookie(cookie).await.unwrap().home().await.unwrap();
+        let mut sections: Vec<&str> = Vec::new();
+        for t in &home {
+            if !sections.contains(&t.album.as_str()) {
+                sections.push(&t.album);
+            }
+        }
+        println!("{} items in {} sections", home.len(), sections.len());
     }
 
     /// The saved sign-in's account (prints only whether each part came back).
