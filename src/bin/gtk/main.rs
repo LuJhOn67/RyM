@@ -138,6 +138,10 @@ const THEMES: [Theme; 6] = [
 
 const STYLE: &str = r#"
 window, .rym { background: @bg@; color: @text@; }
+/* No shadow around the window: on Windows its room is drawn black, a dark frame around the app. */
+window.csd, window.csd:backdrop, window.solid-csd { box-shadow: none; margin: 0; border-radius: 0; outline: none; }
+.avatar { border-radius: 999px; }
+menubutton.account > button { background: transparent; border: none; box-shadow: none; border-radius: 999px; padding: 3px; min-height: 0; min-width: 0; }
 headerbar { background: @bg@; color: @text@; border: none; box-shadow: none; min-height: 46px; }
 headerbar button { color: @text@; }
 .rail { background: @bg@; padding: 8px 6px; }
@@ -255,6 +259,9 @@ enum Page {
 
 enum Ev {
     Auth(AuthMode, anyhow::Result<Api>),
+    /// The signed-in Google account, then its picture's bytes.
+    Account(anyhow::Result<rymplayer::api::Account>),
+    Avatar(String, anyhow::Result<Vec<u8>>),
     Home(anyhow::Result<feed::Refreshed>),
     /// A page's songs; the number is the page it was asked for (older answers are dropped).
     Tracks(u64, anyhow::Result<Vec<Track>>),
@@ -299,6 +306,8 @@ struct Widgets {
     toast: gtk::Revealer,
     toast_text: Label,
     lyrics_panel: gtk::Revealer,
+    account: gtk::MenuButton,
+    sign_in: Button,
     lyrics_box: gtk::Box,
     lyrics_scroll: gtk::ScrolledWindow,
     /// The side panel: lyrics or the queue ("Up next").
@@ -317,6 +326,10 @@ struct Widgets {
 }
 
 struct Ui {
+    /// The signed-in Google account (name, handle, picture link).
+    account: Option<rymplayer::api::Account>,
+    /// The lyrics / Up next panel was closed by hand (songs starting don't open it then).
+    side_closed: bool,
     runtime: tokio::runtime::Runtime,
     tx: Sender<Ev>,
     rx: Receiver<Ev>,
@@ -637,6 +650,16 @@ fn build(app: &Application) {
     search_row.append(&search_in);
     search_row.append(&search);
     header.set_title_widget(Some(&search_row));
+    // The Google account: its picture (a menu with the name and Sign out), or "Sign in".
+    let account = gtk::MenuButton::new();
+    account.add_css_class("account");
+    account.set_visible(false);
+    let sign_in = Button::with_label(tr("Sign in"));
+    sign_in.add_css_class("pill");
+    sign_in.set_valign(Align::Center);
+    sign_in.set_visible(false);
+    header.pack_end(&account);
+    header.pack_end(&sign_in);
     let refresh = icon_button("view-refresh-symbolic", tr("Refresh: new songs on top (F5)"), &[]);
     header.pack_end(&refresh);
     let from_link = icon_button("folder-download-symbolic", tr("Download from a link"), &[]);
@@ -734,7 +757,8 @@ fn build(app: &Application) {
     lyrics_scroll.set_size_request(-1, -1);
     let lyrics_panel = gtk::Revealer::new();
     lyrics_panel.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
-    lyrics_panel.set_reveal_child(true);
+    // Shown once a song plays (nothing to show before that).
+    lyrics_panel.set_reveal_child(false);
     lyrics_panel.set_child(Some(&side_box));
 
     let middle = gtk::Box::new(Orientation::Horizontal, 0);
@@ -788,7 +812,7 @@ fn build(app: &Application) {
     center.append(&controls);
     center.append(&line);
 
-    let lyrics_toggle = icon_button("format-justify-left-symbolic", tr("Lyrics"), &[]);
+    let lyrics_toggle = icon_button("format-justify-left-symbolic", tr("Lyrics"), &["dim"]);
     let vol_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.set_draw_value(false);
@@ -841,6 +865,8 @@ fn build(app: &Application) {
             toast: toast_rev,
             toast_text,
             lyrics_panel,
+            account: account.clone(),
+            sign_in: sign_in.clone(),
             lyrics_box,
             lyrics_scroll,
             side,
@@ -855,6 +881,8 @@ fn build(app: &Application) {
             pos,
             len,
         },
+        side_closed: false,
+        account: None,
         page: Page::Home,
         page_id: 0,
         home: Vec::new(),
@@ -926,6 +954,10 @@ fn build(app: &Application) {
     {
         let ui = ui.clone();
         from_link.connect_clicked(move |_| link_dialog(&ui));
+    }
+    {
+        let ui = ui.clone();
+        sign_in.connect_clicked(move |_| sign_in_or_out(&ui));
     }
     {
         // Updates: at start when it's been 12 hours, then checked hourly whether it's time again.
@@ -1031,12 +1063,18 @@ fn build(app: &Application) {
         });
     }
     {
-        let ui = ui.clone();
-        lyrics_toggle.connect_clicked(move |b| {
-            let st = ui.borrow();
+        let ui2 = ui.clone();
+        lyrics_toggle.connect_clicked(move |_| {
+            let mut st = ui2.borrow_mut();
             let open = !st.w.lyrics_panel.reveals_child();
+            // Closed by hand: it stays closed when the next song starts.
+            st.side_closed = !open;
             st.w.lyrics_panel.set_reveal_child(open);
-            if open {
+        });
+        // The button is lit while the panel shows, however it opened.
+        let b = lyrics_toggle.clone();
+        ui.borrow().w.lyrics_panel.connect_reveal_child_notify(move |r| {
+            if r.reveals_child() {
                 b.remove_css_class("dim");
             } else {
                 b.add_css_class("dim");
@@ -2431,6 +2469,9 @@ fn play_at(ui: &Shared, i: usize) {
         let Some(track) = s.q.songs.get(i).cloned() else { return };
         s.request_id += 1;
         s.q.went_to(i);
+        if !s.side_closed {
+            s.w.lyrics_panel.set_reveal_child(true);
+        }
         s.played.insert(track.video_id.clone());
         s.loading = true;
         s.lyrics = None;
@@ -2737,6 +2778,63 @@ fn tick(ui: &Shared) {
 
 // ---------------------------------------------------------------- background results
 
+/// The header's account: the picture (a menu with the name, the handle and Sign out) when
+/// signed in; a "Sign in" button when not (`guest`); nothing while it isn't known yet.
+fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Option<&gdk::Texture>, guest: bool) {
+    let (account, sign_in) = {
+        let s = ui.borrow();
+        (s.w.account.clone(), s.w.sign_in.clone())
+    };
+    sign_in.set_visible(guest && who.is_none());
+    let Some(a) = who else {
+        account.set_visible(false);
+        return;
+    };
+    let picture = |size: i32| -> gtk::Image {
+        let img = match photo {
+            Some(t) => gtk::Image::from_paintable(Some(t)),
+            None => gtk::Image::from_icon_name("avatar-default-symbolic"),
+        };
+        img.set_pixel_size(size);
+        img.add_css_class("avatar");
+        img.set_overflow(gtk::Overflow::Hidden);
+        img
+    };
+    account.set_child(Some(&picture(30)));
+    account.set_tooltip_text(Some(&a.name));
+    let col = gtk::Box::new(Orientation::Vertical, 6);
+    col.set_margin_top(14);
+    col.set_margin_bottom(12);
+    col.set_margin_start(16);
+    col.set_margin_end(16);
+    let big = picture(72);
+    big.set_halign(Align::Center);
+    col.append(&big);
+    let name = label(&a.name, &["title"]);
+    name.set_halign(Align::Center);
+    col.append(&name);
+    if !a.handle.is_empty() {
+        let handle = label(&a.handle, &["dim", "small"]);
+        handle.set_halign(Align::Center);
+        col.append(&handle);
+    }
+    let out = Button::with_label(tr("Sign out"));
+    out.add_css_class("ghost");
+    out.set_margin_top(8);
+    let pop = gtk::Popover::new();
+    {
+        let (ui, pop) = (ui.clone(), pop.clone());
+        out.connect_clicked(move |_| {
+            pop.popdown();
+            sign_in_or_out(&ui);
+        });
+    }
+    col.append(&out);
+    pop.set_child(Some(&col));
+    account.set_popover(Some(&pop));
+    account.set_visible(true);
+}
+
 fn sign_in_or_out(ui: &Shared) {
     if signed_in(ui) {
         let _ = std::fs::remove_file(cookie_path());
@@ -2751,7 +2849,9 @@ fn sign_in_or_out(ui: &Shared) {
             s.playlists.clear();
             s.home.clear();
             s.home_loading = true;
+            s.account = None;
         }
+        show_account(ui, None, None, true);
         post(ui, async { Ev::Auth(AuthMode::Guest, Api::guest().await) });
         go(ui, Page::Home);
         return;
@@ -2775,7 +2875,10 @@ fn poll_events(ui: &Shared) {
             Ev::Auth(mode, Ok(api)) => {
                 let user = api.logged_in();
                 ui.borrow_mut().api = Some(api.clone());
+                show_account(ui, None, None, !user);
                 if user {
+                    let api2 = api.clone();
+                    post(ui, async move { Ev::Account(api2.account().await) });
                     post(ui, async move { Ev::Playlists(api.library_playlists().await) });
                 }
                 if matches!(mode, AuthMode::NewLogin) {
@@ -2799,6 +2902,29 @@ fn poll_events(ui: &Shared) {
                     render(ui);
                 }
             },
+            Ev::Account(Ok(a)) => {
+                show_account(ui, Some(&a), None, false);
+                if let Some(url) = a.photo.clone() {
+                    post(ui, async move {
+                        let bytes = async { Ok::<_, anyhow::Error>(reqwest::get(&url).await?.error_for_status()?.bytes().await?.to_vec()) }.await;
+                        Ev::Avatar(url, bytes)
+                    });
+                }
+                ui.borrow_mut().account = Some(a);
+            }
+            // Signed in, but the account menu didn't answer: the picture's place shows a plain icon.
+            Ev::Account(Err(e)) => {
+                log(&format!("account: {e}"));
+                let a = rymplayer::api::Account { name: tr("Signed in").into(), handle: String::new(), photo: None };
+                show_account(ui, Some(&a), None, false);
+            }
+            Ev::Avatar(url, Ok(bytes)) => {
+                let a = ui.borrow().account.clone().filter(|a| a.photo.as_deref() == Some(url.as_str()));
+                if let (Some(a), Ok(t)) = (a, gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))) {
+                    show_account(ui, Some(&a), Some(&t), false);
+                }
+            }
+            Ev::Avatar(_, Err(e)) => log(&format!("account picture: {e}")),
             Ev::Home(result) => {
                 ui.borrow_mut().home_loading = false;
                 match result {

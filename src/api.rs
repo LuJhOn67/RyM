@@ -90,6 +90,17 @@ impl Api {
         matches!(self, Api::User(_))
     }
 
+    /// The signed-in Google account: its name, handle and picture (from the account menu).
+    pub async fn account(self) -> Result<Account> {
+        let query = RawBrowse { path: "account/account_menu", body: serde_json::Map::new(), ctoken: None };
+        let raw = match &self {
+            Api::User(y) => y.raw_json_query(query).await.map_err(err)?,
+            Api::Guest(_) => return Err(anyhow!("not signed in")),
+        };
+        let page: Value = serde_json::from_str(&raw)?;
+        account_from(&page).ok_or_else(|| anyhow!("no account in YouTube Music's answer"))
+    }
+
     pub async fn search(self, query: String) -> Result<Vec<Track>> {
         let songs = match &self {
             Api::Guest(y) => y.search_songs(query.as_str()).await,
@@ -187,7 +198,7 @@ impl Api {
         let mut out = Vec::new();
         let mut continuation = None;
         for _ in 0..3 {
-            let query = RawBrowse { body: body(&[("browseId", "FEmusic_home")]), ctoken: continuation.take() };
+            let query = RawBrowse { path: "browse", body: body(&[("browseId", "FEmusic_home")]), ctoken: continuation.take() };
             let raw = match &self {
                 Api::Guest(y) => y.raw_json_query(query).await,
                 Api::User(y) => y.raw_json_query(query).await,
@@ -367,7 +378,7 @@ impl Api {
     }
 
     async fn raw_browse(&self, body: serde_json::Map<String, Value>, ctoken: Option<String>) -> Result<Value> {
-        let query = RawBrowse { body, ctoken };
+        let query = RawBrowse { path: "browse", body, ctoken };
         let raw = match self {
             Api::Guest(y) => y.raw_json_query(query).await,
             Api::User(y) => y.raw_json_query(query).await,
@@ -596,6 +607,8 @@ fn home_item(item: &Value, section: &str) -> Option<Track> {
 /// of asking for the next page; the newer one puts `continuation` in the body.
 #[derive(Debug)]
 struct RawBrowse {
+    /// The endpoint: "browse", or another one ("account/account_menu").
+    path: &'static str,
     body: serde_json::Map<String, Value>,
     ctoken: Option<String>,
 }
@@ -629,8 +642,25 @@ impl PostQuery for RawBrowse {
         }
     }
     fn path(&self) -> &str {
-        "browse"
+        self.path
     }
+}
+
+/// A Google account as YouTube Music shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Account {
+    pub name: String,
+    /// "@handle", when there is one.
+    pub handle: String,
+    /// The account picture (largest given).
+    pub photo: Option<String>,
+}
+
+fn account_from(page: &Value) -> Option<Account> {
+    let h = all(page, "activeAccountHeaderRenderer").into_iter().next()?;
+    let text = |v: &Value| v["runs"].as_array().map(|r| r.iter().filter_map(|x| x["text"].as_str()).collect::<String>()).or_else(|| v["simpleText"].as_str().map(String::from)).unwrap_or_default();
+    let photo = h["accountPhoto"]["thumbnails"].as_array().and_then(|t| t.last()).and_then(|t| t["url"].as_str()).map(String::from);
+    Some(Account { name: text(&h["accountName"]), handle: text(&h["channelHandle"]), photo })
 }
 
 /// Every object stored under `key`, anywhere in the tree (depth-first, in order).
@@ -760,6 +790,25 @@ mod home_probe {
 
 #[cfg(test)]
 mod raw_tests {
+    #[test]
+    fn account_menu_header() {
+        let page = serde_json::json!({"actions": [{"openPopupAction": {"popup": {"multiPageMenuRenderer": {"header": {"activeAccountHeaderRenderer": {
+            "accountName": {"runs": [{"text": "Some One"}]},
+            "channelHandle": {"runs": [{"text": "@someone"}]},
+            "accountPhoto": {"thumbnails": [{"url": "https://yt3.ggpht.com/a=s48"}, {"url": "https://yt3.ggpht.com/a=s88"}]}
+        }}}}}}]});
+        assert_eq!(super::account_from(&page), Some(super::Account { name: "Some One".into(), handle: "@someone".into(), photo: Some("https://yt3.ggpht.com/a=s88".into()) }));
+    }
+
+    /// The saved sign-in's account (prints only whether each part came back).
+    #[tokio::test]
+    #[ignore]
+    async fn live_account() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let a = super::Api::with_cookie(cookie).await.unwrap().account().await.unwrap();
+        println!("name: {}, handle: {}, photo: {}", !a.name.is_empty(), !a.handle.is_empty(), a.photo.is_some());
+    }
+
     use super::*;
 
     #[test]
