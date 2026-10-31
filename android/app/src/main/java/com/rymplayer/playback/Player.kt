@@ -292,11 +292,13 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 .build()
             // SoundCloud's songs come in pieces (HLS).
             val hls = ".m3u8" in url
-            c.setMediaItem(MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).apply { if (hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }.build())
-            c.prepare()
-            // The song left off last time goes on from where it was.
-            resumeAt?.takeIf { it.first == t.videoId && it.second > 1000 }?.let { c.seekTo(it.second) }
+            val item = MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).apply { if (hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }.build()
+            // The song left off last time starts where it was (given with the song: a seek sent
+            // right after loading it was lost).
+            val from = resumeAt?.takeIf { it.first == t.videoId && it.second > 1000 }?.second
             resumeAt = null
+            if (from != null) c.setMediaItem(item, from) else c.setMediaItem(item)
+            c.prepare()
             c.play()
             // The next song's link is looked up while this one plays.
             Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
