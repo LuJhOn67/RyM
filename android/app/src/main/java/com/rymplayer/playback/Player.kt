@@ -34,6 +34,11 @@ import kotlinx.coroutines.launch
  * background and shows the media notification); this drives it through a [MediaController].
  */
 class Player(private val context: Context, private val scope: CoroutineScope) {
+    companion object {
+        /** Played songs kept above a new start, at most. */
+        const val HISTORY = 100
+    }
+
     lateinit var api: MusicApi
     /** Hand songs to VLC instead of playing them here (see [Vlc]). */
     @Volatile var useVlc = false
@@ -85,7 +90,16 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                         tapped = 0
                     }
                     loading = state == ExoListener.STATE_BUFFERING
-                    if (state == ExoListener.STATE_ENDED) next()
+                    if (state == ExoListener.STATE_ENDED) {
+                        // Once per song, and only for the one playing now (a late "ended" from a
+                        // song already skipped by hand must not skip the new one too).
+                        val ended = controller?.currentMediaItem?.mediaId
+                        if (ended != null && ended == current?.videoId && endedFor != playCount) {
+                            endedFor = playCount
+                            // Nothing after it yet: the radio is asked again and plays once it's in (see append).
+                            if (index + 1 < queue.size) next() else current?.let(::keepGoing)
+                        }
+                    }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -113,18 +127,74 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         }
     }
 
+    /** Songs played this session (Up next leaves them out). */
+    val played = mutableSetOf<String>()
+
+    /** How many songs added with "Add to queue" / "Play next" wait right after the playing one. */
+    private var added = 0
+
+    /** Counts play() calls, so a song's end is acted on once. */
+    private var playCount = 0
+    private var endedFor = -1
+
+    /** Replaces the queue (and its history) with [list] from [start]. */
     fun setQueue(list: List<Track>, start: Int) {
         queue.clear()
         queue += list
+        added = 0
+        index = -1
         play(start)
+    }
+
+    /**
+     * Plays [list] from [start], keeping the songs played so far (up to the playing one) above
+     * it, so Previous goes back to them; the songs that were still to come are dropped.
+     */
+    fun start(list: List<Track>, start: Int) {
+        if (list.isEmpty()) return
+        val keep = (index + 1).coerceIn(0, queue.size)
+        while (queue.size > keep) queue.removeAt(queue.lastIndex)
+        while (queue.size > HISTORY) queue.removeAt(0)
+        val at = queue.size + start.coerceIn(0, list.size - 1)
+        queue += list
+        added = 0
+        play(at)
     }
 
     fun append(list: List<Track>) {
         queue += list.filter { t -> queue.none { it.videoId == t.videoId } }
+        // The queue had run out waiting for these: go on.
+        if (endedFor == playCount && index + 1 < queue.size) play(index + 1)
     }
 
+    /** Right after the playing song (it joins the songs waiting there, before them). */
     fun playNext(t: Track) {
-        if (index < 0) setQueue(listOf(t), 0) else queue.add(index + 1, t)
+        if (index < 0) setQueue(listOf(t), 0) else {
+            queue.add(index + 1, t)
+            added++
+        }
+    }
+
+    /** Right after the playing song and the songs added before it, not at the end of the queue. */
+    fun addToQueue(t: Track) {
+        if (index < 0) setQueue(listOf(t), 0) else {
+            queue.add((index + 1 + added).coerceAtMost(queue.size), t)
+            added++
+        }
+    }
+
+    /** Moves row [from] to [to]; the playing song stays the playing one. */
+    fun move(from: Int, to: Int) {
+        if (from !in queue.indices || to !in queue.indices || from == to) return
+        val t = queue.removeAt(from)
+        queue.add(to, t)
+        index = when {
+            index == from -> to
+            from < index && to >= index -> index - 1
+            from > index && to <= index -> index + 1
+            else -> index
+        }
+        added = 0
     }
 
     /** When a song was asked for, for the timing log. */
@@ -134,7 +204,11 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         val t = queue.getOrNull(i) ?: return
         tapped = System.currentTimeMillis()
         android.util.Log.w("RyM", "timing: play ${t.title} (${t.videoId})")
+        // Moving on to the next song uses up one added song; jumping elsewhere forgets them.
+        added = if (i == index + 1) (added - 1).coerceAtLeast(0) else 0
         index = i
+        playCount++
+        played += t.videoId
         position = 0f
         controller?.stop()
         onTrackChanged(t)
@@ -216,8 +290,14 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     private fun keepGoing(t: Track) {
         if (index != queue.lastIndex || !::api.isInitialized) return
         scope.launch {
-            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> append(radio.filter { it.videoId != t.videoId }) }
+            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> append(tidy(radio, t)) }
         }
+    }
+
+    /** The radio for [seed] without repeats or songs played or queued already, same artist moved up. */
+    fun tidy(radio: List<Track>, seed: Track): List<Track> {
+        val heard = queue.take(index + 1).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
+        return com.rymplayer.data.Radio.tidy(radio, seed, played, queue.map { it.videoId }.toSet(), heard)
     }
 
     fun seekTo(secs: Float) {
@@ -229,6 +309,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         if (i !in queue.indices || i == index) return
         queue.removeAt(i)
         if (i < index) index--
+        // One of the added songs waiting after the playing one.
+        if (i > index && i <= index + added) added--
     }
 
     fun stop() {

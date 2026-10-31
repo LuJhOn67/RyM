@@ -14,6 +14,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Synced lyrics from LRCLIB: the exact match and three looser searches, all asked at once and
@@ -79,6 +80,58 @@ object Lrclib {
         }
         answers.firstOrNull { it != null }
     } }.getOrNull()
+
+    /**
+     * Every usable LRCLIB match (the full search and the loose one), synced first, then the
+     * closest length; up to four. For the lyrics source switcher.
+     */
+    suspend fun all(title: String, artist: String, duration: Float?): List<Lyrics> = runCatching { coroutineScope {
+        val queries = listOf(
+            listOf("track_name" to title, "artist_name" to artist),
+            listOf("q" to "${cleanTitle(title)} ${firstArtist(artist)}"),
+        )
+        queries.map { q ->
+            async {
+                val url = "https://lrclib.net/api/search".toHttpUrl().newBuilder().apply { q.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
+                runCatching { get(url.toString()).arr }.getOrDefault(emptyList())
+            }
+        }.flatMap { it.await() }.mapNotNull { h ->
+            val off = duration?.let { d -> h.at("duration")?.jsonPrimitive?.floatOrNull?.let { abs(it - d) } } ?: 0f
+            if (off > 15f) null else toLyrics(h)?.let { Triple(it.synced.isEmpty(), off, it) }
+        }.sortedWith(compareBy({ it.first }, { it.second })).map { it.third }.let(::distinct).take(4)
+    } }.getOrDefault(emptyList())
+
+    private val quick = http.newBuilder().callTimeout(10, TimeUnit.SECONDS).build()
+
+    /** lyrics.ovh: plain lyrics by artist and title (no timing). It can be slow: 10 s at most. */
+    suspend fun ovh(title: String, artist: String): Lyrics? = runCatching { withContext(Dispatchers.IO) {
+        val url = "https://api.lyrics.ovh/v1/".toHttpUrl().newBuilder().addPathSegment(firstArtist(artist)).addPathSegment(cleanTitle(title)).build()
+        quick.newCall(Request.Builder().url(url).header("User-Agent", "RyM-Android/0.1").build()).execute().use { resp ->
+            if (!resp.isSuccessful) return@withContext null
+            val plain = json.parseToJsonElement(resp.body?.string().orEmpty()).at("lyrics").str?.lines()?.map { it.trim() }.orEmpty()
+            Lyrics(emptyList(), plain, "lyrics.ovh").takeIf { plain.count { it.isNotEmpty() } >= 4 }
+        }
+    } }.getOrNull()
+
+    /**
+     * The same words with the same timing only once (another timing stays: that's what switching
+     * is for when the lines run early or late); LRCLIB's matches numbered "LRCLIB", "LRCLIB 2", ...
+     */
+    fun distinct(list: List<Lyrics>): List<Lyrics> {
+        val seen = mutableSetOf<String>()
+        var n = 0
+        return list.filter { l ->
+            val words = (l.plain.asSequence() + l.synced.asSequence().map { it.second }).flatMap { it.asSequence() }
+                .filter { it.isLetterOrDigit() }.take(400).joinToString("").lowercase()
+            val timing = l.synced.take(6).joinToString(",") { (it.first * 2).roundToInt().toString() }
+            seen.add("$timing|$words")
+        }.map { l ->
+            if (!l.source.startsWith("LRCLIB")) l else {
+                n++
+                l.copy(source = if (n == 1) "LRCLIB" else "LRCLIB $n")
+            }
+        }
+    }
 
     /** "Song (feat. X) [Live]" -> "Song" */
     fun cleanTitle(title: String): String =

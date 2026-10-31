@@ -7,6 +7,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 
 import androidx.compose.material3.ModalBottomSheet
 
+import android.content.Context
+import android.content.Intent
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -139,10 +142,10 @@ fun coverColor(url: String?): Color {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null) {
+fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null, menuOnHold: Boolean = true) {
     Row(
         Modifier.fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = { vm.menu = MenuFor(t, queueIndex) })
+            .combinedClickable(onClick = onClick, onLongClick = if (menuOnHold) ({ vm.menu = MenuFor(t, queueIndex) }) else null)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -180,6 +183,7 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
 fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
     val t = m.track
     val queueIndex = m.queueIndex
+    val context = LocalContext.current
     var pick by remember(t.videoId) { mutableStateOf(false) }
     if (pick) {
         SaveToPlaylist(vm, t) { pick = false; onDismiss() }
@@ -207,7 +211,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         }
         item(tr("Start radio"), Icons.Default.Radio) { vm.playRadio(t) }()
         item(tr("Play next"), Icons.Default.SkipNext) { vm.player.playNext(t) }()
-        item(tr("Add to queue"), Icons.AutoMirrored.Filled.QueueMusic) { vm.player.append(listOf(t)) }()
+        item(tr("Add to queue"), Icons.AutoMirrored.Filled.QueueMusic) { vm.player.addToQueue(t) }()
         item(tr("Download"), Icons.Default.Download) { vm.download(t) }()
         if (com.rymplayer.playback.Vlc.installed(LocalContext.current)) {
             item(tr("Open in VLC"), Icons.Default.PlayArrow) { vm.openInVlc(t) }()
@@ -226,6 +230,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         }
         t.albumId?.let { id -> item(tr("Go to album"), Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
         if (t.artist.isNotBlank()) item(tr("Go to artist"), Icons.Default.Person) { vm.goArtist(t) }()
+        item(tr("Share"), Icons.Default.Share) { shareSong(context, t) }()
         if (vm.hasVideo) {
             item(tr("Watch video"), Icons.Default.PlayArrow) { vm.watchVideo(t) }()
             item(tr("Download video"), Icons.Default.Download) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true) }()
@@ -235,6 +240,13 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         }
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/** Shares the song's link (with its name) through the phone's share sheet. */
+fun shareSong(context: Context, t: Track) {
+    val text = "${t.title} - ${t.artist}\nhttps://music.youtube.com/watch?v=${t.videoId}"
+    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text).putExtra(Intent.EXTRA_TITLE, t.title)
+    context.startActivity(Intent.createChooser(send, tr("Share")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 /** A sheet a little lighter than the page, so it stands out. */

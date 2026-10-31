@@ -79,6 +79,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var menu by mutableStateOf<MenuFor?>(null)
     private var lyricsJob: Job? = null
 
+    /** Every source's lyrics for the playing song (the lyrics view's switcher), once asked for. */
+    var lyricsSources by mutableStateOf<List<Lyrics>>(emptyList())
+        private set
+    var lookingForSources by mutableStateOf(false)
+        private set
+    private var sourcesFor: String? = null
+    private var sourcesJob: Job? = null
+
     init {
         I18n.arabic = prefs.getBoolean("arabic", false)
         com.rymplayer.playback.Streams.warmUp()
@@ -402,15 +410,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun playFrom(list: List<Track>, index: Int) {
         val songs = list.filter { it.link == null }
         val start = songs.indexOfFirst { it.videoId == list[index].videoId }.coerceAtLeast(0)
-        player.setQueue(songs, start)
+        // What was played stays above, so Previous goes back to it.
+        player.start(songs, start)
     }
 
     /** One song, and YouTube Music's radio after it. */
     fun playRadio(t: Track) {
         FeedMemory.opened(getApplication(), t)
-        player.setQueue(listOf(t), 0)
+        // What was played stays above; Up next under it is made for this song.
+        player.start(listOf(t), 0)
         viewModelScope.launch {
-            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> player.append(radio.filter { it.videoId != t.videoId }) }
+            runCatching { api.radio(t.videoId) }.getOrNull()?.let { radio -> player.append(player.tidy(radio, t)) }
         }
     }
 
@@ -553,6 +563,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadLyrics(t: Track?) {
         lyricsJob?.cancel()
+        sourcesJob?.cancel()
+        sourcesFor = null
+        lyricsSources = emptyList()
+        lookingForSources = false
         lyrics = null
         if (t == null) return
         lyricsStatus = tr("Looking for lyrics...")
@@ -578,6 +592,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             LyricsCache.put(ctx, t.videoId, found)
             found
         }
+    }
+
+    /** Asks every source for the playing song's lyrics (once per song): LRCLIB's matches, YouTube Music, lyrics.ovh. */
+    fun loadLyricsSources() {
+        val t = player.current ?: return
+        if (sourcesFor == t.videoId) return
+        sourcesFor = t.videoId
+        lookingForSources = true
+        sourcesJob = viewModelScope.launch {
+            val found = coroutineScope {
+                val lrc = async { Lrclib.all(t.title, t.artist, parseDuration(t.duration)) }
+                val ytm = async { runCatching { api.lyrics(t.videoId) }.getOrNull() }
+                val ovh = async { Lrclib.ovh(t.title, t.artist) }
+                // The lyrics shown now stay first, so they can be picked again.
+                listOfNotNull(lyrics) + lrc.await() + listOfNotNull(ytm.await(), ovh.await())
+            }
+            lyricsSources = Lrclib.distinct(found)
+            lookingForSources = false
+        }
+    }
+
+    /** Shows the lyrics picked in the switcher, and keeps them for the song next time. */
+    fun showLyricsFrom(l: Lyrics) {
+        val t = player.current ?: return
+        lyrics = l
+        lyricsStatus = ""
+        LyricsCache.put(getApplication(), t.videoId, l)
     }
 
     override fun onCleared() {
