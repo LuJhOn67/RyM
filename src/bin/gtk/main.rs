@@ -777,6 +777,14 @@ fn build(app: &Application) {
     lyrics_panel.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
     // Shown once a song plays (nothing to show before that).
     lyrics_panel.set_reveal_child(false);
+    // Hidden it takes no room at all (a hidden revealer still kept its width: an empty strip
+    // beside the page); it goes away once it has slid shut.
+    lyrics_panel.set_visible(false);
+    lyrics_panel.connect_child_revealed_notify(|r| {
+        if !r.is_child_revealed() && !r.reveals_child() {
+            r.set_visible(false);
+        }
+    });
     lyrics_panel.set_child(Some(&side_box));
 
     let middle = gtk::Box::new(Orientation::Horizontal, 0);
@@ -1021,7 +1029,7 @@ fn build(app: &Application) {
         // The bar's cover opens the lyrics (it never skips the song).
         let ui2 = ui.clone();
         let click = gtk::GestureClick::new();
-        click.connect_released(move |_, _, _, _| ui2.borrow().w.lyrics_panel.set_reveal_child(true));
+        click.connect_released(move |_, _, _, _| show_side(&ui2.borrow().w.lyrics_panel, true));
         let s = ui.borrow();
         s.w.bar_cover.add_controller(click);
         s.w.bar_cover.set_cursor_from_name(Some("pointer"));
@@ -1095,7 +1103,7 @@ fn build(app: &Application) {
             let open = !st.w.lyrics_panel.reveals_child();
             // Closed by hand: it stays closed when the next song starts.
             st.side_closed = !open;
-            st.w.lyrics_panel.set_reveal_child(open);
+            show_side(&st.w.lyrics_panel, open);
         });
         // The button is lit while the panel shows, however it opened.
         let b = lyrics_toggle.clone();
@@ -2556,8 +2564,10 @@ fn play_at(ui: &Shared, i: usize) {
         let Some(track) = s.q.songs.get(i).cloned() else { return };
         s.request_id += 1;
         s.q.went_to(i);
-        if !s.side_closed {
-            s.w.lyrics_panel.set_reveal_child(true);
+        // The panel opens on the lyrics when a song starts (unless closed by hand).
+        if !s.side_closed && !s.w.lyrics_panel.reveals_child() {
+            s.w.side.set_visible_child_name("lyrics");
+            show_side(&s.w.lyrics_panel, true);
         }
         s.played.insert(track.video_id.clone());
         // Another song than the one left off last time: that one's second no longer counts.
@@ -2925,6 +2935,14 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     pop.set_child(Some(&col));
     account.set_popover(Some(&pop));
     account.set_visible(true);
+}
+
+/// Opens or closes the lyrics / Up next panel (shown, it slides in; shut, it takes no room).
+fn show_side(panel: &gtk::Revealer, open: bool) {
+    if open {
+        panel.set_visible(true);
+    }
+    panel.set_reveal_child(open);
 }
 
 fn sign_in_or_out(ui: &Shared) {
