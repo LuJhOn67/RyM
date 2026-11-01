@@ -102,6 +102,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Updates" => "التحديثات",
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
+        "Menu" => "القائمة",
+        "More" => "المزيد",
         "Floating lyrics" => "كلمات عائمة",
         "Crossfade" => "تداخل الأغاني",
         "Skip silence" => "تخطي الصمت",
