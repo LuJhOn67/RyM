@@ -15,6 +15,8 @@ import com.rymplayer.data.LIKED_ID
 import com.rymplayer.data.Link
 import com.rymplayer.data.Lrclib
 import com.rymplayer.data.Lyrics
+import com.rymplayer.data.LyricSources
+import com.rymplayer.data.Recent
 import com.rymplayer.data.LyricsCache
 import com.rymplayer.data.Playlist
 import com.rymplayer.data.SignedOutException
@@ -316,9 +318,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * A fresh home feed: YouTube's page (rested items left out, see [FeedMemory]) under a
-     * "New for you" shelf made from the radio of a few liked or recently played songs, different
-     * ones each time. The liked songs are read on the way, so hearts are up to date too.
+     * A fresh home feed (the same as the PC apps' src/feed.rs): "Recently played" on top, then
+     * "For you", a mix of three pools fetched at once (the radios of the last songs played, songs
+     * never played or liked, and liked or most played ones, about a third), then YouTube's own
+     * shelves (rested items left out, see [FeedMemory]). Scrolled to the bottom it goes on
+     * ([loadMoreHome]). The liked songs are read on the way, so hearts are up to date too.
      */
     fun loadHome() {
         if (homeLoading && homeJob?.isActive == true) return
@@ -329,19 +333,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             runCatching {
                 coroutineScope {
                     val user = api.signedIn
-                    val page = async { api.home() }
+                    val recent = Recent.tracks(ctx)
+                    val page = async { api.homePaged(3) }
                     val likedSongs = async { if (user) runCatching { api.playlist(LIKED_ID) }.getOrNull() else null }
                     val played = async { if (user) runCatching { api.history() }.getOrDefault(emptyList()) else emptyList() }
-                    val arranged = FeedMemory.arrange(ctx, page.await())
+                    val home = page.await()
+                    val arranged = FeedMemory.arrange(ctx, home.tracks)
                     val likedList = likedSongs.await()
                     likedList?.let(::syncLiked)
                     val history = played.await()
-                    // What was played lately first (the mood now), then liked songs.
-                    val pool = history.take(30) + likedList.orEmpty().take(60) + arranged.filter { it.link == null }
-                    val seeds = FeedMemory.pickSeeds(ctx, pool, FeedMemory.SEEDS)
-                    val radios = seeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }.awaitAll()
-                    val known = (likedList.orEmpty() + history + arranged).map { it.videoId }.toSet() + seeds
-                    FeedMemory.pickNew(ctx, radios, known) + arranged
+                    // Fresh: the radios of the last songs played; new: radios of two liked or played songs at random.
+                    val freshSeeds = (recent + history).map { it.videoId }.filter { com.rymplayer.data.isYouTube(it) }.distinct().take(4)
+                    val pool = (likedList.orEmpty().take(80) + history.take(40)).filter { it.videoId !in freshSeeds }
+                    val newSeeds = FeedMemory.pickSeeds(ctx, pool, 2)
+                    val freshRadios = freshSeeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }
+                    val newRadios = newSeeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }
+                    val known = (likedList.orEmpty() + history + recent).map { it.videoId }.toSet()
+                    val fresh = FeedMemory.turns(freshRadios.awaitAll())
+                    val new = (FeedMemory.turns(newRadios.awaitAll()) + arranged.filter { it.link == null }).filter { it.videoId !in known }
+                    val familiar = (Recent.favourites(ctx, 40) + likedList.orEmpty().take(150)).shuffled()
+                    val recentRow = recent.take(20).map { it.copy(album = FeedMemory.RECENTLY_PLAYED) }
+                    val skip = recentRow.map { it.videoId }.toSet() + freshSeeds
+                    val forYou = FeedMemory.mix(fresh, new, familiar, skip, 40, FeedMemory.FOR_YOU)
+                    FeedMemory.seen(ctx, forYou)
+                    val inMix = forYou.map { it.videoId }.toSet()
+                    val out = recentRow + forYou + arranged.filter { it.link != null || it.videoId !in inMix }
+                    homeCursor = HomeCursor((home.more as? com.rymplayer.data.MusicApi.More.Home)?.token, (freshSeeds + newSeeds).toMutableList(),
+                        out.map(FeedMemory::key).toMutableSet(), likedList.orEmpty(), history)
+                    out
                 }
             }
                 .onFailure { if (home.isEmpty()) status = it.message.orEmpty() }
@@ -353,6 +372,80 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // Songs at the top start right away when tapped.
             com.rymplayer.playback.Streams.prefetchLinks(home.filter { it.link == null }.take(8).map { it.videoId })
             homeLoading = false
+        }
+    }
+
+    /** Where the home feed goes on from: YouTube's next page, seeds used, what's on the page, the pools. */
+    private class HomeCursor(
+        var token: com.rymplayer.data.MusicApi.Token?,
+        val used: MutableList<String>,
+        val shown: MutableSet<String>,
+        val liked: List<Track>,
+        val history: List<Track>,
+    )
+    private var homeCursor: HomeCursor? = null
+
+    /** The next part of a page is on its way (the spinner at the bottom). */
+    var loadingMore by mutableStateOf(false)
+        private set
+
+    /**
+     * The home feed's next part: a mix from three new seeds (one of the songs played lately, two
+     * at random) and YouTube's home page further down; nothing already on the page.
+     */
+    fun loadMoreHome() {
+        val c = homeCursor ?: return
+        if (loadingMore || homeLoading) return
+        loadingMore = true
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            runCatching {
+                coroutineScope {
+                    val recent = Recent.tracks(ctx)
+                    val unused = (recent + c.history + c.liked).filter { com.rymplayer.data.isYouTube(it.videoId) && it.videoId !in c.used }
+                    val seeds = (listOfNotNull(recent.firstOrNull { it in unused }) + unused.take(40).shuffled().take(2)).map { it.videoId }.distinct()
+                    val radios = seeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }
+                    val token = c.token
+                    val page = async { token?.let { runCatching { api.more(com.rymplayer.data.MusicApi.More.Home(it)) }.getOrNull() } }
+                    val known = (c.liked + c.history + recent).map { it.videoId }.toSet()
+                    val fresh = FeedMemory.turns(radios.awaitAll())
+                    val new = fresh.filter { it.videoId !in known }
+                    val familiar = (Recent.favourites(ctx, 40) + c.liked.take(150)).shuffled()
+                    val mixed = FeedMemory.mix(fresh, new, familiar, c.shown, 30, FeedMemory.MORE_FOR_YOU)
+                    FeedMemory.seen(ctx, mixed)
+                    val next = page.await()
+                    c.token = (next?.more as? com.rymplayer.data.MusicApi.More.Home)?.token
+                    val mixedKeys = mixed.map(FeedMemory::key).toSet()
+                    val shelves = next?.tracks.orEmpty().filter { FeedMemory.key(it) !in c.shown && FeedMemory.key(it) !in mixedKeys }
+                    c.used += seeds
+                    (mixed + shelves).also { added -> c.shown += added.map(FeedMemory::key) }
+                }
+            }.onSuccess { added ->
+                home = home + added
+                if (added.isEmpty() && c.token == null) homeCursor = null
+                com.rymplayer.playback.Streams.prefetchLinks(added.filter { it.link == null }.take(4).map { it.videoId })
+            }.onFailure { android.util.Log.w("RyM", "more for you", it) }
+            loadingMore = false
+        }
+    }
+
+    /** Where each open list goes on (search results, playlists). */
+    private val pageMore = HashMap<Screen.Songs, com.rymplayer.data.MusicApi.More>()
+
+    /** The next part of a list near its bottom (nothing already in it). */
+    fun loadMore(page: Screen.Songs) {
+        val more = pageMore[page] ?: return
+        if (loadingMore) return
+        loadingMore = true
+        viewModelScope.launch {
+            runCatching { api.more(more) }.onSuccess { part ->
+                val have = pages[page].orEmpty().map { it.videoId }.toMutableSet()
+                val fresh = part.tracks.filter { have.add(it.videoId) }
+                pages[page] = pages[page].orEmpty() + fresh
+                if (part.more != null) pageMore[page] = part.more else pageMore.remove(page)
+                com.rymplayer.playback.Streams.prefetchLinks(fresh.take(4).map { it.videoId })
+            }.onFailure { android.util.Log.w("RyM", "more for ${page.kind}", it) }
+            loadingMore = false
         }
     }
 
@@ -409,13 +502,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val r = runCatching {
                 when (page.kind) {
-                    Screen.Kind.Playlist -> api.playlist(page.id)
+                    Screen.Kind.Playlist -> api.playlistPaged(page.id).also { p -> p.more?.let { pageMore[page] = it } }.tracks
                     Screen.Kind.Album -> api.album(page.id)
                     Screen.Kind.Mix -> api.mix(page.id)
                     Screen.Kind.Radio -> api.radio(page.id)
                     Screen.Kind.Artist -> api.artist(page.id)
                     Screen.Kind.History -> api.history()
-                    Screen.Kind.Results -> api.search(page.id)
+                    Screen.Kind.Results -> api.searchPaged(page.id).also { p -> p.more?.let { pageMore[page] = it } }.tracks
                     Screen.Kind.Downloads -> Downloads.list(getApplication())
                     Screen.Kind.SoundCloud -> com.rymplayer.data.SoundCloud.search(getApplication(), page.id)
                     Screen.Kind.SoundCloudLink -> com.rymplayer.data.SoundCloud.openLink(getApplication(), page.id)
@@ -594,6 +687,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         sourcesFor = null
         lyricsSources = emptyList()
         lookingForSources = false
+        wantedSource = null
         lyrics = null
         if (t == null) return
         lyricsStatus = tr("Looking for lyrics...")
@@ -612,16 +706,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun findLyrics(t: Track): Lyrics? {
         val ctx = getApplication<Application>()
         LyricsCache.get(ctx, t.videoId)?.let { return it.lyrics }
+        // The first synced lyrics in the order LRCLIB, NetEase, KuGou (all asked at once; a later one
+        // is waited for only while the earlier ones had nothing synced), then plain ones: LRCLIB's,
+        // YouTube Music's, Genius's.
         return coroutineScope {
             val ytm = async { if (com.rymplayer.data.isYouTube(t.videoId)) runCatching { api.lyrics(t.videoId) }.getOrNull() else null }
-            val found = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration)) ?: ytm.await()
+            val netease = async { runCatching { LyricSources.netease(t) }.getOrNull() }
+            val kugou = async { runCatching { LyricSources.kugou(t) }.getOrNull() }
+            val lrc = Lrclib.find(t.title, t.artist, t.album, parseDuration(t.duration))
+            val synced = lrc?.takeIf { it.synced.isNotEmpty() }
+                ?: netease.await()?.takeIf { it.synced.isNotEmpty() }
+                ?: kugou.await()?.takeIf { it.synced.isNotEmpty() }
+            val found = synced ?: lrc ?: ytm.await() ?: netease.await() ?: kugou.await() ?: runCatching { LyricSources.genius(t) }.getOrNull()
             ytm.cancel()
+            netease.cancel()
+            kugou.cancel()
             LyricsCache.put(ctx, t.videoId, found)
             found
         }
     }
 
-    /** Asks every source for the playing song's lyrics (once per song): LRCLIB's matches, YouTube Music, lyrics.ovh. */
+    /** Asks every source for the playing song's lyrics (once per song): LRCLIB's matches, NetEase, KuGou, Genius, YouTube Music. */
     fun loadLyricsSources() {
         val t = player.current ?: return
         if (sourcesFor == t.videoId) return
@@ -631,13 +736,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val found = coroutineScope {
                 val lrc = async { Lrclib.all(t.title, t.artist, parseDuration(t.duration)) }
                 val ytm = async { if (com.rymplayer.data.isYouTube(t.videoId)) runCatching { api.lyrics(t.videoId) }.getOrNull() else null }
-                val ovh = async { Lrclib.ovh(t.title, t.artist) }
+                val others = listOf(
+                    async { runCatching { LyricSources.netease(t) }.getOrNull() },
+                    async { runCatching { LyricSources.kugou(t) }.getOrNull() },
+                    async { runCatching { LyricSources.genius(t) }.getOrNull() },
+                )
                 // The lyrics shown now stay first, so they can be picked again.
-                listOfNotNull(lyrics) + lrc.await() + listOfNotNull(ytm.await(), ovh.await())
+                listOfNotNull(lyrics) + lrc.await() + others.awaitAll().filterNotNull() + listOfNotNull(ytm.await())
             }
             lyricsSources = Lrclib.distinct(found)
             lookingForSources = false
+            wantedSource?.let { wantedSource = null; pickSource(it) }
         }
+    }
+
+    /** A source pill pressed before the sources were in: shown once they are. */
+    private var wantedSource: String? = null
+
+    /** A source pill: that provider's lyrics (its next version when it already shows); the sources are asked first when they aren't in. */
+    fun pickSource(p: String) {
+        val t = player.current ?: return
+        if (sourcesFor != t.videoId || lookingForSources) {
+            wantedSource = p
+            loadLyricsSources()
+            return
+        }
+        val versions = lyricsSources.filter { LyricSources.provider(it) == p }
+        if (versions.isEmpty()) return
+        val at = versions.indexOfFirst { it == lyrics }
+        showLyricsFrom(versions[if (at < 0) 0 else (at + 1) % versions.size])
     }
 
     /** Shows the lyrics picked in the switcher, and keeps them for the song next time. */

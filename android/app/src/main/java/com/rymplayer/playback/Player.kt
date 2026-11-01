@@ -254,6 +254,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         index = i
         playCount++
         played += t.videoId
+        com.rymplayer.data.Recent.played(context, t)
         position = 0f
         // The player still holds the last song's place: the new one starts at 0.
         saveSession(0)

@@ -65,6 +65,64 @@ object FeedMemory {
         return result
     }
 
+    const val RECENTLY_PLAYED = "Recently played"
+    const val FOR_YOU = "For you"
+    const val MORE_FOR_YOU = "More for you"
+    private const val MIX_PER_ARTIST = 3
+
+    /** The lists taken in turns (first of each, then second of each...). */
+    fun turns(lists: List<List<Track>>): List<Track> {
+        val out = mutableListOf<Track>()
+        val iters = lists.map { it.iterator() }.toMutableList()
+        while (iters.isNotEmpty()) {
+            val each = iters.iterator()
+            while (each.hasNext()) {
+                val it = each.next()
+                if (it.hasNext()) out += it.next() else each.remove()
+            }
+        }
+        return out
+    }
+
+    /**
+     * The three pools taken in turns, about 35% fresh (radios of what was played lately), 30% new
+     * (never played or liked) and 35% familiar (liked, most played); a pool that runs out leaves
+     * its turns to the others. No song in [skip], no repeats or re-uploads, at most three by one
+     * artist. Each song gets [section] as its shelf.
+     */
+    fun mix(fresh: List<Track>, new: List<Track>, familiar: List<Track>, skip: Set<String>, n: Int, section: String): List<Track> {
+        val pools = listOf(fresh.iterator(), new.iterator(), familiar.iterator())
+        val weights = intArrayOf(35, 30, 35)
+        val taken = IntArray(3)
+        val open = booleanArrayOf(true, true, true)
+        val out = mutableListOf<Track>()
+        val ids = mutableSetOf<String>()
+        val songs = mutableSetOf<String>()
+        val perArtist = mutableMapOf<String, Int>()
+        while (out.size < n && open.any { it }) {
+            // The open pool furthest behind its share goes next.
+            val p = (0..2).filter { open[it] }.minByOrNull { taken[it] * 100 / weights[it] } ?: break
+            if (!pools[p].hasNext()) { open[p] = false; continue }
+            val t = pools[p].next()
+            val artist = Radio.firstArtist(t.artist)
+            val crowded = artist.isNotEmpty() && (perArtist[artist] ?: 0) >= MIX_PER_ARTIST
+            if (t.link != null || t.videoId in skip || crowded || !ids.add(t.videoId) || !songs.add(Radio.sameSongKey(t))) continue
+            perArtist[artist] = (perArtist[artist] ?: 0) + 1
+            taken[p]++
+            out += t.copy(album = section)
+        }
+        return out
+    }
+
+    /** Songs put in a mix: they wait a while before they're picked again. */
+    fun seen(ctx: Context, tracks: List<Track>) {
+        val p = prefs(ctx)
+        val now = System.currentTimeMillis()
+        val edit = p.edit()
+        for (t in tracks) edit.putInt("n:${t.videoId}", p.getInt("n:${t.videoId}", 0) + 1).putLong("t:${t.videoId}", now)
+        edit.apply()
+    }
+
     /** Opened or played: never rested. */
     fun opened(ctx: Context, t: Track) {
         prefs(ctx).edit().putBoolean("o:${key(t)}", true).apply()

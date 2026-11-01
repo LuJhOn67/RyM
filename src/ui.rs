@@ -469,9 +469,16 @@ fn draw_lyrics(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         None => (vec![Line::from(show(&app.lyrics_status).fg(sung))], 0),
     };
     let mut block = pane(th, i18n::tr("Lyrics"), false).style(Style::new().bg(rgb(bg)));
-    if let Some(l) = &app.lyrics {
-        block = block.title_bottom(Line::from(format!(" {} ", show(&format!("{} {}", i18n::tr("Lyrics from"), l.source))).fg(sung)));
+    // The sources, the one showing lit (L switches).
+    let active = app.lyrics.as_ref().map(rymplayer::lyric_sources::provider);
+    let mut pills: Vec<Span> = vec![" ".into()];
+    for p in rymplayer::lyric_sources::PROVIDERS {
+        let name = if p == rymplayer::lyric_sources::YOUTUBE { "YTM" } else { p };
+        pills.push(if active == Some(p) { format!(" {name} ").bold().fg(rgb(bg)).bg(now) } else { format!(" {name} ").fg(sung) });
+        pills.push(" ".into());
     }
+    pills.push("L ".fg(sung));
+    block = block.title_bottom(Line::from(pills));
     let align = if app.config.lyrics_centered { Alignment::Center } else { Alignment::Left };
     f.render_widget(Paragraph::new(lines).block(block).alignment(align).scroll((scroll, 0)), area);
 }

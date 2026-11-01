@@ -87,27 +87,78 @@ class MusicApi(private val cookie: String?) {
 
     // ------------------------------------------------------------------ pages
 
-    /** The home feed: songs and playlist/album/mix cards, `album` = section name. Up to 3 pages. */
-    suspend fun home(): List<Track> {
+    /** The home feed: songs and playlist/album/mix cards, `album` = section name. Up to 6 pages. */
+    suspend fun home(): List<Track> = homePaged(6).tracks
+
+    /** The first [pages] pages of the home feed, and where the next one starts. */
+    suspend fun homePaged(pages: Int): Paged {
         val out = mutableListOf<Track>()
         var page = browse("FEmusic_home")
-        // More pages than one screen needs, so the feed can rotate (see FeedMemory).
-        repeat(6) {
-            for (s in page.findAll("musicCarouselShelfRenderer")) {
-                val section = s.at("header/musicCarouselShelfBasicHeaderRenderer/title").runsText()
-                s.at("contents").arr.mapNotNullTo(out) { card(it, section) }
-            }
-            // The next page's token: the newer `continuationCommand` (in the body) or the older
-            // `nextContinuationData` (in the link). Following only the older one stopped at page one.
-            val newer = page.findAll("continuationCommand").firstNotNullOfOrNull { it.at("token").str }
-            val older = page.findAll("nextContinuationData").firstNotNullOfOrNull { it.at("continuation").str }
-            page = when {
-                newer != null -> post("browse", buildJsonObject { put("browseId", "FEmusic_home"); put("continuation", newer) })
-                older != null -> post("browse", buildJsonObject { put("browseId", "FEmusic_home") }, "&ctoken=$older&continuation=$older&type=next")
-                else -> return out
-            }
+        var token: Token? = null
+        for (n in 0 until pages) {
+            out += homeShelves(page)
+            token = nextToken(page)
+            if (n + 1 == pages) break
+            page = nextPage("browse", buildJsonObject { put("browseId", "FEmusic_home") }, token ?: break)
         }
-        return out
+        return Paged(out, token?.let { More.Home(it) })
+    }
+
+    private fun homeShelves(page: JsonElement): List<Track> = page.findAll("musicCarouselShelfRenderer").flatMap { s ->
+        val section = s.at("header/musicCarouselShelfBasicHeaderRenderer/title").runsText()
+        s.at("contents").arr.mapNotNull { card(it, section) }
+    }
+
+    /**
+     * Where a list's next page starts: the newer `continuationCommand` token goes in the
+     * request's body, the older `nextContinuationData` one in its link.
+     */
+    data class Token(val value: String, val inBody: Boolean)
+
+    /** A list that goes on, and how to get its next part. */
+    sealed interface More {
+        data class Search(val query: String, val token: Token) : More
+        data class Browse(val token: Token) : More
+        data class Home(val token: Token) : More
+    }
+
+    /** Part of a list, and where it goes on (null: that was all). */
+    data class Paged(val tracks: List<Track>, val more: More?)
+
+    private fun nextToken(page: JsonElement): Token? =
+        page.findAll("continuationCommand").firstNotNullOfOrNull { it.at("token").str }?.let { Token(it, true) }
+            ?: page.findAll("nextContinuationData").firstNotNullOfOrNull { it.at("continuation").str }?.let { Token(it, false) }
+
+    private suspend fun nextPage(endpoint: String, base: JsonObject, t: Token): JsonElement =
+        if (t.inBody) post(endpoint, JsonObject(base + ("continuation" to kotlinx.serialization.json.JsonPrimitive(t.value))))
+        else post(endpoint, base, "&ctoken=${t.value}&continuation=${t.value}&type=next")
+
+    /** Songs found for [q] (the first page), and where the next page starts. */
+    suspend fun searchPaged(q: String): Paged {
+        val page = post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) })
+        return Paged(songRows(page), nextToken(page)?.let { More.Search(q, it) })
+    }
+
+    /** A playlist's first page, and where the next page starts. */
+    suspend fun playlistPaged(id: String): Paged {
+        val page = browse(if (id.startsWith("VL")) id else "VL$id")
+        return Paged(songRows(page), nextToken(page)?.let { More.Browse(it) })
+    }
+
+    /** The next part of a list that goes on. */
+    suspend fun more(m: More): Paged = when (m) {
+        is More.Search -> {
+            val page = nextPage("search", buildJsonObject { put("query", m.query); put("params", SONGS_FILTER) }, m.token)
+            Paged(songRows(page), nextToken(page)?.let { More.Search(m.query, it) })
+        }
+        is More.Browse -> {
+            val page = nextPage("browse", JsonObject(emptyMap()), m.token)
+            Paged(songRows(page), nextToken(page)?.let { More.Browse(it) })
+        }
+        is More.Home -> {
+            val page = nextPage("browse", buildJsonObject { put("browseId", "FEmusic_home") }, m.token)
+            Paged(homeShelves(page), nextToken(page)?.let { More.Home(it) })
+        }
     }
 
     suspend fun libraryPlaylists(): List<Playlist> {

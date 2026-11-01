@@ -110,6 +110,10 @@ enum Event {
     Batch(stream::Batch),
     /// Every source's lyrics for a song (L switches between them).
     LyricsSources(String, Vec<Lyrics>),
+    /// Where a page goes on as it's scrolled (the home feed, search results, a playlist).
+    Goes(Page, Option<api::More>),
+    /// A page's next part.
+    More(Page, Result<api::Paged, String>),
     /// A newer RyM on GitHub (None: up to date); true when asked with U.
     Update(Result<Option<rymplayer::updates::Release>, String>, bool),
     /// The plugin store's list.
@@ -155,6 +159,9 @@ struct App {
     pub q: rymplayer::queue::Queue,
     /// The search box looks on SoundCloud (Tab in the box, with the SoundCloud plugin).
     pub search_sc: bool,
+    /// Where the open page goes on, and whether its next part is on the way.
+    more: Option<api::More>,
+    loading_more: bool,
     /// The song left off last time and the second to go on from, until it plays.
     resume_at: Option<(String, f32)>,
     /// What the session file last got (song, second, volume, queue length), and when it was checked.
@@ -225,6 +232,8 @@ impl App {
             track_state: TableState::default(),
             q: Default::default(),
             search_sc: false,
+            more: None,
+            loading_more: false,
             resume_at: None,
             session_key: None,
             session_checked: Instant::now(),
@@ -403,6 +412,28 @@ impl App {
                 self.status = tr("Google ended your session. Press g to sign in again.").into();
             }
             Event::Playlists(Err(e)) => self.status = format!("Playlists: {e}"),
+            Event::Goes(page, more) => {
+                if page == self.page {
+                    self.more = more;
+                }
+            }
+            Event::More(page, result) => {
+                self.loading_more = false;
+                if page != self.page {
+                    return;
+                }
+                match result {
+                    Ok(part) => {
+                        let mut seen: std::collections::HashSet<String> = self.tracks.iter().map(|t| format!("{}{:?}", t.video_id, t.link)).collect();
+                        let fresh: Vec<Track> = part.tracks.into_iter().filter(|t| seen.insert(format!("{}{:?}", t.video_id, t.link))).collect();
+                        tokio::spawn(stream::look_ahead(fresh.iter().filter(|t| t.link.is_none()).map(|t| t.video_id.clone()).collect()));
+                        self.tracks.extend(fresh);
+                        self.more = part.more;
+                        self.status.clear();
+                    }
+                    Err(e) => self.status = e,
+                }
+            }
             Event::Tracks(page, result) => {
                 if page != self.page {
                     return;
@@ -832,12 +863,17 @@ impl App {
                 if sp {
                     self.status = tr("Finding the Spotify songs on YouTube Music...").into();
                 }
+                self.more = None;
+                let tx = self.tx.clone();
                 self.spawn(async move {
                     let r = match (sp, sc_link, sc, api) {
                         (true, _, _, Some(api)) => spotify::import(api, text).await,
                         (_, true, ..) => soundcloud::open_link(text).await,
                         (_, _, true, _) => soundcloud::search(text).await,
-                        (_, _, _, Some(api)) => api.search(text).await,
+                        (_, _, _, Some(api)) => api.search_paged(text).await.map(|p| {
+                            let _ = tx.send(Event::Goes(Page::Search, p.more));
+                            p.tracks
+                        }),
                         _ => Ok(Vec::new()),
                     };
                     Event::Tracks(Page::Search, s(r))
@@ -989,16 +1025,21 @@ impl App {
             self.track_state.select(None);
         }
         let tx = self.tx.clone();
+        self.more = None;
         self.spawn(async move {
             let r = match page.clone() {
                 Page::ForYou => feed::refresh(api).await.map(|r| {
                     if let Some(liked) = r.liked {
                         let _ = tx.send(Event::Liked(Ok(liked)));
                     }
+                    let _ = tx.send(Event::Goes(Page::ForYou, r.more));
                     r.home
                 }),
                 Page::History => api.history().await,
-                Page::Playlist(id) => api.playlist_tracks(id).await,
+                Page::Playlist(id) => api.playlist_paged(id.clone()).await.map(|p| {
+                    let _ = tx.send(Event::Goes(Page::Playlist(id), p.more));
+                    p.tracks
+                }),
                 Page::Album(id) => api.album_tracks(id).await,
                 Page::Mix(id) => api.mix_tracks(id).await,
                 Page::Radio(vid) => api.radio(vid).await,
@@ -1379,6 +1420,7 @@ impl App {
         let Some(track) = self.q.songs.get(i).cloned() else { return };
         self.q.went_to(i);
         self.played.insert(track.video_id.clone());
+        rymplayer::recent::played(&track);
         // Another song than the one left off last time: that one's second no longer counts.
         if self.resume_at.as_ref().is_some_and(|(id, _)| *id != track.video_id) {
             self.resume_at = None;
@@ -1665,6 +1707,7 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.load_more_near_the_end();
         // What plays and where, kept every 3 seconds (a crash loses at most that much).
         if self.session_checked.elapsed() > Duration::from_secs(3) {
             self.session_checked = Instant::now();
@@ -1687,6 +1730,22 @@ impl App {
         }
         a.stop();
         self.next();
+    }
+
+    /// Five songs from the end of a page that goes on: its next part loads (once at a time).
+    fn load_more_near_the_end(&mut self) {
+        if self.busy || self.loading_more || self.tracks.is_empty() {
+            return;
+        }
+        let Some(selected) = self.track_state.selected() else { return };
+        if selected + 5 < self.tracks.len() {
+            return;
+        }
+        let (Some(more), Some(api)) = (self.more.clone(), self.api.clone()) else { return };
+        self.loading_more = true;
+        self.status = tr("Loading more...").into();
+        let page = self.page.clone();
+        self.spawn(async move { Event::More(page, s(api.more(more).await)) });
     }
 
     /// Writes what plays, where in it, and the volume to the session file, when any of it changed.

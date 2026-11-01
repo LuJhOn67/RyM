@@ -1,4 +1,5 @@
-//! Lyrics: LRCLIB (synced when available), YouTube Music's own as a fallback.
+//! Lyrics: synced from LRCLIB, NetEase or KuGou (see `lyric_sources`); plain ones from LRCLIB,
+//! YouTube Music or Genius as the last resort.
 //!
 //! Fast on purpose: all LRCLIB queries and YouTube Music are asked at once (the best answer wins
 //! as soon as the better ones are in), answers are kept on disk so a song heard before shows its
@@ -92,8 +93,10 @@ fn client() -> &'static reqwest::Client {
     C.get_or_init(|| reqwest::Client::builder().user_agent(UA).timeout(Duration::from_secs(10)).build().expect("http client"))
 }
 
-/// A song's lyrics: from the disk if found before, else LRCLIB and YouTube Music at once
-/// (LRCLIB's preferred: it has timing). `None` when neither has any.
+/// A song's lyrics: from the disk if found before, else the first synced lyrics in the order
+/// LRCLIB, NetEase, KuGou (all asked at once; a later one is waited for only while the earlier
+/// ones had nothing synced), then plain ones: LRCLIB's, YouTube Music's, Genius's. `None` when
+/// none has any.
 pub async fn for_track(api: Option<Api>, t: Track) -> Option<Lyrics> {
     if let Some(saved) = cached(&t.video_id) {
         return saved;
@@ -108,16 +111,51 @@ pub async fn for_track(api: Option<Api>, t: Track) -> Option<Lyrics> {
             }
         })
     };
-    let found = match lrclib(t.title.clone(), t.artist.clone(), t.album.clone(), duration).await {
-        Ok(Some(l)) => {
+    let netease = tokio::spawn(crate::lyric_sources::netease(t.clone()));
+    let kugou = tokio::spawn(crate::lyric_sources::kugou(t.clone()));
+    let lrc = lrclib(t.title.clone(), t.artist.clone(), t.album.clone(), duration).await;
+    let mut plain: Option<Lyrics> = None;
+    let mut failed = lrc.is_err();
+    match lrc {
+        Ok(Some(l)) if !l.synced.is_empty() => {
+            netease.abort();
+            kugou.abort();
             ytm.abort();
-            Some(l)
+            let found = Some(l);
+            keep(&t.video_id, &found);
+            return found;
         }
-        Ok(None) => ytm.await.ok().flatten(),
-        // LRCLIB down: don't remember "no lyrics", it may have them later.
-        Err(_) => return ytm.await.ok().flatten(),
+        Ok(Some(l)) => plain = Some(l),
+        _ => {}
+    }
+    let found = 'found: {
+        for answer in [netease.await, kugou.await] {
+            match answer {
+                Ok(Ok(Some(l))) if !l.synced.is_empty() => {
+                    ytm.abort();
+                    break 'found Some(l);
+                }
+                Ok(Ok(Some(l))) => plain = plain.or(Some(l)),
+                Ok(Err(_)) => failed = true,
+                _ => {}
+            }
+        }
+        // Nothing synced anywhere: the plain ones, Genius last.
+        if let Some(l) = plain.or(ytm.await.ok().flatten()) {
+            break 'found Some(l);
+        }
+        match crate::lyric_sources::genius(t.clone()).await {
+            Ok(l) => l,
+            Err(_) => {
+                failed = true;
+                None
+            }
+        }
     };
-    keep(&t.video_id, &found);
+    // A provider that couldn't be reached may have them later: "no lyrics" isn't remembered then.
+    if found.is_some() || !failed {
+        keep(&t.video_id, &found);
+    }
     found
 }
 
@@ -227,23 +265,27 @@ pub async fn lrclib(title: String, artist: String, album: String, duration: Opti
 }
 
 /// Every source's lyrics for a song, for the lyrics view's source switcher: LRCLIB's matches
-/// (synced first, then the closest length; different texts only), YouTube Music's own, and
-/// lyrics.ovh, all asked at once. Each is labelled with where it came from ("LRCLIB 2" for
+/// (synced first, then the closest length; different texts only), NetEase, KuGou, Genius and
+/// YouTube Music's own, all asked at once. Each is labelled with where it came from ("LRCLIB 2" for
 /// LRCLIB's second match). The lyrics `shown` now come first, so they can be picked again.
 pub async fn sources(api: Option<Api>, t: Track, shown: Option<Lyrics>) -> Vec<Lyrics> {
+    use crate::lyric_sources as ls;
     let duration = crate::parse_duration(&t.duration);
-    let local = !crate::is_youtube(&t.video_id);
-    let (lrc, ytm, ovh) = tokio::join!(
+    let youtube = crate::is_youtube(&t.video_id);
+    let (lrc, netease, kugou, genius, ytm) = tokio::join!(
         lrclib_all(t.title.clone(), t.artist.clone(), duration),
+        ls::netease(t.clone()),
+        ls::kugou(t.clone()),
+        ls::genius(t.clone()),
         async {
             match api {
-                Some(api) if !local => api.lyrics(t.video_id.clone()).await.ok().flatten(),
+                Some(api) if youtube => api.lyrics(t.video_id.clone()).await.ok().flatten(),
                 _ => None,
             }
         },
-        lyrics_ovh(&t.title, &t.artist),
     );
-    distinct(shown.into_iter().chain(lrc).chain(ytm).chain(ovh))
+    let others = [netease, kugou, genius].into_iter().filter_map(|r| r.ok().flatten());
+    distinct(shown.into_iter().chain(lrc).chain(others).chain(ytm))
 }
 
 /// The same words with the same timing: the same lyrics, whatever the source.
@@ -321,20 +363,6 @@ async fn lrclib_all(title: String, artist: String, duration: Option<f32>) -> Vec
     all
 }
 
-/// lyrics.ovh: plain lyrics by artist and title (no timing).
-async fn lyrics_ovh(title: &str, artist: &str) -> Option<Lyrics> {
-    let mut url = reqwest::Url::parse("https://api.lyrics.ovh/v1/").ok()?;
-    // "/v1/" ends in an empty piece: drop it, or the link gets "//".
-    url.path_segments_mut().ok()?.pop_if_empty().push(first_artist(artist)).push(&clean_title(title));
-    #[derive(Deserialize)]
-    struct Answer {
-        lyrics: Option<String>,
-    }
-    let a: Answer = get_json(client(), url).await.ok().flatten()?;
-    let plain: Vec<String> = a.lyrics?.lines().map(|l| l.trim().to_string()).collect();
-    let l = Lyrics { synced: Vec::new(), plain, source: "lyrics.ovh".into() };
-    l.is_usable().then_some(l)
-}
 
 /// Prefers synced lyrics, then the closest duration (within 10 s).
 fn best_hit(hits: Vec<LrcLibEntry>, duration: Option<f32>) -> Option<Lyrics> {

@@ -98,22 +98,68 @@ fun HomePage(vm: AppViewModel) {
         }
         return
     }
-    val sections = remember(vm.home) { vm.home.groupBy { it.album }.toList() }
+    val blocks = remember(vm.home) { homeBlocks(vm.home) }
+    val current = vm.player.current?.videoId
+    val state = androidx.compose.foundation.lazy.rememberLazyListState()
     LaunchedEffect(Unit) { vm.refreshHomeIfOld() }
+    NearTheEnd(state) { vm.loadMoreHome() }
     // Pull down for a fresh feed.
     androidx.compose.material3.pulltorefresh.PullToRefreshBox(isRefreshing = vm.homeLoading, onRefresh = vm::loadHome) {
-    LazyColumn(contentPadding = pagePadding) {
+    LazyColumn(state = state, contentPadding = pagePadding) {
         item { Title(tr("For you"), Modifier.padding(top = 8.dp)) }
-        itemsIndexed(sections, key = { _, s -> s.first }) { i, (name, items) ->
-            Column(Modifier.appear(name, 60 * i.coerceAtMost(6))) {
-                Text(name, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 10.dp))
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = CardGap) {
-                    items(items) { t -> HomeCard(vm, t) }
+        itemsIndexed(blocks, key = { i, _ -> i }) { i, b ->
+            when (b) {
+                is HomeBlock.Header -> Text(tr(b.name), fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.appear(b.name, 60 * i.coerceAtMost(6)).padding(start = 16.dp, top = 14.dp, bottom = 10.dp))
+                is HomeBlock.Shelf -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = CardGap) {
+                    items(b.items) { t -> HomeCard(vm, t) }
                 }
+                // The mix: one song per row, so the page grows downward as it goes on.
+                // (The shelf's name is kept in `album`: not shown as the song's album.)
+                is HomeBlock.Song -> SongRow(vm, b.track.copy(album = ""), current == b.track.videoId, { vm.playRadio(b.track) })
             }
         }
+        if (vm.loadingMore) item { MoreSpinner() }
     }
     }
+}
+
+/** The home page as rows: a title per shelf, the mix song by song, other shelves sideways. */
+private sealed interface HomeBlock {
+    data class Header(val name: String) : HomeBlock
+    data class Shelf(val items: List<Track>) : HomeBlock
+    data class Song(val track: Track) : HomeBlock
+}
+
+private fun homeBlocks(home: List<Track>): List<HomeBlock> {
+    val out = mutableListOf<HomeBlock>()
+    var i = 0
+    while (i < home.size) {
+        val name = home[i].album
+        var end = i
+        while (end < home.size && home[end].album == name) end++
+        val run = home.subList(i, end)
+        out += HomeBlock.Header(name)
+        if (name == com.rymplayer.data.FeedMemory.FOR_YOU || name == com.rymplayer.data.FeedMemory.MORE_FOR_YOU) run.mapTo(out) { HomeBlock.Song(it) }
+        else out += HomeBlock.Shelf(run)
+        i = end
+    }
+    return out
+}
+
+/** Calls [load] when the list is scrolled to within five rows of its end. */
+@Composable
+private fun NearTheEnd(state: androidx.compose.foundation.lazy.LazyListState, load: () -> Unit) {
+    LaunchedEffect(state) {
+        androidx.compose.runtime.snapshotFlow {
+            val info = state.layoutInfo
+            (info.visibleItemsInfo.lastOrNull()?.index ?: 0) to info.totalItemsCount
+        }.collect { (last, total) -> if (total > 0 && last >= total - 5) load() }
+    }
+}
+
+@Composable
+private fun MoreSpinner() {
+    Box(Modifier.fillMaxWidth().padding(16.dp), Alignment.Center) { CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.5.dp) }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -231,7 +277,9 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
     val tracks = vm.pages[page] ?: return Loading()
     val current = vm.player.current?.videoId
     val songs = tracks.filter { it.link == null }
-    LazyColumn(contentPadding = pagePadding) {
+    val state = androidx.compose.foundation.lazy.rememberLazyListState()
+    NearTheEnd(state) { vm.loadMore(page) }
+    LazyColumn(state = state, contentPadding = pagePadding) {
         item {
             Column(Modifier.fillMaxWidth().padding(16.dp).appear(page), horizontalAlignment = Alignment.CenterHorizontally) {
                 Cover(tracks.firstOrNull()?.thumb, 200.dp, 480, 12.dp)
@@ -266,6 +314,7 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
             }
             SongRow(vm, t, current == t.videoId && t.videoId.isNotEmpty(), onClick)
         }
+        if (vm.loadingMore) item { MoreSpinner() }
     }
 }
 

@@ -1,87 +1,246 @@
-//! A home feed that changes on every refresh. YouTube Music sends much the same page each time, so:
-//! - items seen on three different days (or so) without being opened rest for two days, and
-//!   never-shown ones come first; opening the app many times in a row doesn't count as seeing
-//!   them again (one showing per six hours);
-//! - when too much rests, the items seen longest ago come back, so the page never runs thin;
-//! - a "New for you" shelf on top comes from the radio of a few songs the user played lately or
-//!   liked (different songs each refresh), leaving out songs they already know or saw lately, the
-//!   same song under another upload, and more than two songs by one artist.
+//! The "For you" home page:
+//! - "Recently played" on top: the songs played on this computer, newest first;
+//! - "For you": a mix of three pools fetched at once, taken in turns:
+//!   fresh songs (the radios of the last few songs played), new songs (radios and home-page songs
+//!   the user has never played or liked), and familiar ones (liked and most played, about a third);
+//!   no repeats, no re-uploads, at most three songs by one artist;
+//! - then YouTube Music's own shelves (playlists, albums, mixes), where items seen on three
+//!   different days without being opened rest for two days (one showing per six hours), and the
+//!   page keeps at least 40 of them;
+//! - scrolled to the bottom, it goes on ([`more`]): another mix from new seeds, and YouTube's
+//!   shelves further down, never a song already on the page.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::api::{Api, LIKED_ID, Track};
+use crate::api::{Api, LIKED_ID, More, Paged, Token, Track};
 
-pub const NEW_FOR_YOU: &str = "New for you";
+pub const RECENTLY_PLAYED: &str = "Recently played";
+pub const FOR_YOU: &str = "For you";
+pub const MORE_FOR_YOU: &str = "More for you";
 const TIRED_AFTER: u32 = 3;
 const REST_SECS: u64 = 2 * 24 * 60 * 60;
 /// Showings closer together than this count once.
 const SHOW_GAP_SECS: u64 = 6 * 60 * 60;
 /// The page keeps at least this many items (rested ones come back, longest-unseen first).
 const AT_LEAST: usize = 40;
-/// Songs by one artist in "New for you", at most.
-const PER_ARTIST: usize = 2;
+/// Songs by one artist in a mix, at most.
+const PER_ARTIST: usize = 3;
 /// Forgotten after this long, so the file stays small.
 const FORGET_SECS: u64 = 30 * 24 * 60 * 60;
-const SEEDS: usize = 5;
-const PICKS: usize = 30;
+/// Songs in the "Recently played" row, in the first mix, and in each later one.
+const RECENT_ROW: usize = 20;
+const FIRST_MIX: usize = 40;
+const NEXT_MIX: usize = 30;
 
-/// A fresh home feed, and the liked songs fetched on the way (for the hearts).
+/// A fresh home feed, the liked songs fetched on the way (for the hearts), and how it goes on.
 pub struct Refreshed {
     pub home: Vec<Track>,
     pub liked: Option<Vec<Track>>,
+    pub more: Option<More>,
 }
 
-/// Home feed, liked songs and history at once, then the radios for "New for you".
+/// Where the feed goes on from: YouTube's next home page, the seeds used so far, every song on
+/// the page (never shown twice), and the user's liked songs and history to draw from.
+#[derive(Debug, Clone)]
+pub struct Cursor {
+    home: Option<Token>,
+    used: Vec<String>,
+    shown: HashSet<String>,
+    liked: Arc<Vec<Track>>,
+    history: Arc<Vec<Track>>,
+}
+
+/// Recently played, the "For you" mix, then YouTube's shelves; and the cursor to go on.
 pub async fn refresh(api: Api) -> Result<Refreshed> {
     let user = api.logged_in();
+    let recent = crate::recent::tracks();
     let (home, liked, history) = tokio::join!(
-        api.clone().home(),
+        api.clone().home_pages(3),
         async { if user { api.clone().playlist_tracks(LIKED_ID.into()).await.ok() } else { None } },
         async { if user { api.clone().history().await.ok() } else { None } },
     );
     let home = home?;
-    let mut memory = Memory::load();
-    let now = now();
-    let arranged = memory.arrange(home, now);
-
-    // Seeds: the newest liked songs and history first, then the feed's own songs (guests).
     let liked_list = liked.clone().unwrap_or_default();
     let history = history.unwrap_or_default();
-    let pool: Vec<&Track> = history
-        .iter()
-        .take(30)
-        .chain(liked_list.iter().take(60))
-        .chain(arranged.iter().filter(|t| t.link.is_none()))
-        .collect();
-    let seeds = memory.pick_seeds(&pool, SEEDS, now);
-    let mut radios = tokio::task::JoinSet::new();
-    for seed in &seeds {
-        radios.spawn(api.clone().radio(seed.clone()));
+    let mut memory = Memory::load();
+    let now = now();
+    let arranged = memory.arrange(home.tracks, now);
+
+    // Fresh: the radios of the last songs played (here, or on YouTube Music); new: the radios
+    // of a couple of liked or played songs picked at random.
+    let mut fresh_seeds: Vec<String> = Vec::new();
+    for t in recent.iter().chain(history.iter()) {
+        if crate::is_youtube(&t.video_id) && !fresh_seeds.contains(&t.video_id) {
+            fresh_seeds.push(t.video_id.clone());
+        }
+        if fresh_seeds.len() == 4 {
+            break;
+        }
+    }
+    let pool: Vec<&Track> = liked_list.iter().take(80).chain(history.iter().take(40)).filter(|t| !fresh_seeds.contains(&t.video_id)).collect();
+    let new_seeds = memory.pick_seeds(&pool, 2, now);
+    let (fresh_radios, new_radios) = tokio::join!(radios(&api, &fresh_seeds), radios(&api, &new_seeds));
+
+    let known: HashSet<String> = liked_list.iter().chain(history.iter()).chain(recent.iter()).map(|t| t.video_id.clone()).collect();
+    let fresh = turns(fresh_radios);
+    let mut new: Vec<Track> = turns(new_radios);
+    new.extend(arranged.iter().filter(|t| t.link.is_none()).cloned());
+    new.retain(|t| !known.contains(&t.video_id));
+    let familiar = familiar(&liked_list, &mut memory);
+
+    let recent_row: Vec<Track> = recent.into_iter().take(RECENT_ROW).map(|t| Track { album: RECENTLY_PLAYED.into(), ..t }).collect();
+    let mut skip: HashSet<String> = recent_row.iter().map(|t| t.video_id.clone()).collect();
+    skip.extend(fresh_seeds.iter().cloned());
+    let for_you = mix(fresh, new, familiar, &skip, FIRST_MIX, FOR_YOU);
+    for t in &for_you {
+        memory.seen(&t.video_id, now);
+    }
+    memory.save();
+
+    let in_mix: HashSet<&str> = for_you.iter().map(|t| t.video_id.as_str()).collect();
+    let shelves: Vec<Track> = arranged.into_iter().filter(|t| t.link.is_some() || !in_mix.contains(t.video_id.as_str())).collect();
+    let mut out = recent_row;
+    out.extend(for_you);
+    out.extend(shelves);
+    let cursor = Cursor {
+        home: match home.more {
+            Some(More::Home(t)) => Some(t),
+            _ => None,
+        },
+        used: fresh_seeds.into_iter().chain(new_seeds).collect(),
+        shown: out.iter().map(key).collect(),
+        liked: Arc::new(liked_list),
+        history: Arc::new(history),
+    };
+    Ok(Refreshed { home: out, liked, more: Some(More::Feed(Box::new(cursor))) })
+}
+
+/// The next part of the feed: a mix from three new seeds (one of the songs played lately, two at
+/// random), and YouTube's home page further down; nothing already on the page.
+pub async fn more(api: Api, mut c: Cursor) -> Result<Paged> {
+    let mut memory = Memory::load();
+    let now = now();
+    let recent = crate::recent::tracks();
+    let unused = |t: &&Track| crate::is_youtube(&t.video_id) && !c.used.contains(&t.video_id);
+    let mut seeds: Vec<String> = recent.iter().filter(unused).take(1).map(|t| t.video_id.clone()).collect();
+    let pool: Vec<&Track> = recent.iter().chain(c.history.iter()).chain(c.liked.iter()).filter(unused).filter(|t| !seeds.contains(&t.video_id)).collect();
+    for _ in 0..2 {
+        if pool.is_empty() {
+            break;
+        }
+        let t = pool[memory.next(pool.len().min(40))];
+        if !seeds.contains(&t.video_id) {
+            seeds.push(t.video_id.clone());
+        }
+    }
+    let next_home = c.home.take();
+    let (lists, page) = tokio::join!(radios(&api, &seeds), async {
+        match next_home {
+            Some(token) => api.clone().home_after(token).await.ok(),
+            None => None,
+        }
+    });
+    let known: HashSet<String> = c.liked.iter().chain(c.history.iter()).chain(recent.iter()).map(|t| t.video_id.clone()).collect();
+    let fresh = turns(lists);
+    let new: Vec<Track> = fresh.iter().filter(|t| !known.contains(&t.video_id)).cloned().collect();
+    let familiar = familiar(&c.liked, &mut memory);
+    let mut out = mix(fresh, new, familiar, &c.shown, NEXT_MIX, MORE_FOR_YOU);
+    for t in &out {
+        memory.seen(&t.video_id, now);
+    }
+    memory.save();
+    if let Some(page) = page {
+        c.home = match page.more {
+            Some(More::Home(t)) => Some(t),
+            _ => None,
+        };
+        let mixed: HashSet<String> = out.iter().map(key).collect();
+        out.extend(page.tracks.into_iter().filter(|t| !c.shown.contains(&key(t)) && !mixed.contains(&key(t))));
+    }
+    c.used.extend(seeds);
+    c.shown.extend(out.iter().map(key));
+    // Nothing new and nowhere left to look: that was all.
+    let more = (!out.is_empty() || c.home.is_some()).then(|| More::Feed(Box::new(c)));
+    Ok(Paged { tracks: out, more })
+}
+
+/// Each seed's radio (the ones that answered).
+async fn radios(api: &Api, seeds: &[String]) -> Vec<Vec<Track>> {
+    let mut jobs = tokio::task::JoinSet::new();
+    for seed in seeds {
+        jobs.spawn(api.clone().radio(seed.clone()));
     }
     let mut lists = Vec::new();
-    while let Some(r) = radios.join_next().await {
+    while let Some(r) = jobs.join_next().await {
         if let Ok(Ok(list)) = r {
             lists.push(list);
         }
     }
-    let known: HashSet<&str> = liked_list
-        .iter()
-        .chain(history.iter())
-        .chain(arranged.iter())
-        .map(|t| t.video_id.as_str())
-        .chain(seeds.iter().map(String::as_str))
-        .collect();
-    let picks = memory.pick_new(lists, &known, now);
-    memory.save();
+    lists
+}
 
-    let mut out = picks;
-    out.extend(arranged);
-    Ok(Refreshed { home: out, liked })
+/// The lists taken in turns (first of each, then second of each...).
+fn turns(lists: Vec<Vec<Track>>) -> Vec<Track> {
+    let mut iters: Vec<_> = lists.into_iter().map(Vec::into_iter).collect();
+    let mut out = Vec::new();
+    while !iters.is_empty() {
+        iters.retain_mut(|it| match it.next() {
+            Some(t) => {
+                out.push(t);
+                true
+            }
+            None => false,
+        });
+    }
+    out
+}
+
+/// Liked songs and the most played ones, in a shuffled order.
+fn familiar(liked: &[Track], memory: &mut Memory) -> Vec<Track> {
+    let mut pool: Vec<Track> = crate::recent::favourites(40);
+    pool.extend(liked.iter().take(150).cloned());
+    for i in (1..pool.len()).rev() {
+        let j = memory.next(i + 1);
+        pool.swap(i, j);
+    }
+    pool
+}
+
+/// The three pools taken in turns, about 35% fresh, 30% new and 35% familiar (a pool that runs
+/// out leaves its turns to the others): no song in `skip`, no repeats or re-uploads, at most three
+/// by one artist. Each song gets `section` as its shelf.
+fn mix(fresh: Vec<Track>, new: Vec<Track>, familiar: Vec<Track>, skip: &HashSet<String>, n: usize, section: &str) -> Vec<Track> {
+    let mut pools = [fresh.into_iter(), new.into_iter(), familiar.into_iter()];
+    let weights = [35usize, 30, 35];
+    let mut taken = [0usize; 3];
+    let mut out: Vec<Track> = Vec::new();
+    let mut ids: HashSet<String> = HashSet::new();
+    let mut songs: HashSet<String> = HashSet::new();
+    let mut per_artist: HashMap<String, usize> = HashMap::new();
+    let mut open = [true; 3];
+    while out.len() < n && open.iter().any(|o| *o) {
+        // The open pool furthest behind its share goes next.
+        let Some(p) = (0..3).filter(|&p| open[p]).min_by_key(|&p| (taken[p] * 100) / weights[p]) else { break };
+        let Some(t) = pools[p].next() else {
+            open[p] = false;
+            continue;
+        };
+        let artist = crate::radio::first_artist(&t.artist);
+        let crowded = !artist.is_empty() && per_artist.get(&artist).is_some_and(|c| *c >= PER_ARTIST);
+        if t.link.is_some() || skip.contains(&t.video_id) || crowded || !ids.insert(t.video_id.clone()) || !songs.insert(crate::radio::same_song_key(&t)) {
+            continue;
+        }
+        *per_artist.entry(artist).or_default() += 1;
+        taken[p] += 1;
+        out.push(Track { album: section.into(), ..t });
+    }
+    out
 }
 
 /// Opened or played from the feed: never rested.
@@ -226,45 +385,11 @@ impl Memory {
         picked
     }
 
-    /// Songs from the radios, taken in turns, that the user doesn't know and wasn't shown lately.
-    fn pick_new(&mut self, lists: Vec<Vec<Track>>, known: &HashSet<&str>, now: u64) -> Vec<Track> {
-        let mut lists: Vec<std::vec::IntoIter<Track>> = lists.into_iter().map(Vec::into_iter).collect();
-        let mut out: Vec<Track> = Vec::new();
-        let mut taken: HashSet<String> = HashSet::new();
-        let mut songs: HashSet<String> = HashSet::new();
-        let mut per_artist: HashMap<String, usize> = HashMap::new();
-        while out.len() < PICKS && !lists.is_empty() {
-            let mut i = 0;
-            while i < lists.len() && out.len() < PICKS {
-                match lists[i].next() {
-                    Some(mut t) => {
-                        let recent = self.items.get(&t.video_id).is_some_and(|s| s.shown > 0 && now.saturating_sub(s.last) < REST_SECS);
-                        let artist = crate::radio::first_artist(&t.artist);
-                        let crowded = !artist.is_empty() && per_artist.get(&artist).is_some_and(|n| *n >= PER_ARTIST);
-                        if !known.contains(t.video_id.as_str())
-                            && !recent
-                            && !crowded
-                            && taken.insert(t.video_id.clone())
-                            && songs.insert(crate::radio::same_song_key(&t))
-                        {
-                            *per_artist.entry(artist).or_default() += 1;
-                            t.album = NEW_FOR_YOU.into();
-                            out.push(t);
-                        }
-                        i += 1;
-                    }
-                    None => {
-                        lists.remove(i);
-                    }
-                }
-            }
-        }
-        for t in &out {
-            let s = self.items.entry(t.video_id.clone()).or_default();
-            s.shown += 1;
-            s.last = now;
-        }
-        out
+    /// A song put in a mix: it waits a while before it's picked again.
+    fn seen(&mut self, id: &str, now: u64) {
+        let s = self.items.entry(id.to_string()).or_default();
+        s.shown += 1;
+        s.last = now;
     }
 }
 
@@ -314,13 +439,21 @@ mod tests {
     }
 
     #[test]
-    fn new_picks_hold_two_songs_per_artist_and_no_reuploads() {
-        let mut m = memory();
-        let mut radio: Vec<Track> = (0..6).map(|i| Track { artist: "Band".into(), ..song(&format!("x{i}"), "") }).collect();
-        radio.push(Track { title: "x0 (Official Video)".into(), artist: "Other".into(), ..song("x0v", "") });
-        radio.push(Track { title: "x0".into(), artist: "Band".into(), ..song("dup", "") });
-        let got = m.pick_new(vec![radio], &HashSet::new(), 100);
-        assert_eq!(got.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(), ["x0", "x1", "x0v"]);
+    fn mix_takes_the_pools_in_turns_without_repeats() {
+        let pool = |p: &str, n: usize| -> Vec<Track> { (0..n).map(|i| Track { artist: format!("{p}{i}"), ..song(&format!("{p}{i}"), "") }).collect() };
+        let skip: HashSet<String> = ["f0".to_string()].into();
+        let got = mix(pool("f", 10), pool("n", 10), pool("a", 10), &skip, 20, FOR_YOU);
+        assert_eq!(got.len(), 20);
+        assert!(got.iter().all(|t| t.album == FOR_YOU && t.video_id != "f0"));
+        let count = |p: char| got.iter().filter(|t| t.video_id.starts_with(p)).count();
+        assert!((6..=8).contains(&count('f')) && (5..=7).contains(&count('n')) && (6..=8).contains(&count('a')), "{got:?}");
+        // The first few already mix all three.
+        assert!(['f', 'n', 'a'].iter().all(|p| got.iter().take(3).any(|t| t.video_id.starts_with(*p))));
+        // A pool that runs out leaves its turns to the others; one artist at most three times.
+        let same: Vec<Track> = (0..10).map(|i| Track { artist: "Band".into(), ..song(&format!("b{i}"), "") }).collect();
+        let got = mix(same, Vec::new(), pool("a", 10), &HashSet::new(), 10, FOR_YOU);
+        assert_eq!(got.iter().filter(|t| t.artist == "Band").count(), 3);
+        assert_eq!(got.len(), 10);
     }
 
     #[test]
@@ -336,20 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn new_picks_skip_known_songs_and_change_each_time() {
-        let mut m = memory();
-        let radio: Vec<Track> = (0..80).map(|i| song(&format!("r{i}"), "")).collect();
-        let known: HashSet<&str> = ["r0", "r1", "r2"].into();
-        let first = m.pick_new(vec![radio.clone()], &known, 100);
-        assert_eq!(first.len(), PICKS);
-        assert!(first.iter().all(|t| !known.contains(t.video_id.as_str()) && t.album == NEW_FOR_YOU));
-        // The same radio again: none of the songs shown a moment ago.
-        let second = m.pick_new(vec![radio], &known, 200);
-        assert_eq!(second.len(), PICKS);
-        assert!(second.iter().all(|t| !first.iter().any(|f| f.video_id == t.video_id)));
-    }
-
-    #[test]
     fn seeds_differ_between_refreshes() {
         let mut m = memory();
         let songs: Vec<Track> = (0..9).map(|i| song(&format!("s{i}"), "")).collect();
@@ -362,4 +481,36 @@ mod tests {
         // Pool used up: starts over instead of giving nothing.
         assert_eq!(m.pick_seeds(&pool, 3, 0).len(), 3);
     }
+
+    /// The real feed with the saved sign-in: sections and counts, then two more parts; and a
+    /// search with its next page. Prints counts only.
+    #[tokio::test]
+    #[ignore]
+    async fn live_feed_and_more() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let api = Api::with_cookie(cookie).await.unwrap();
+        let r = refresh(api.clone()).await.unwrap();
+        let mut sections: Vec<(String, usize)> = Vec::new();
+        for t in &r.home {
+            match sections.iter_mut().find(|(n, _)| *n == t.album) {
+                Some((_, c)) => *c += 1,
+                None => sections.push((t.album.clone(), 1)),
+            }
+        }
+        println!("first: {} items: {:?}", r.home.len(), sections.iter().take(6).collect::<Vec<_>>());
+        let mut seen: HashSet<String> = r.home.iter().map(key).collect();
+        let mut more = r.more;
+        for round in 1..=2 {
+            let Some(m) = more.take() else { break };
+            let p = api.clone().more(m).await.unwrap();
+            let repeats = p.tracks.iter().filter(|t| !seen.insert(key(t))).count();
+            println!("more {round}: {} items, {repeats} repeats, goes on: {}", p.tracks.len(), p.more.is_some());
+            more = p.more;
+        }
+        let s = api.clone().search_paged("tame impala".into()).await.unwrap();
+        let first = s.tracks.len();
+        let next = api.more(s.more.expect("search goes on")).await.unwrap();
+        println!("search: {first} then {} more, goes on: {}", next.tracks.len(), next.more.is_some());
+    }
 }
+

@@ -141,6 +141,11 @@ window, .rym { background: @bg@; color: @text@; }
 /* No shadow around the window: on Windows its room is drawn black, a dark frame around the app. */
 window.csd, window.csd:backdrop, window.solid-csd { box-shadow: none; margin: 0; border-radius: 0; outline: none; }
 .avatar { border-radius: 999px; }
+button.src { background: @input@; color: @dim@; border: none; box-shadow: none; border-radius: 14px; padding: 2px 12px; min-height: 0; font-size: 12px; font-weight: 700; }
+button.src.on { background: @text@; color: @bg@; }
+button.src:disabled { opacity: 0.35; }
+button.recent { background: transparent; border: none; box-shadow: none; border-radius: 10px; padding: 6px; color: @text@; }
+button.recent:hover { background: @input@; }
 menubutton.account > button { background: transparent; border: none; box-shadow: none; border-radius: 999px; padding: 3px; min-height: 0; min-width: 0; }
 headerbar { background: @bg@; color: @text@; border: none; box-shadow: none; min-height: 46px; }
 headerbar button { color: @text@; }
@@ -265,6 +270,10 @@ enum Ev {
     Home(anyhow::Result<feed::Refreshed>),
     /// A page's songs; the number is the page it was asked for (older answers are dropped).
     Tracks(u64, anyhow::Result<Vec<Track>>),
+    /// A list's first part and where it goes on.
+    Paged(u64, anyhow::Result<rymplayer::api::Paged>),
+    /// The next part of the open page.
+    More(u64, anyhow::Result<rymplayer::api::Paged>),
     Playlists(anyhow::Result<Vec<Playlist>>),
     Liked(anyhow::Result<Vec<Track>>),
     /// A cover's pixels (width, height, RGBA), decoded off the window's thread.
@@ -313,8 +322,8 @@ struct Widgets {
     /// The side panel: lyrics or the queue ("Up next").
     side: gtk::Stack,
     queue_box: gtk::Box,
-    /// The lyrics' source switcher.
-    sources: gtk::MenuButton,
+    /// The lyrics' source pills.
+    pills: gtk::Box,
     bar_cover: gtk::Picture,
     bar_title: Label,
     bar_artist: Label,
@@ -363,6 +372,17 @@ struct Ui {
     ended_for: u64,
     /// Every source's lyrics for a song, once looked up (the source switcher).
     alt_lyrics: Option<(String, Vec<Lyrics>)>,
+    /// A source pill pressed before the sources were in: shown once they are.
+    wanted_source: Option<&'static str>,
+    /// The song whose sources are being looked up.
+    sources_for: Option<String>,
+    /// Where the open page goes on (the home feed, or a list: search results, a playlist).
+    home_more: Option<rymplayer::api::More>,
+    list_more: Option<rymplayer::api::More>,
+    loading_more: bool,
+    /// Where the next part of the open page goes, and the spinner under it.
+    more_box: Option<glib::WeakRef<gtk::Box>>,
+    more_spinner: Option<glib::WeakRef<gtk::Spinner>>,
     /// A queue row was held for 2 s: it's lifted and can be dragged.
     armed: Option<usize>,
     held: bool,
@@ -752,22 +772,28 @@ fn build(app: &Application) {
     queue_scroll.set_vexpand(true);
     let side = gtk::Stack::new();
     side.set_transition_type(gtk::StackTransitionType::Crossfade);
-    side.add_titled(&lyrics_scroll, Some("lyrics"), tr("Lyrics"));
+    // The lyrics page: one pill per source over the lines (LRCLIB | NetEase | KuGou | Genius | YouTube Music).
+    let pills = gtk::Box::new(Orientation::Horizontal, 6);
+    pills.set_margin_top(8);
+    pills.set_margin_bottom(4);
+    pills.set_margin_start(12);
+    pills.set_margin_end(12);
+    let pills_scroll = gtk::ScrolledWindow::new();
+    pills_scroll.set_vscrollbar_policy(gtk::PolicyType::Never);
+    pills_scroll.set_child(Some(&pills));
+    let lyrics_page = gtk::Box::new(Orientation::Vertical, 0);
+    lyrics_page.append(&pills_scroll);
+    lyrics_page.append(&lyrics_scroll);
+    side.add_titled(&lyrics_page, Some("lyrics"), tr("Lyrics"));
     side.add_titled(&queue_scroll, Some("queue"), tr("Up next"));
     let switcher = gtk::StackSwitcher::new();
     switcher.set_stack(Some(&side));
     switcher.set_hexpand(true);
-    let sources = gtk::MenuButton::new();
-    sources.set_icon_name("view-list-symbolic");
-    sources.set_tooltip_text(Some(tr("Lyrics sources")));
-    sources.add_css_class("icon");
-    sources.set_popover(Some(&gtk::Popover::new()));
     let side_head = gtk::Box::new(Orientation::Horizontal, 6);
     side_head.set_margin_top(10);
     side_head.set_margin_start(10);
     side_head.set_margin_end(10);
     side_head.append(&switcher);
-    side_head.append(&sources);
     let side_box = gtk::Box::new(Orientation::Vertical, 0);
     side_box.set_size_request(440, -1);
     side_box.append(&side_head);
@@ -900,7 +926,7 @@ fn build(app: &Application) {
             lyrics_scroll,
             side,
             queue_box,
-            sources: sources.clone(),
+            pills: pills.clone(),
             bar_cover,
             bar_title,
             bar_artist,
@@ -929,6 +955,13 @@ fn build(app: &Application) {
         played: HashSet::new(),
         ended_for: 0,
         alt_lyrics: None,
+        wanted_source: None,
+        sources_for: None,
+        home_more: None,
+        list_more: None,
+        loading_more: false,
+        more_box: None,
+        more_spinner: None,
         armed: None,
         held: false,
         request_id: 0,
@@ -1021,9 +1054,16 @@ fn build(app: &Application) {
         });
         window.add_controller(keys);
     }
+    fill_pills(&ui);
     {
+        // Near the bottom of a page that goes on, its next part loads.
         let ui2 = ui.clone();
-        sources.set_create_popup_func(move |_| fill_sources(&ui2));
+        ui.borrow().w.scroll.vadjustment().connect_value_changed(move |a| {
+            if a.value() + a.page_size() >= a.upper() - 700.0 {
+                let ui = ui2.clone();
+                glib::idle_add_local_once(move || load_more(&ui));
+            }
+        });
     }
     {
         // The bar's cover opens the lyrics (it never skips the song).
@@ -1282,7 +1322,7 @@ fn go(ui: &Shared, page: Page) {
             if let Some(api) = api_of(ui).filter(Api::logged_in) {
                 let id = ui.borrow().page_id;
                 ui.borrow_mut().tracks_loading = true;
-                post(ui, async move { Ev::Tracks(id, api.playlist_tracks(LIKED_ID.into()).await) });
+                post(ui, async move { Ev::Paged(id, api.playlist_paged(LIKED_ID.into()).await) });
             }
             let liked = ui.borrow().liked_tracks.clone();
             ui.borrow_mut().tracks = liked;
@@ -1299,6 +1339,105 @@ fn go(ui: &Shared, page: Page) {
         _ => {}
     }
     render(ui);
+}
+
+/// Opens a list page that goes on as it's scrolled down (search results, a playlist).
+fn open_paged(ui: &Shared, title: String, load: impl Future<Output = anyhow::Result<rymplayer::api::Paged>> + Send + 'static) {
+    {
+        let mut s = ui.borrow_mut();
+        s.from_search = false;
+        s.page = Page::Songs(title);
+        s.page_id += 1;
+        s.tracks.clear();
+        s.tracks_loading = true;
+        s.list_more = None;
+        let id = s.page_id;
+        spawn(&s, async move { Ev::Paged(id, load.await) });
+    }
+    render(ui);
+}
+
+/// The open page's next part, when it goes on and nothing is loading already.
+fn load_more(ui: &Shared) {
+    let Some(api) = api_of(ui) else { return };
+    let (more, id) = {
+        let Ok(mut s) = ui.try_borrow_mut() else { return };
+        if s.loading_more || s.tracks_loading || s.home_loading {
+            return;
+        }
+        let more = match s.page {
+            Page::Home => s.home_more.clone(),
+            Page::Songs(_) | Page::Liked => s.list_more.clone(),
+            _ => None,
+        };
+        let Some(more) = more else { return };
+        s.loading_more = true;
+        if let Some(spin) = s.more_spinner.as_ref().and_then(glib::WeakRef::upgrade) {
+            spin.set_visible(true);
+            spin.start();
+        }
+        (more, s.page_id)
+    };
+    post(ui, async move { Ev::More(id, api.more(more).await) });
+}
+
+/// The next part of the open page, put under what's there (nothing already on the page).
+fn add_more(ui: &Shared, part: rymplayer::api::Paged) {
+    let mut wants = Wants::new();
+    let (fresh, home, target) = {
+        let mut s = ui.borrow_mut();
+        let home = s.page == Page::Home;
+        let have: HashSet<String> = if home { s.home.iter().map(item_key).collect() } else { s.tracks.iter().map(|t| t.video_id.clone()).collect() };
+        let mut seen = have;
+        let fresh: Vec<Track> = part.tracks.into_iter().filter(|t| seen.insert(item_key(t))).collect();
+        if home {
+            s.home_more = part.more;
+            s.home.extend(fresh.iter().cloned());
+        } else {
+            s.list_more = part.more;
+            s.tracks.extend(fresh.iter().cloned());
+        }
+        (fresh, home, s.more_box.as_ref().and_then(glib::WeakRef::upgrade))
+    };
+    let Some(target) = target else { return };
+    if home {
+        for (name, items) in shelves(fresh.clone()) {
+            target.append(&label(shelf_name(&name), &["shelf"]));
+            let grid = home_grid();
+            for t in items {
+                grid.insert(&home_card(ui, &t, &mut wants), -1);
+            }
+            target.append(&grid);
+        }
+    } else {
+        let start = ui.borrow().tracks.len() - fresh.len();
+        let playing = now_playing(ui).map(|t| t.video_id);
+        for (i, t) in fresh.iter().enumerate() {
+            target.append(&song_row(ui, start + i, t, playing.as_deref(), &mut wants));
+        }
+    }
+    want_covers(ui, wants);
+    refresh_hearts(ui);
+    let ids: Vec<String> = fresh.iter().filter(|t| t.link.is_none()).map(|t| t.video_id.clone()).collect();
+    post(ui, async move {
+        stream::look_ahead(ids).await;
+        Ev::Done
+    });
+    // Still short of the bottom: the next part comes too.
+    let ui = ui.clone();
+    glib::idle_add_local_once(move || {
+        let a = ui.borrow().w.scroll.vadjustment();
+        if a.value() + a.page_size() >= a.upper() - 700.0 {
+            load_more(&ui);
+        }
+    });
+}
+
+fn item_key(t: &Track) -> String {
+    match &t.link {
+        Some(Link::Playlist(id) | Link::Album(id) | Link::Mix(id)) => id.clone(),
+        None => t.video_id.clone(),
+    }
 }
 
 /// Opens a list page and loads its songs.
@@ -1319,7 +1458,7 @@ fn open_songs(ui: &Shared, title: String, load: impl Future<Output = anyhow::Res
 fn open_link(ui: &Shared, t: &Track) {
     let Some(api) = api_of(ui) else { return };
     match t.link.clone() {
-        Some(Link::Playlist(id)) => open_songs(ui, t.title.clone(), api.playlist_tracks(id)),
+        Some(Link::Playlist(id)) => open_paged(ui, t.title.clone(), api.playlist_paged(id)),
         Some(Link::Album(id)) => open_songs(ui, t.title.clone(), api.album_tracks(id)),
         Some(Link::Mix(id)) => open_songs(ui, t.title.clone(), api.mix_tracks(id)),
         None => {}
@@ -1354,7 +1493,7 @@ fn search_songs(ui: &Shared, q: String) {
         open_songs(ui, "Spotify".into(), spotify::import(api, q));
         return;
     }
-    open_songs(ui, format!("{} \"{q}\"", tr("Results for")), api.search(q));
+    open_paged(ui, format!("{} \"{q}\"", tr("Results for")), api.search_paged(q));
     ui.borrow_mut().from_search = true;
 }
 
@@ -1417,6 +1556,10 @@ fn render_page(ui: &Shared) {
         }
         clear(&s.w.content);
         s.w.scroll.vadjustment().set_value(0.0);
+        drop(s);
+        let mut s = ui.borrow_mut();
+        s.more_box = None;
+        s.more_spinner = None;
         s.page.clone()
     };
     let body: gtk::Widget = match &page {
@@ -1474,29 +1617,101 @@ fn home_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
         page.append(&note(if loading { tr("Loading your feed…") } else { tr("Nothing here yet") }));
         return page.upcast();
     }
-    // Shelves in YouTube's order ("New for you" first), each a grid of cards.
-    let mut shelves: Vec<(String, Vec<Track>)> = Vec::new();
-    for t in home {
-        match shelves.iter_mut().find(|(name, _)| *name == t.album) {
-            Some((_, items)) => items.push(t),
-            None => shelves.push((t.album.clone(), vec![t])),
+    // "Recently played" as a row, then the shelves ("For you" first), each a grid of cards.
+    for (name, items) in shelves(home) {
+        page.append(&label(shelf_name(&name), &["shelf"]));
+        if name == feed::RECENTLY_PLAYED {
+            page.append(&recent_row(ui, &items, wants));
+            continue;
         }
-    }
-    for (name, items) in shelves {
-        page.append(&label(&name, &["shelf"]));
-        let grid = gtk::FlowBox::new();
-        grid.set_selection_mode(gtk::SelectionMode::None);
-        grid.set_homogeneous(true);
-        grid.set_min_children_per_line(2);
-        grid.set_max_children_per_line(5);
-        grid.set_column_spacing(6);
-        grid.set_row_spacing(6);
+        let grid = home_grid();
         for t in items {
             grid.insert(&home_card(ui, &t, wants), -1);
         }
         page.append(&grid);
     }
+    more_tail(ui, &page, None);
     page.upcast()
+}
+
+/// Items grouped by their shelf, in order.
+fn shelves(items: Vec<Track>) -> Vec<(String, Vec<Track>)> {
+    let mut out: Vec<(String, Vec<Track>)> = Vec::new();
+    for t in items {
+        match out.iter_mut().find(|(name, _)| *name == t.album) {
+            Some((_, items)) => items.push(t),
+            None => out.push((t.album.clone(), vec![t])),
+        }
+    }
+    out
+}
+
+/// The feed's own shelves in the app's language; YouTube's as they come.
+fn shelf_name(name: &str) -> &str {
+    match name {
+        feed::RECENTLY_PLAYED => tr("Recently played"),
+        feed::FOR_YOU => tr("For you"),
+        feed::MORE_FOR_YOU => tr("More for you"),
+        other => other,
+    }
+}
+
+fn home_grid() -> gtk::FlowBox {
+    let grid = gtk::FlowBox::new();
+    grid.set_selection_mode(gtk::SelectionMode::None);
+    grid.set_homogeneous(true);
+    grid.set_min_children_per_line(2);
+    grid.set_max_children_per_line(5);
+    grid.set_column_spacing(6);
+    grid.set_row_spacing(6);
+    grid
+}
+
+/// "Recently played": one row of covers that scrolls sideways; a click plays the song again.
+fn recent_row(ui: &Shared, items: &[Track], wants: &mut Wants) -> gtk::Widget {
+    let row = gtk::Box::new(Orientation::Horizontal, 4);
+    for t in items {
+        let b = Button::new();
+        b.add_css_class("recent");
+        let col = gtk::Box::new(Orientation::Vertical, 4);
+        col.append(&cover(&ui.borrow(), t.thumb.as_ref(), CARD_PX, 116, "cover", wants));
+        let title = label(&t.title, &["title", "small"]);
+        title.set_max_width_chars(14);
+        col.append(&title);
+        let artist = label(&t.artist, &["dim", "small"]);
+        artist.set_max_width_chars(14);
+        col.append(&artist);
+        b.set_child(Some(&col));
+        let (ui2, track) = (ui.clone(), t.clone());
+        b.connect_clicked(move |_| play_with_radio(&ui2, track.clone()));
+        song_menu_on(ui, &b, t.clone());
+        row.append(&b);
+    }
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_vscrollbar_policy(gtk::PolicyType::Never);
+    scroll.set_child(Some(&row));
+    scroll.set_min_content_height(196);
+    scroll.upcast()
+}
+
+/// Under a page that goes on: where its next parts go (`list`, or a new box), and a spinner.
+fn more_tail(ui: &Shared, page: &gtk::Box, list: Option<&gtk::Box>) {
+    let target = match list {
+        Some(l) => l.clone(),
+        None => {
+            let b = gtk::Box::new(Orientation::Vertical, 14);
+            page.append(&b);
+            b
+        }
+    };
+    let spin = gtk::Spinner::new();
+    spin.set_visible(false);
+    spin.set_size_request(28, 28);
+    spin.set_margin_top(10);
+    page.append(&spin);
+    let mut s = ui.borrow_mut();
+    s.more_box = Some(target.downgrade());
+    s.more_spinner = Some(spin.downgrade());
 }
 
 /// A home card: cover, title, and what it is. Songs play (with radio after), the rest open.
@@ -1628,13 +1843,14 @@ fn list_page(ui: &Shared, title: &str, liked_page: bool, wants: &mut Wants) -> g
     let list = gtk::Box::new(Orientation::Vertical, 2);
     let playing = now_playing(ui).map(|t| t.video_id);
     for (i, t) in tracks.iter().enumerate() {
-        list.append(&song_row(ui, i, t, songs.clone(), playing.as_deref(), wants));
+        list.append(&song_row(ui, i, t, playing.as_deref(), wants));
     }
     page.append(&list);
+    more_tail(ui, &page, Some(&list));
     page.upcast()
 }
 
-fn song_row(ui: &Shared, i: usize, t: &Track, songs: Rc<Vec<Track>>, playing: Option<&str>, wants: &mut Wants) -> gtk::Widget {
+fn song_row(ui: &Shared, i: usize, t: &Track, playing: Option<&str>, wants: &mut Wants) -> gtk::Widget {
     let b = Button::new();
     b.add_css_class("flat-row");
     let row = gtk::Box::new(Orientation::Horizontal, 14);
@@ -1681,8 +1897,12 @@ fn song_row(ui: &Shared, i: usize, t: &Track, songs: Rc<Vec<Track>>, playing: Op
             } else if ui.borrow().from_search {
                 // A search result: the song, then a radio of songs like it.
                 play_with_radio(&ui, t.clone());
-            } else if let Some(at) = songs.iter().position(|s| s.video_id == t.video_id) {
-                play_list(&ui, &songs, at);
+            } else {
+                // The list as it is now (parts loaded since included).
+                let songs: Vec<Track> = ui.borrow().tracks.iter().filter(|s| s.link.is_none()).cloned().collect();
+                if let Some(at) = songs.iter().position(|s| s.video_id == t.video_id) {
+                    play_list(&ui, &songs, at);
+                }
             }
         });
     }
@@ -2574,50 +2794,79 @@ fn render_queue(ui: &Shared) {
     want_covers(ui, wants);
 }
 
-/// The lyrics' sources for the playing song: looked up when the switcher opens, then one tap
-/// shows another source's lyrics.
-fn fill_sources(ui: &Shared) {
-    let Some(t) = now_playing(ui) else { return };
-    let (pop, found, shown) = {
+/// The source pills: one per provider, the one shown lit, the ones that had nothing dimmed once
+/// every source was asked; LRCLIB, when it has several versions, says which one shows.
+fn fill_pills(ui: &Shared) {
+    use rymplayer::lyric_sources::{LRCLIB, PROVIDERS, provider};
+    let now = now_playing(ui);
+    let (pills, list, shown, looking) = {
         let s = ui.borrow();
-        let pop = s.w.sources.popover();
-        let found = s.alt_lyrics.as_ref().filter(|(id, _)| *id == t.video_id).map(|(_, l)| l.clone());
-        (pop, found, s.lyrics.clone())
+        let list = s.alt_lyrics.as_ref().filter(|(id, _)| now.as_ref().is_some_and(|t| t.video_id == *id)).map(|(_, l)| l.clone());
+        (s.w.pills.clone(), list, s.lyrics.clone(), s.sources_for.is_some())
     };
-    let Some(pop) = pop else { return };
-    let col = gtk::Box::new(Orientation::Vertical, 0);
-    match found {
-        None => {
-            col.append(&label(tr("Looking for lyrics..."), &["dim"]));
-            let api = api_of(ui);
-            let tr2 = t.clone();
-            let shown = shown.clone();
+    clear(&pills);
+    let active = shown.as_ref().map(provider);
+    for p in PROVIDERS {
+        let versions: Vec<&Lyrics> = list.iter().flatten().filter(|l| provider(l) == p).collect();
+        let mut text = p.to_string();
+        if p == LRCLIB && versions.len() > 1 && let Some(i) = shown.as_ref().and_then(|sh| versions.iter().position(|v| rymplayer::lyrics::same(v, sh))) {
+            text = format!("{p} {}/{}", i + 1, versions.len());
+        }
+        let b = Button::with_label(&text);
+        b.add_css_class("src");
+        if active == Some(p) {
+            b.add_css_class("on");
+        }
+        if let Some(first) = versions.first() {
+            b.set_tooltip_text(Some(if first.synced.is_empty() { tr("not synced") } else { tr("synced") }));
+        }
+        // Every source asked and this one had nothing.
+        b.set_sensitive(now.is_some() && (list.is_none() || !versions.is_empty()));
+        let ui = ui.clone();
+        b.connect_clicked(move |_| pick_source(&ui, p));
+        pills.append(&b);
+    }
+    if looking {
+        let spin = gtk::Spinner::new();
+        spin.start();
+        pills.append(&spin);
+    }
+}
+
+/// A source pill: that provider's lyrics (its next version when it already shows); the sources
+/// are looked up first when they aren't in yet.
+fn pick_source(ui: &Shared, p: &'static str) {
+    use rymplayer::lyric_sources::provider;
+    let Some(t) = now_playing(ui) else { return };
+    let list = ui.borrow().alt_lyrics.as_ref().filter(|(id, _)| *id == t.video_id).map(|(_, l)| l.clone());
+    let Some(list) = list else {
+        let ask = {
+            let mut s = ui.borrow_mut();
+            s.wanted_source = Some(p);
+            let ask = s.sources_for.as_deref() != Some(t.video_id.as_str());
+            s.sources_for = Some(t.video_id.clone());
+            ask
+        };
+        if ask {
+            let (api, shown) = (api_of(ui), ui.borrow().lyrics.clone());
             post(ui, async move {
-                let list = rymplayer::lyrics::sources(api, tr2.clone(), shown).await;
-                Ev::LyricsSources(tr2.video_id, list)
+                let list = rymplayer::lyrics::sources(api, t.clone(), shown).await;
+                Ev::LyricsSources(t.video_id, list)
             });
         }
-        Some(list) if list.is_empty() => col.append(&label(tr("No lyrics for this song"), &["dim"])),
-        Some(list) => {
-            for l in list {
-                let kind = if l.synced.is_empty() { tr("not synced") } else { tr("synced") };
-                let mark = if shown.as_ref().is_some_and(|s| rymplayer::lyrics::same(s, &l)) { "✓ " } else { "" };
-                let b = Button::with_label(&format!("{mark}{} · {kind}", l.source));
-                if let Some(lab) = b.child().and_downcast::<Label>() {
-                    lab.set_xalign(0.0);
-                }
-                let (ui, pop2, vid) = (ui.clone(), pop.clone(), t.video_id.clone());
-                b.connect_clicked(move |_| {
-                    pop2.popdown();
-                    ui.borrow().w.side.set_visible_child_name("lyrics");
-                    rymplayer::lyrics::choose(&vid, &l);
-                    show_lyrics(&ui, Some(l.clone()));
-                });
-                col.append(&b);
-            }
-        }
+        fill_pills(ui);
+        return;
+    };
+    let versions: Vec<Lyrics> = list.into_iter().filter(|l| provider(l) == p).collect();
+    if versions.is_empty() {
+        return;
     }
-    pop.set_child(Some(&col));
+    let shown = ui.borrow().lyrics.clone();
+    let at = shown.as_ref().and_then(|sh| versions.iter().position(|v| rymplayer::lyrics::same(v, sh)));
+    let pick = versions[at.map_or(0, |i| (i + 1) % versions.len())].clone();
+    ui.borrow().w.side.set_visible_child_name("lyrics");
+    rymplayer::lyrics::choose(&t.video_id, &pick);
+    show_lyrics(ui, Some(pick));
 }
 
 fn download(ui: &Shared, t: Track) {
@@ -2638,6 +2887,8 @@ fn play_at(ui: &Shared, i: usize) {
             show_side(&s.w.lyrics_panel, true);
         }
         s.played.insert(track.video_id.clone());
+        rymplayer::recent::played(&track);
+        s.wanted_source = None;
         // Another song than the one left off last time: that one's second no longer counts.
         if s.resume_at.as_ref().is_some_and(|(id, _)| *id != track.video_id) {
             s.resume_at = None;
@@ -2811,6 +3062,8 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     let Some(lyrics) = lyrics else {
         s.w.lyrics_box.append(&label(tr("No lyrics for this song"), &["lyrics-note"]));
         s.lyrics = None;
+        drop(s);
+        fill_pills(ui);
         return;
     };
     let lines: Vec<String> = if lyrics.synced.is_empty() {
@@ -2850,6 +3103,8 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     src.set_margin_top(18);
     s.w.lyrics_box.append(&src);
     s.lyrics = Some(lyrics);
+    drop(s);
+    fill_pills(ui);
 }
 
 /// Scrolls to `target` over a third of a second, easing out, in step with the screen's frames.
@@ -3112,7 +3367,10 @@ fn poll_events(ui: &Shared) {
                         }
                         page_cache::save_home(&fresh.home);
                         let ids: Vec<String> = fresh.home.iter().filter(|t| t.link.is_none()).map(|t| t.video_id.clone()).collect();
-                        ui.borrow_mut().home = fresh.home;
+                        let mut s = ui.borrow_mut();
+                        s.home = fresh.home;
+                        s.home_more = fresh.more;
+                        drop(s);
                         // The first songs' links are looked up now, so a click starts at once.
                         post(ui, async move {
                             stream::look_ahead(ids).await;
@@ -3123,6 +3381,32 @@ fn poll_events(ui: &Shared) {
                 }
                 if ui.borrow().page == Page::Home {
                     render(ui);
+                }
+            }
+            Ev::Paged(id, result) => {
+                if id != ui.borrow().page_id {
+                    continue;
+                }
+                let tracks = result.map(|p| {
+                    ui.borrow_mut().list_more = p.more;
+                    p.tracks
+                });
+                ui.borrow().tx.send(Ev::Tracks(id, tracks)).ok();
+            }
+            Ev::More(id, result) => {
+                let current = id == ui.borrow().page_id;
+                {
+                    let mut s = ui.borrow_mut();
+                    s.loading_more = false;
+                    if let Some(spin) = s.more_spinner.as_ref().and_then(glib::WeakRef::upgrade) {
+                        spin.stop();
+                        spin.set_visible(false);
+                    }
+                }
+                match result {
+                    Ok(part) if current => add_more(ui, part),
+                    Ok(_) => {}
+                    Err(e) => log(&format!("more: {e}")),
                 }
             }
             Ev::Tracks(id, result) => {
@@ -3246,13 +3530,17 @@ fn poll_events(ui: &Shared) {
                 }
             }
             Ev::LyricsSources(vid, list) => {
-                let open = {
+                let wanted = {
                     let mut s = ui.borrow_mut();
-                    s.alt_lyrics = Some((vid, list));
-                    s.w.sources.is_active()
+                    if s.sources_for.as_deref() == Some(vid.as_str()) {
+                        s.sources_for = None;
+                    }
+                    s.alt_lyrics = Some((vid.clone(), list));
+                    s.wanted_source.take()
                 };
-                if open {
-                    fill_sources(ui);
+                match wanted {
+                    Some(p) if now_playing(ui).is_some_and(|t| t.video_id == vid) => pick_source(ui, p),
+                    _ => fill_pills(ui),
                 }
             }
             Ev::Lyrics(vid, found) => {

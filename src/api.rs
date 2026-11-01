@@ -197,29 +197,86 @@ impl Api {
     /// (YouTube gives the next page's token in the older `nextContinuationData` or the newer
     /// `continuationCommand`; only following the older one stopped after the first page).
     pub async fn home(self) -> Result<Vec<Track>> {
+        Ok(self.home_pages(6).await?.tracks)
+    }
+
+    /// The first `pages` pages of the home feed, and where the next one starts.
+    pub async fn home_pages(self, pages: usize) -> Result<Paged> {
         let mut out = Vec::new();
         let mut page = self.raw_browse(body(&[("browseId", "FEmusic_home")]), None).await?;
-        for n in 0..6 {
-            for shelf in all(&page, "musicCarouselShelfRenderer") {
-                let section = text(shelf.pointer("/header/musicCarouselShelfBasicHeaderRenderer/title"));
-                for item in shelf.get("contents").and_then(Value::as_array).into_iter().flatten() {
-                    if let Some(t) = home_item(item, &section) {
-                        out.push(t);
-                    }
-                }
-            }
-            if n == 5 {
+        let mut more = None;
+        for n in 0..pages {
+            out.extend(home_shelves(&page));
+            more = next_token(&page);
+            if n + 1 == pages {
                 break;
             }
-            let newer = all(&page, "continuationCommand").into_iter().find_map(|c| c.get("token").and_then(Value::as_str)).map(String::from);
-            let older = all(&page, "nextContinuationData").into_iter().find_map(|c| c.get("continuation").and_then(Value::as_str)).map(String::from);
-            page = match (newer, older) {
-                (Some(token), _) => self.raw_browse(body(&[("browseId", "FEmusic_home"), ("continuation", &token)]), None).await?,
-                (None, Some(token)) => self.raw_browse(body(&[("browseId", "FEmusic_home")]), Some(token)).await?,
-                (None, None) => break,
-            };
+            match more.take() {
+                Some(token) => page = self.next_page("browse", &[("browseId", "FEmusic_home")], token).await?,
+                None => break,
+            }
         }
-        Ok(out)
+        Ok(Paged { tracks: out, more: more.map(More::Home) })
+    }
+
+    /// The page after `token` on `path` ("browse" or "search").
+    async fn next_page(&self, path: &'static str, base: &[(&str, &str)], token: Token) -> Result<Value> {
+        let (body, ctoken) = match token {
+            Token::Body(t) => {
+                let mut b = body(base);
+                b.insert("continuation".into(), Value::from(t));
+                (b, None)
+            }
+            Token::Link(t) => (body(base), Some(t)),
+        };
+        let query = RawBrowse { path, body, ctoken };
+        let raw = match self {
+            Api::Guest(y) => y.raw_json_query(query).await,
+            Api::User(y) => y.raw_json_query(query).await,
+        }
+        .map_err(err)?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+
+    /// Songs found for `query` (the first page), and where the next page starts.
+    pub async fn search_paged(self, query: String) -> Result<Paged> {
+        let first = RawBrowse { path: "search", body: body(&[("query", &query), ("params", SONGS_FILTER)]), ctoken: None };
+        let raw = match &self {
+            Api::Guest(y) => y.raw_json_query(first).await,
+            Api::User(y) => y.raw_json_query(first).await,
+        }
+        .map_err(err)?;
+        let page: Value = serde_json::from_str(&raw)?;
+        Ok(Paged { tracks: rows(&page), more: next_token(&page).map(|token| More::Search { query, token }) })
+    }
+
+    /// A playlist's first page of songs, and where the next page starts.
+    pub async fn playlist_paged(self, id: String) -> Result<Paged> {
+        let id = if id.starts_with("VL") { id } else { format!("VL{id}") };
+        let page = self.raw_browse(body(&[("browseId", &id)]), None).await?;
+        Ok(Paged { tracks: rows(&page), more: next_token(&page).map(More::Browse) })
+    }
+
+    /// YouTube Music's home page further down from `token`.
+    pub async fn home_after(self, token: Token) -> Result<Paged> {
+        let page = self.next_page("browse", &[("browseId", "FEmusic_home")], token).await?;
+        Ok(Paged { tracks: home_shelves(&page), more: next_token(&page).map(More::Home) })
+    }
+
+    /// The next part of a list that goes on (search results, a playlist, the home feed).
+    pub async fn more(self, more: More) -> Result<Paged> {
+        match more {
+            More::Search { query, token } => {
+                let page = self.next_page("search", &[("query", &query), ("params", SONGS_FILTER)], token).await?;
+                Ok(Paged { tracks: rows(&page), more: next_token(&page).map(|token| More::Search { query, token }) })
+            }
+            More::Browse(token) => {
+                let page = self.next_page("browse", &[], token).await?;
+                Ok(Paged { tracks: rows(&page), more: next_token(&page).map(More::Browse) })
+            }
+            More::Home(token) => self.home_after(token).await,
+            More::Feed(cursor) => crate::feed::more(self, *cursor).await,
+        }
     }
 
     pub async fn album_tracks(self, id: String) -> Result<Vec<Track>> {
@@ -637,6 +694,61 @@ impl PostQuery for RawBrowse {
     fn path(&self) -> &str {
         self.path
     }
+}
+
+/// The "Songs" filter of the search page.
+const SONGS_FILTER: &str = "EgWKAQIIAWoKEAkQBRAKEAMQBA==";
+
+/// Where the next page of a list starts: the newer token goes in the request's body, the older
+/// one in its link.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    Body(String),
+    Link(String),
+}
+
+/// A list that goes on, and how to get its next part.
+#[derive(Debug, Clone)]
+pub enum More {
+    Search { query: String, token: Token },
+    /// A playlist (or another browse page) further down.
+    Browse(Token),
+    /// YouTube Music's own home page further down.
+    Home(Token),
+    /// The mixed "For you" feed: more songs from new seeds, and the home page further down.
+    Feed(Box<crate::feed::Cursor>),
+}
+
+/// Part of a list, and where it goes on (none: that was all).
+#[derive(Debug, Clone, Default)]
+pub struct Paged {
+    pub tracks: Vec<Track>,
+    pub more: Option<More>,
+}
+
+fn next_token(page: &Value) -> Option<Token> {
+    let newer = all(page, "continuationCommand").into_iter().find_map(|c| c.get("token").and_then(Value::as_str));
+    let older = all(page, "nextContinuationData").into_iter().find_map(|c| c.get("continuation").and_then(Value::as_str));
+    newer.map(|t| Token::Body(t.into())).or_else(|| older.map(|t| Token::Link(t.into())))
+}
+
+/// The song rows on a page (search results, a playlist's songs).
+fn rows(page: &Value) -> Vec<Track> {
+    all(page, "musicResponsiveListItemRenderer").into_iter().filter_map(song_row).collect()
+}
+
+/// The home page's shelves: songs to play, playlists, albums and mixes to open.
+fn home_shelves(page: &Value) -> Vec<Track> {
+    let mut out = Vec::new();
+    for shelf in all(page, "musicCarouselShelfRenderer") {
+        let section = text(shelf.pointer("/header/musicCarouselShelfBasicHeaderRenderer/title"));
+        for item in shelf.get("contents").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(t) = home_item(item, &section) {
+                out.push(t);
+            }
+        }
+    }
+    out
 }
 
 /// A Google account as YouTube Music shows it.

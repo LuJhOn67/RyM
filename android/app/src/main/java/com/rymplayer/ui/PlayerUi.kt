@@ -39,6 +39,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -256,8 +258,10 @@ private fun LyricsView(vm: AppViewModel, tint: Color) {
     val sung = lerp(bg, Color.White, 0.72f)
     val next = lerp(bg, Color.Black, 0.55f)
     Box(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 6.dp).clip(RoundedCornerShape(16.dp)).background(bg)) {
-        LyricsLines(vm, sung, next)
-        LyricsSourceSwitch(vm, Modifier.align(Alignment.TopEnd).padding(10.dp))
+        Column(Modifier.fillMaxSize()) {
+            LyricsPills(vm, sung)
+            Box(Modifier.weight(1f).fillMaxWidth()) { LyricsLines(vm, sung, next) }
+        }
     }
 }
 
@@ -308,42 +312,39 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
     }
 }
 
-/** Where the lyrics come from; a tap lists every source to pick another (when the timing is off, say). */
+/**
+ * One pill per source (LRCLIB | NetEase | KuGou | Genius | YouTube Music), the one showing lit;
+ * a tap shows that source's lyrics (the next LRCLIB version when LRCLIB already shows). Sources
+ * that had nothing are dimmed once every source was asked.
+ */
 @Composable
-private fun LyricsSourceSwitch(vm: AppViewModel, modifier: Modifier) {
-    var open by remember { mutableStateOf(false) }
+private fun LyricsPills(vm: AppViewModel, sung: Color) {
     val shown = vm.lyrics
-    Box(modifier) {
-        Row(
-            Modifier.clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = 0.28f))
-                .clickable { open = true; vm.loadLyricsSources() }
-                .padding(start = 12.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(shown?.source ?: tr("Lyrics sources"), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Icon(Icons.Default.ArrowDropDown, tr("Lyrics sources"), tint = Color.White, modifier = Modifier.size(18.dp))
+    val active = shown?.let(com.rymplayer.data.LyricSources::provider)
+    val asked = vm.lyricsSources.isNotEmpty()
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (p in com.rymplayer.data.LyricSources.PROVIDERS) {
+            val versions = vm.lyricsSources.filter { com.rymplayer.data.LyricSources.provider(it) == p }
+            val at = versions.indexOfFirst { it == shown }
+            val text = if (p == com.rymplayer.data.LyricSources.LRCLIB && versions.size > 1 && at >= 0) "$p ${at + 1}/${versions.size}" else p
+            val on = active == p
+            val enabled = !asked || versions.isNotEmpty()
+            Text(
+                text,
+                color = if (on) Color.Black else Color.White.copy(alpha = if (enabled) 0.9f else 0.35f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(14.dp))
+                    .background(if (on) Color.White else Color.Black.copy(alpha = 0.25f))
+                    .clickable(enabled = enabled) { vm.pickSource(p) }
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            )
         }
-        DropdownMenu(open, { open = false }) {
-            when {
-                vm.lookingForSources -> DropdownMenuItem(
-                    { Text(tr("Looking for lyrics...")) }, onClick = {}, enabled = false,
-                    leadingIcon = { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) },
-                )
-                vm.lyricsSources.isEmpty() -> DropdownMenuItem({ Text(tr("No lyrics for this song")) }, onClick = {}, enabled = false)
-                else -> vm.lyricsSources.forEach { l ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(l.source, fontWeight = FontWeight.SemiBold)
-                                Text(if (l.synced.isNotEmpty()) tr("Synced") else tr("Not synced"), fontSize = 12.sp, color = Dim)
-                            }
-                        },
-                        onClick = { vm.showLyricsFrom(l); open = false },
-                        trailingIcon = { if (l == shown) Icon(Icons.Default.Check, null) },
-                    )
-                }
-            }
-        }
+        if (vm.lookingForSources) CircularProgressIndicator(Modifier.size(16.dp), color = sung, strokeWidth = 2.dp)
     }
 }
 
