@@ -28,7 +28,7 @@ const APP_ID: &str = "com.rymplayer.Gtk";
 const ROW_PX: u32 = 104;
 const CARD_PX: u32 = 160;
 const ART_PX: u32 = 300;
-/// The RyM YTM layout's big cover on the playing song's page.
+/// The big cover on the playing song's page.
 const BIG_PX: u32 = 720;
 
 /// Hybrid laptops (a built-in GPU and a fast one): asks the NVIDIA and AMD drivers to run this
@@ -181,10 +181,6 @@ headerbar.ytm-head { background: @bg@; min-height: 60px; border-bottom: 1px soli
 .ytm .shelf { font-size: 26px; font-weight: 800; margin-top: 22px; }
 button.big-card { background: transparent; border: none; box-shadow: none; border-radius: 8px; padding: 0 0 6px 0; color: @text@; }
 button.big-card:hover { background: @hover@; }
-.np-view { background: @bg@; }
-.np-art { border-radius: 6px; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
-.np-art.zoom { animation: np-zoom 450ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-@keyframes np-zoom { from { transform: scale(0.8); opacity: 0.3; } to { transform: scale(1); opacity: 1; } }
 .ytm stackswitcher button { border-radius: 0; padding: 12px 10px; color: @dim@; font-size: 13px; }
 .ytm stackswitcher button:checked { background: transparent; color: @text@; box-shadow: inset 0 -2px @text@; }
 .ytm .bar { border-top: none; padding: 0 0 8px 0; }
@@ -198,7 +194,6 @@ scale.ytm-progress:hover slider { min-width: 13px; min-height: 13px; margin: -6p
 .ytm .qrow { border-radius: 0; padding: 8px; border-bottom: 1px solid @divider@; }
 .ytm .qrow.now { background: @hover@; }
 .ytm .qrow.now .title { color: @text@; }
-.now-icon { background: rgba(0,0,0,0.55); color: #ffffff; border-radius: 6px; }
 "#;
 
 const STYLE: &str = r#"
@@ -270,6 +265,13 @@ scale highlight { background: @accent@; border-radius: 3px; }
 scale slider { background: @text@; min-width: 12px; min-height: 12px; margin: -4px; border: none; box-shadow: none; }
 dropdown button { background: @input@; color: @text@; border: none; box-shadow: none; border-radius: 8px; }
 scrollbar slider { background: @dim@; border-radius: 8px; min-width: 6px; }
+.np-view { background: @bg@; }
+.np-art { border-radius: 6px; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
+.np-art.zoom { animation: np-zoom 450ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes np-zoom { from { transform: scale(0.8); opacity: 0.3; } to { transform: scale(1); opacity: 1; } }
+button.np-back { background: rgba(0,0,0,0.35); color: #ffffff; border-radius: 22px; min-width: 40px; min-height: 40px; }
+button.np-back:hover { background: rgba(0,0,0,0.55); }
+.now-icon { background: rgba(0,0,0,0.55); color: #ffffff; border-radius: 6px; }
 "#;
 
 fn css(theme: usize) -> String {
@@ -292,8 +294,8 @@ fn css(theme: usize) -> String {
 }
 
 /// The lyrics panel in the playing song's cover color: lines to come dark, the sung line white,
-/// sung lines soft white (see rymplayer::colors). The RyM YTM layout also lights the song's page
-/// and the top of the pages with it.
+/// sung lines soft white (see rymplayer::colors). It also lights the song's page (and, in the
+/// RyM YTM layout, the top of the pages).
 fn lyrics_css(bg: (u8, u8, u8), ytm: bool) -> String {
     let [sung, _, next] = rymplayer::colors::lyric_colors(bg);
     let c = |(r, g, b): (u8, u8, u8)| format!("rgb({r},{g},{b})");
@@ -317,18 +319,17 @@ fn lyrics_css(bg: (u8, u8, u8), ytm: bool) -> String {
             g = wash.1,
             b = wash.2
         ));
-        if ytm {
-            let glow = rymplayer::colors::mix(bg, (3, 3, 3), 0.45);
-            let edge = rymplayer::colors::mix(bg, (3, 3, 3), 0.9);
-            css.push_str(&format!(
-                " .np-view {{ background-image: radial-gradient(circle at 32% 48%, {g} 0%, {e} 72%); }} .page-glow {{ background-image: linear-gradient(180deg, rgba({r},{gr},{b},0.32) 0px, rgba(3,3,3,0) 460px); }}",
-                g = c(glow),
-                e = c(edge),
-                r = bg.0,
-                gr = bg.1,
-                b = bg.2
-            ));
-        } else {
+        let glow = rymplayer::colors::mix(bg, (3, 3, 3), 0.45);
+        let edge = rymplayer::colors::mix(bg, (3, 3, 3), 0.9);
+        css.push_str(&format!(
+            " .np-view {{ background-image: radial-gradient(circle at 32% 48%, {g} 0%, {e} 72%); }} .page-glow {{ background-image: linear-gradient(180deg, rgba({r},{gr},{b},0.32) 0px, rgba(3,3,3,0) 460px); }}",
+            g = c(glow),
+            e = c(edge),
+            r = bg.0,
+            gr = bg.1,
+            b = bg.2
+        ));
+        if !ytm {
             css.push_str(&format!(" button.play {{ background: {}; transition: background 800ms ease; }}", c(accent)));
         }
     }
@@ -418,16 +419,16 @@ struct Widgets {
     /// The lyrics panel's colors, changed for each song.
     lyrics_provider: CssProvider,
     rail: Vec<(Page, Button)>,
-    /// The RyM YTM layout: the pages and the playing song's page, its big cover, and the
-    /// playlists in the side menu (None in the other layout).
-    stack: Option<gtk::Stack>,
+    /// The pages, and the playing song's page over them (its big cover; lyrics and Up next beside it).
+    stack: gtk::Stack,
     np_art: gtk::Picture,
+    /// The RyM YTM layout, and its side menu's playlists.
+    ytm: bool,
     nav_lists: gtk::Box,
     content: gtk::Box,
     scroll: gtk::ScrolledWindow,
     toast: gtk::Revealer,
     toast_text: Label,
-    lyrics_panel: gtk::Revealer,
     account: gtk::MenuButton,
     sign_in: Button,
     lyrics_box: gtk::Box,
@@ -931,6 +932,7 @@ fn build(app: &Application) {
     // RyM YTM: the pages, and the playing song's page over them.
     let main_stack = gtk::Stack::new();
     let np_art = picture(280, "np-art");
+    let np_back = icon_button("go-down-symbolic", tr("Back"), &[]);
 
     // Lyrics on the right.
     let lyrics_box = gtk::Box::new(Orientation::Vertical, 4);
@@ -982,22 +984,12 @@ fn build(app: &Application) {
     side_box.append(&side_head);
     side_box.append(&side);
     lyrics_scroll.set_size_request(-1, -1);
-    let lyrics_panel = gtk::Revealer::new();
-    lyrics_panel.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
-    // Shown once a song plays (nothing to show before that).
-    lyrics_panel.set_reveal_child(false);
-    // Hidden it takes no room at all (a hidden revealer still kept its width: an empty strip
-    // beside the page); it goes away once it has slid shut.
-    lyrics_panel.set_visible(false);
-    lyrics_panel.connect_child_revealed_notify(|r| {
-        if !r.is_child_revealed() && !r.reveals_child() {
-            r.set_visible(false);
-        }
-    });
     let middle = gtk::Box::new(Orientation::Horizontal, 0);
     middle.append(&rail_box);
     if ytm {
         content.add_css_class("page-glow");
+    }
+    {
         // The cover as big as the room allows, always square.
         np_art.set_halign(Align::Fill);
         np_art.set_valign(Align::Fill);
@@ -1014,16 +1006,21 @@ fn build(app: &Application) {
         np_view.add_css_class("np-view");
         np_view.append(&art_box);
         np_view.append(&side_box);
+        // Back to the page it came from (Esc too).
+        let np_page = gtk::Overlay::new();
+        np_page.set_child(Some(&np_view));
+        np_back.add_css_class("np-back");
+        np_back.set_halign(Align::Start);
+        np_back.set_valign(Align::Start);
+        np_back.set_margin_top(14);
+        np_back.set_margin_start(14);
+        np_page.add_overlay(&np_back);
         main_stack.add_named(&scroll, Some("page"));
-        main_stack.add_named(&np_view, Some("now"));
+        main_stack.add_named(&np_page, Some("now"));
         main_stack.set_transition_duration(380);
         overlay.set_child(Some(&main_stack));
-    } else {
-        lyrics_panel.set_child(Some(&side_box));
-        overlay.set_child(Some(&scroll));
     }
     middle.append(&overlay);
-    middle.append(&lyrics_panel);
     middle.set_vexpand(true);
 
     // Player bar: song on the left, controls in the middle, lyrics and volume on the right.
@@ -1056,8 +1053,8 @@ fn build(app: &Application) {
     progress.set_draw_value(false);
     progress.set_hexpand(true);
 
-    // RyM YTM: an arrow that opens the playing song's page and closes it again.
-    let lyrics_toggle = if ytm { icon_button("pan-up-symbolic", tr("Now playing"), &[]) } else { icon_button("format-justify-left-symbolic", tr("Lyrics"), &["dim"]) };
+    // Opens the playing song's page and closes it again (RyM YTM: an arrow).
+    let lyrics_toggle = if ytm { icon_button("pan-up-symbolic", tr("Now playing"), &[]) } else { icon_button("format-justify-left-symbolic", tr("Now playing"), &["dim"]) };
     let speed_button = gtk::MenuButton::new();
     speed_button.set_icon_name("media-seek-forward-symbolic");
     speed_button.set_tooltip_text(Some(tr("Speed and pitch")));
@@ -1185,14 +1182,14 @@ fn build(app: &Application) {
             provider,
             lyrics_provider,
             rail,
-            stack: ytm.then(|| main_stack.clone()),
+            stack: main_stack.clone(),
             np_art: np_art.clone(),
+            ytm,
             nav_lists: nav_lists.clone(),
             content,
             scroll,
             toast: toast_rev,
             toast_text,
-            lyrics_panel,
             account: account.clone(),
             sign_in: sign_in.clone(),
             lyrics_box,
@@ -1327,6 +1324,15 @@ fn build(app: &Application) {
                 refresh_home(&ui);
                 return glib::Propagation::Stop;
             }
+            // Esc leaves the song's page.
+            if key == gdk::Key::Escape {
+                let mut s = ui.borrow_mut();
+                if side_shown(&s.w) {
+                    s.side_closed = true;
+                    show_side(&s.w, false);
+                    return glib::Propagation::Stop;
+                }
+            }
             if key == gdk::Key::f && mods.contains(gdk::ModifierType::CONTROL_MASK) {
                 search.grab_focus();
                 return glib::Propagation::Stop;
@@ -1460,20 +1466,25 @@ fn build(app: &Application) {
         });
         // The button is lit while the panel shows, however it opened (RyM YTM: its arrow turns).
         let b = lyrics_toggle.clone();
-        if let Some(stack) = ui.borrow().w.stack.clone() {
-            stack.connect_visible_child_name_notify(move |s| {
-                let open = s.visible_child_name().as_deref() == Some("now");
+        let ytm = ui.borrow().w.ytm;
+        ui.borrow().w.stack.connect_visible_child_name_notify(move |s| {
+            let open = s.visible_child_name().as_deref() == Some("now");
+            if ytm {
                 b.set_icon_name(if open { "pan-down-symbolic" } else { "pan-up-symbolic" });
-            });
-        } else {
-            ui.borrow().w.lyrics_panel.connect_reveal_child_notify(move |r| {
-                if r.reveals_child() {
-                    b.remove_css_class("dim");
-                } else {
-                    b.add_css_class("dim");
-                }
-            });
-        }
+            } else if open {
+                b.remove_css_class("dim");
+            } else {
+                b.add_css_class("dim");
+            }
+        });
+    }
+    {
+        let ui = ui.clone();
+        np_back.connect_clicked(move |_| {
+            let mut s = ui.borrow_mut();
+            s.side_closed = true;
+            show_side(&s.w, false);
+        });
     }
 
     let poll = ui.clone();
@@ -2336,7 +2347,7 @@ fn home_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
         return page.upcast();
     }
     // "Recently played" as a row, then the shelves ("For you" first), each a grid of cards.
-    let ytm = ui.borrow().w.stack.is_some();
+    let ytm = ui.borrow().w.ytm;
     for (name, items) in shelves(home) {
         page.append(&label(shelf_name(&name), &["shelf"]));
         if ytm {
@@ -3467,10 +3478,9 @@ fn render_queue(ui: &Shared) {
         qb.append(&note(tr("Nothing playing")));
         return;
     }
-    let ytm = ui.borrow().w.stack.is_some();
     for (i, t) in songs.iter().enumerate() {
-        // RyM YTM: Up next starts at the playing song (the ones before it aren't listed).
-        if ytm && current.is_some_and(|c| i < c) {
+        // Up next starts at the playing song (the ones before it aren't listed).
+        if current.is_some_and(|c| i < c) {
             continue;
         }
         let row = gtk::Box::new(Orientation::Horizontal, 10);
@@ -3481,7 +3491,7 @@ fn render_queue(ui: &Shared) {
             row.add_css_class("past");
         }
         let art = cover(&ui.borrow(), t.thumb.as_ref(), ROW_PX, 36, "cover", &mut wants);
-        if ytm && Some(i) == current {
+        if Some(i) == current {
             // The playing one: a speaker over its cover.
             let marked = gtk::Overlay::new();
             marked.set_child(Some(&art));
@@ -3498,7 +3508,7 @@ fn render_queue(ui: &Shared) {
         names.append(&label(&t.title, &["title"]));
         names.append(&label(&t.artist, &["dim", "small"]));
         row.append(&names);
-        if ytm && !t.duration.is_empty() {
+        if !t.duration.is_empty() {
             let d = label(&t.duration, &["dim", "small"]);
             d.set_valign(Align::Center);
             row.append(&d);
@@ -4147,59 +4157,44 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     account.set_visible(true);
 }
 
-/// Opens or closes the lyrics / Up next panel (shown, it slides in; shut, it takes no room). In
-/// the RyM YTM layout: the playing song's page rises over the pages, its cover zooming in.
+/// Opens or closes the playing song's page: it rises over the pages, its cover zooming in, with
+/// the lyrics and Up next beside it.
 fn show_side(w: &Widgets, open: bool) {
-    if let Some(stack) = &w.stack {
-        if open == side_shown(w) {
-            return;
-        }
-        stack.set_transition_type(if open { gtk::StackTransitionType::OverUp } else { gtk::StackTransitionType::UnderDown });
-        stack.set_visible_child_name(if open { "now" } else { "page" });
-        if open {
-            // The zoom runs again each time (the class is put back once it was off).
-            w.np_art.remove_css_class("zoom");
-            let art = w.np_art.clone();
-            glib::idle_add_local_once(move || art.add_css_class("zoom"));
-        }
+    if open == side_shown(w) {
         return;
     }
+    w.stack.set_transition_type(if open { gtk::StackTransitionType::OverUp } else { gtk::StackTransitionType::UnderDown });
+    w.stack.set_visible_child_name(if open { "now" } else { "page" });
     if open {
-        w.lyrics_panel.set_visible(true);
+        // The zoom runs again each time (the class is put back once it was off).
+        w.np_art.remove_css_class("zoom");
+        let art = w.np_art.clone();
+        glib::idle_add_local_once(move || art.add_css_class("zoom"));
     }
-    w.lyrics_panel.set_reveal_child(open);
 }
 
 fn side_shown(w: &Widgets) -> bool {
-    match &w.stack {
-        Some(stack) => stack.visible_child_name().as_deref() == Some("now"),
-        None => w.lyrics_panel.reveals_child(),
-    }
+    w.stack.visible_child_name().as_deref() == Some("now")
 }
 
-/// RyM YTM: going to a page leaves the song's page (and songs starting on their own don't bring
-/// it back; playing one from a list does).
+/// Going to a page leaves the song's page (and songs starting on their own don't bring it back;
+/// playing one from a list does).
 fn to_page(ui: &Shared) {
     let mut s = ui.borrow_mut();
-    if s.w.stack.is_some() {
-        s.side_closed = true;
-        show_side(&s.w, false);
-    }
+    s.side_closed = true;
+    show_side(&s.w, false);
 }
 
-/// RyM YTM: a song played from a list or a card opens its page.
+/// A song played from a list or a card opens its page.
 fn song_page_on_play(ui: &Shared) {
-    let mut s = ui.borrow_mut();
-    if s.w.stack.is_some() {
-        s.side_closed = false;
-    }
+    ui.borrow_mut().side_closed = false;
 }
 
 /// RyM YTM: the library's playlists in the side menu; each opens.
 fn fill_nav_lists(ui: &Shared) {
     let (lists, playlists) = {
         let s = ui.borrow();
-        if s.w.stack.is_none() {
+        if !s.w.ytm {
             return;
         }
         (s.w.nav_lists.clone(), s.playlists.clone())
@@ -4219,13 +4214,9 @@ fn fill_nav_lists(ui: &Shared) {
     }
 }
 
-/// The playing song's cover on the bar, and (RyM YTM) the big one on its page.
+/// The playing song's cover on the bar, and the big one on its page.
 fn show_cover(s: &Ui, t: &Track, wants: &mut Wants) {
-    let mut targets = vec![(ROW_PX, 52, s.w.bar_cover.clone())];
-    if s.w.stack.is_some() {
-        targets.push((BIG_PX, 480, s.w.np_art.clone()));
-    }
-    for (px, size, target) in targets {
+    for (px, size, target) in [(ROW_PX, 52, s.w.bar_cover.clone()), (BIG_PX, 480, s.w.np_art.clone())] {
         let pic = cover(s, t.thumb.as_ref(), px, size, "cover", wants);
         match pic.paintable() {
             Some(p) => target.set_paintable(Some(&p)),
@@ -4502,7 +4493,7 @@ fn poll_events(ui: &Shared) {
             Ev::LyricsBg(vid, bg) => {
                 if now_playing(ui).is_some_and(|t| t.video_id == vid) {
                     let s = ui.borrow();
-                    s.w.lyrics_provider.load_from_string(&lyrics_css(bg, s.w.stack.is_some()));
+                    s.w.lyrics_provider.load_from_string(&lyrics_css(bg, s.w.ytm));
                 }
             }
             Ev::LyricsSources(vid, list) => {
