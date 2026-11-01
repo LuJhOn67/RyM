@@ -13,8 +13,8 @@ android {
         applicationId = "com.rymplayer"
         minSdk = 29 // Android 10
         targetSdk = 35
-        versionCode = 81
-        versionName = "6.7.3"
+        versionCode = 82
+        versionName = "6.8"
     }
     // yt-dlp brings Python for each processor type: one APK per type keeps each small.
     // arm64-v8a is nearly every phone from the last years; x86_64 is the emulator.
