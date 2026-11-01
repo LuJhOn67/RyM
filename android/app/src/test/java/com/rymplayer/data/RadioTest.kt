@@ -30,4 +30,15 @@ class RadioTest {
         val out = Lrclib.distinct(listOf(early, early.copy(), late, plain, plain.copy(source = "YouTube Music")))
         assertEquals(listOf("LRCLIB", "LRCLIB 2", "lyrics.ovh"), out.map { it.source })
     }
+
+    @Test
+    fun likedSongsJoinTheRadioSameArtistFirst() {
+        val seed = t("blue", "Blue Hair", "TV Girl")
+        val radio = (0 until 6).map { t("r$it", "R$it", if (it % 2 == 0) "Mac DeMarco" else "Other") }
+        val liked = listOf(t("x", "X", "Far Away"), t("tv1", "Tv1", "TV Girl"), t("blue", "Blue Hair", "TV Girl"), t("played", "P", "TV Girl"))
+        val out = Radio.withLiked(radio, seed, liked, setOf("played")).map { it.videoId }
+        assertEquals(listOf("r0", "r1", "tv1", "r2", "r3"), out.take(5))
+        assertEquals(8, out.size)
+        assertEquals(setOf("x"), out.toSet() - radio.map { it.videoId }.toSet() - "tv1")
+    }
 }

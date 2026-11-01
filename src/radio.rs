@@ -7,6 +7,53 @@ use std::collections::HashSet;
 
 use crate::api::Track;
 
+/// Up next for the playing song: its radio (songs like it) with the user's liked songs mixed in,
+/// one in every three places. Liked songs by the same artist come first, then ones by artists the
+/// radio has (the same mood), then others; none already played or queued, no song twice.
+pub fn with_liked(radio: Vec<Track>, seed: &Track, liked: &[Track], skip: &HashSet<String>, mut random: u64) -> Vec<Track> {
+    let mut next = |below: usize| {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        (random % below.max(1) as u64) as usize
+    };
+    let seed_artist = first_artist(&seed.artist);
+    let radio_artists: HashSet<String> = radio.iter().map(|t| first_artist(&t.artist)).collect();
+    let in_radio: HashSet<&str> = radio.iter().map(|t| t.video_id.as_str()).collect();
+    let free: Vec<&Track> = liked
+        .iter()
+        .filter(|t| t.link.is_none() && t.video_id != seed.video_id && !skip.contains(&t.video_id) && !in_radio.contains(t.video_id.as_str()))
+        .collect();
+    let artist_of = |t: &&Track| first_artist(&t.artist);
+    let same: Vec<&Track> = free.iter().copied().filter(|t| !seed_artist.is_empty() && artist_of(t) == seed_artist).collect();
+    let near: Vec<&Track> = free.iter().copied().filter(|t| artist_of(t) != seed_artist && radio_artists.contains(&artist_of(t))).collect();
+    let rest: Vec<&Track> = free.iter().copied().filter(|t| artist_of(t) != seed_artist && !radio_artists.contains(&artist_of(t))).collect();
+    let mut picks: Vec<&Track> = Vec::new();
+    for mut group in [same, near, rest] {
+        for i in (1..group.len()).rev() {
+            let j = next(i + 1);
+            group.swap(i, j);
+        }
+        picks.extend(group);
+    }
+    let wanted = radio.len() / 2;
+    let mut liked_iter = picks.into_iter().take(wanted).peekable();
+    let mut out = Vec::new();
+    let mut seen_keys: HashSet<String> = HashSet::new();
+    for (i, t) in radio.into_iter().enumerate() {
+        if seen_keys.insert(same_song_key(&t)) {
+            out.push(t);
+        }
+        if i % 2 == 1
+            && let Some(l) = liked_iter.next()
+            && seen_keys.insert(same_song_key(l))
+        {
+            out.push(l.clone());
+        }
+    }
+    out
+}
+
 /// YouTube Music's radio for a song. A SoundCloud song or a file on this device has none: the
 /// radio of the same song found on YouTube Music by its name stands in.
 pub async fn for_track(api: crate::api::Api, t: Track) -> anyhow::Result<Vec<Track>> {
@@ -114,5 +161,18 @@ mod tests {
         assert_eq!(ids, ["d", "a", "b", "c"]);
         // Long videos (an hour-long mix) stay.
         assert!(out.iter().all(|t| t.duration == "1:02:03"));
+    }
+
+    #[test]
+    fn liked_songs_join_the_radio_same_artist_first() {
+        let t = |id: &str, artist: &str| t(id, id, artist);
+        let seed = t("blue", "TV Girl");
+        let radio: Vec<Track> = (0..6).map(|i| t(&format!("r{i}"), if i % 2 == 0 { "Mac DeMarco" } else { "Other" })).collect();
+        let liked = vec![t("x", "Far Away"), t("tv1", "TV Girl"), t("mac", "Mac DeMarco"), t("blue", "TV Girl"), t("played", "TV Girl")];
+        let skip: HashSet<String> = ["played".to_string()].into();
+        let out = with_liked(radio, &seed, &liked, &skip, 0x9E37_79B9_7F4A_7C15);
+        let ids: Vec<&str> = out.iter().map(|t| t.video_id.as_str()).collect();
+        // One in three places, the same artist first, then an artist from the radio.
+        assert_eq!(ids, ["r0", "r1", "tv1", "r2", "r3", "mac", "r4", "r5", "x"]);
     }
 }

@@ -97,6 +97,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val cookie = prefs.getString("cookie", null)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
+        player.likedSongs = { likedTracks }
         // What was playing last time, paused where it was left.
         player.restoreSession()
         player.useVlc = prefs.getBoolean("vlc", false)
@@ -458,7 +459,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var syncJob: Job? = null
 
     /** The account's liked songs as YouTube Music has them now (likes from the PC show up here). */
+    /** The liked songs as last read (mixed into Up next). */
+    private var likedTracks: List<Track> = emptyList()
+
     private fun syncLiked(songs: List<Track>) {
+        likedTracks = songs
         val now = System.currentTimeMillis()
         localLikes.entries.removeAll { now - it.value.second > 60_000 }
         val ids = LinkedHashSet(songs.map { it.videoId })

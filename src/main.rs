@@ -159,6 +159,11 @@ struct App {
     pub q: rymplayer::queue::Queue,
     /// The search box looks on SoundCloud (Tab in the box, with the SoundCloud plugin).
     pub search_sc: bool,
+    /// The liked songs (mixed into Up next).
+    liked_tracks: Vec<Track>,
+    /// Songs started since memory was last given back (every 5 it is), and the last limit check.
+    songs_since_cleanup: u32,
+    memory_checked: Instant,
     /// Where the open page goes on, and whether its next part is on the way.
     more: Option<api::More>,
     loading_more: bool,
@@ -232,6 +237,9 @@ impl App {
             track_state: TableState::default(),
             q: Default::default(),
             search_sc: false,
+            liked_tracks: Vec::new(),
+            songs_since_cleanup: 0,
+            memory_checked: Instant::now(),
             more: None,
             loading_more: false,
             resume_at: None,
@@ -377,7 +385,10 @@ impl App {
                             Some(seed) => {
                                 let queued: std::collections::HashSet<String> = self.q.songs.iter().map(|t| t.video_id.clone()).collect();
                                 let heard = rymplayer::radio::artists_of(self.q.songs.iter().take(self.q.current.map_or(0, |c| c + 1)));
-                                rymplayer::radio::tidy(tracks, &seed, &self.played, &queued, &heard)
+                                let similar = rymplayer::radio::tidy(tracks, &seed, &self.played, &queued, &heard);
+                                // Songs like it, with liked songs mixed in (same artist first).
+                                let skip: std::collections::HashSet<String> = self.played.union(&queued).cloned().collect();
+                                rymplayer::radio::with_liked(similar, &seed, &self.liked_tracks, &skip, rymplayer::updates::now() | 1)
                             }
                             None => tracks,
                         };
@@ -540,6 +551,7 @@ impl App {
             }
             Event::Liked(Ok(t)) => {
                 self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                self.liked_tracks = t.clone();
                 if self.page == Page::Playlist(api::LIKED_ID.into()) && !self.busy {
                     self.tracks = t;
                     let last = self.tracks.len().saturating_sub(1);
@@ -1421,6 +1433,11 @@ impl App {
         self.q.went_to(i);
         self.played.insert(track.video_id.clone());
         rymplayer::recent::played(&track);
+        self.songs_since_cleanup += 1;
+        if self.songs_since_cleanup >= 5 {
+            self.songs_since_cleanup = 0;
+            rymplayer::memory::trim();
+        }
         // Another song than the one left off last time: that one's second no longer counts.
         if self.resume_at.as_ref().is_some_and(|(id, _)| *id != track.video_id) {
             self.resume_at = None;
@@ -1707,6 +1724,10 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if self.memory_checked.elapsed() > Duration::from_secs(30) {
+            self.memory_checked = Instant::now();
+            rymplayer::memory::trim_if_over_limit();
+        }
         self.load_more_near_the_end();
         // What plays and where, kept every 3 seconds (a crash loses at most that much).
         if self.session_checked.elapsed() > Duration::from_secs(3) {

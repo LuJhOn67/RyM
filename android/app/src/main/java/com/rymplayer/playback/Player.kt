@@ -352,8 +352,14 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     /** The radio for [seed] without repeats or songs played or queued already, same artist moved up. */
     fun tidy(radio: List<Track>, seed: Track): List<Track> {
         val heard = queue.take(index + 1).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
-        return com.rymplayer.data.Radio.tidy(radio, seed, played, queue.map { it.videoId }.toSet(), heard)
+        val queued = queue.map { it.videoId }.toSet()
+        val similar = com.rymplayer.data.Radio.tidy(radio, seed, played, queued, heard)
+        // Songs like it, with liked songs mixed in (same artist first).
+        return com.rymplayer.data.Radio.withLiked(similar, seed, likedSongs(), played + queued)
     }
+
+    /** The liked songs, mixed into Up next (set by the app). */
+    var likedSongs: () -> List<Track> = { emptyList() }
 
     fun seekTo(secs: Float) {
         controller?.seekTo((secs * 1000).toLong())

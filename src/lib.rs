@@ -14,6 +14,7 @@ pub mod local;
 pub mod login;
 pub mod lyric_sources;
 pub mod lyrics;
+pub mod memory;
 pub mod page_cache;
 pub mod plugins;
 pub mod queue;

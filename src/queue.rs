@@ -197,4 +197,20 @@ mod tests {
         q.add(t("z"));
         assert_eq!(ids(&q), ["a", "y", "z", "b"]);
     }
+
+    #[test]
+    fn play_next_then_add_to_queue_then_up_next() {
+        // Blue Hair plays with its Up next; "Play next" one song, "Add to queue" another.
+        let mut q = Queue::default();
+        q.start(vec![t("blue"), t("up1"), t("up2")], 0);
+        q.play_next(t("river"));
+        q.add(t("telephones"));
+        assert_eq!(ids(&q), ["blue", "river", "telephones", "up1", "up2"]);
+        // The other way round gives the same order: Play next always comes first.
+        let mut q = Queue::default();
+        q.start(vec![t("blue"), t("up1")], 0);
+        q.add(t("telephones"));
+        q.play_next(t("river"));
+        assert_eq!(ids(&q), ["blue", "river", "telephones", "up1"]);
+    }
 }

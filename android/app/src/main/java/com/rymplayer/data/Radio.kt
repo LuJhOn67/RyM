@@ -20,6 +20,32 @@ object Radio {
         return api.radio(seed.videoId)
     }
 
+    /**
+     * Up next for the playing song: its radio (songs like it) with the user's liked songs mixed
+     * in, one in every three places. Liked songs by the same artist come first, then ones by
+     * artists the radio has (the same mood), then others; none played or queued, no song twice.
+     */
+    fun withLiked(radio: List<Track>, seed: Track, liked: List<Track>, skip: Set<String>): List<Track> {
+        val seedArtist = firstArtist(seed.artist)
+        val radioArtists = radio.map { firstArtist(it.artist) }.toSet()
+        val inRadio = radio.map { it.videoId }.toSet()
+        val free = liked.filter { it.link == null && it.videoId != seed.videoId && it.videoId !in skip && it.videoId !in inRadio }
+        val same = free.filter { seedArtist.isNotEmpty() && firstArtist(it.artist) == seedArtist }.shuffled()
+        val near = free.filter { firstArtist(it.artist) != seedArtist && firstArtist(it.artist) in radioArtists }.shuffled()
+        val rest = free.filter { firstArtist(it.artist) != seedArtist && firstArtist(it.artist) !in radioArtists }.shuffled()
+        val picks = (same + near + rest).take(radio.size / 2).iterator()
+        val out = mutableListOf<Track>()
+        val keys = mutableSetOf<String>()
+        radio.forEachIndexed { i, t ->
+            if (keys.add(key(t))) out += t
+            if (i % 2 == 1 && picks.hasNext()) {
+                val l = picks.next()
+                if (keys.add(key(l))) out += l
+            }
+        }
+        return out
+    }
+
     fun firstArtist(artist: String): String = artist.split(',', '&').first().trim().lowercase()
 
     /** "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload. */

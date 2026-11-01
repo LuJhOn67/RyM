@@ -71,10 +71,10 @@ impl Arriving {
             worker.arrived.notify_all();
             if result.is_ok() {
                 // Keep the song for next time: written aside, then moved in, so the cache never
-                // holds half a file.
-                let data = worker.data.lock().unwrap().clone();
+                // holds half a file. Written straight from the buffer (no second copy in memory).
                 let part = save_to.with_extension("part");
-                if std::fs::write(&part, &data).is_ok() && std::fs::rename(&part, &save_to).is_err() {
+                let written = std::fs::write(&part, worker.data.lock().unwrap().as_slice()).is_ok();
+                if written && std::fs::rename(&part, &save_to).is_err() {
                     let _ = std::fs::remove_file(&part);
                 }
             }
@@ -104,14 +104,19 @@ impl Arriving {
     }
 }
 
-/// Fetches the song in ranges, adding each piece as it arrives.
-async fn fetch(url: &str, headers: &[(String, String)], shared: &Shared) -> Result<()> {
+/// Fetches the song in ranges, adding each piece as it arrives. A song nobody plays any more
+/// (skipped before it was all in) stops downloading and its memory is let go; it isn't cached.
+async fn fetch(url: &str, headers: &[(String, String)], shared: &Arc<Shared>) -> Result<()> {
+    let nobody_listens = || Arc::strong_count(shared) == 1;
     let client = http();
     let mut pos = 0u64;
     loop {
         let total = shared.total.load(Ordering::Relaxed);
         if total > 0 && pos >= total {
             return Ok(());
+        }
+        if nobody_listens() {
+            return Err(anyhow!("skipped"));
         }
         let size = if pos == 0 { FIRST_RANGE } else { RANGE };
         let end = if total > 0 { (pos + size).min(total) } else { pos + size } - 1;
@@ -129,12 +134,21 @@ async fn fetch(url: &str, headers: &[(String, String)], shared: &Shared) -> Resu
             .and_then(|v| v.parse::<u64>().ok())
         {
             shared.total.store(t, Ordering::Relaxed);
+            // The whole size at once: a growing buffer would take up to twice the song.
+            let mut data = shared.data.lock().unwrap();
+            let need = (t as usize).saturating_sub(data.len());
+            if data.capacity() - data.len() < need {
+                data.reserve_exact(need);
+            }
         }
         let before = pos;
         while let Some(chunk) = resp.chunk().await? {
             shared.data.lock().unwrap().extend_from_slice(&chunk);
             pos += chunk.len() as u64;
             shared.arrived.notify_all();
+            if nobody_listens() {
+                return Err(anyhow!("skipped"));
+            }
         }
         if whole {
             // The server sent the whole song at once.

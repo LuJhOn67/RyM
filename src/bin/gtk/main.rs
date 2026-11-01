@@ -335,6 +335,8 @@ struct Widgets {
 }
 
 struct Ui {
+    /// Songs started since memory was last cleaned up (every 5 it is).
+    songs_since_cleanup: u32,
     volume: f32,
     /// The song left off last time and the second to go on from, until it plays.
     resume_at: Option<(String, f32)>,
@@ -395,7 +397,7 @@ struct Ui {
     lyric_line: Option<usize>,
 
     covers: HashMap<String, gdk::Texture>,
-    /// The covers in the order they came: past the newest 500, the oldest are let go (each one
+    /// The covers in the order they came: past the newest 250, the oldest are let go (each one
     /// is a picture on the graphics card; kept forever they pile up over a long session).
     cover_order: std::collections::VecDeque<String>,
     waiting: HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>,
@@ -903,7 +905,8 @@ fn build(app: &Application) {
         a.set_volume(start_volume);
     }
     let (tx, rx) = mpsc::channel();
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("async runtime");
+    // A few threads are plenty for its background work (one per processor core made ~100 threads).
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).max_blocking_threads(8).enable_all().build().expect("async runtime");
     let ui: Shared = Rc::new(RefCell::new(Ui {
         runtime,
         tx,
@@ -937,6 +940,7 @@ fn build(app: &Application) {
             len,
         },
         side_closed: false,
+        songs_since_cleanup: 0,
         volume: start_volume,
         resume_at: None,
         session_key: None,
@@ -1188,6 +1192,16 @@ fn build(app: &Application) {
         restore_session(&ui, &saved);
     }
     {
+        // Over the memory limit: cleaned up at once (checked every 30 seconds).
+        let ui = ui.clone();
+        glib::timeout_add_seconds_local(30, move || {
+            if rymplayer::memory::working_set_mb().is_some_and(|mb| mb > rymplayer::memory::LIMIT_MB) {
+                clean_up_memory(&ui, "over the limit");
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+    {
         // What plays and where, kept every 3 seconds (a crash loses at most that much).
         let ui = ui.clone();
         glib::timeout_add_seconds_local(3, move || {
@@ -1290,6 +1304,22 @@ fn restore_session(ui: &Shared, saved: &rymplayer::session::Session) {
     }
     want_covers(ui, wants);
     render_queue(ui);
+}
+
+/// Lets go of covers no page is waiting for (the ones on screen keep their own copy) and gives
+/// the freed memory back to Windows.
+fn clean_up_memory(ui: &Shared, why: &str) {
+    let before = rymplayer::memory::working_set_mb();
+    {
+        let Ok(mut s) = ui.try_borrow_mut() else { return };
+        s.songs_since_cleanup = 0;
+        let waiting: HashSet<String> = s.waiting.keys().cloned().collect();
+        s.covers.retain(|url, _| waiting.contains(url));
+        s.cover_order.retain(|url| waiting.contains(url));
+        s.requested.retain(|url| waiting.contains(url));
+    }
+    rymplayer::memory::trim();
+    log(&format!("memory cleaned up ({why}): {:?} MB -> {:?} MB", before, rymplayer::memory::working_set_mb()));
 }
 
 /// Writes what plays, where in it, and the volume to the session file, when any of it changed.
@@ -2942,6 +2972,15 @@ fn play_at(ui: &Shared, i: usize) {
     refresh_hearts(ui);
     render_queue(ui);
     save_session(ui);
+    let due = {
+        let mut s = ui.borrow_mut();
+        s.songs_since_cleanup += 1;
+        s.songs_since_cleanup >= 5
+    };
+    if due {
+        let ui = ui.clone();
+        glib::idle_add_local_once(move || clean_up_memory(&ui, "5 songs"));
+    }
 
     log(&format!("play {} ({}){}", track.title, track.video_id, if in_vlc { " in VLC" } else { "" }));
     {
@@ -3454,7 +3493,7 @@ fn poll_events(ui: &Shared) {
                         if s.covers.insert(url.clone(), t).is_none() {
                             s.cover_order.push_back(url);
                         }
-                        while s.cover_order.len() > 500 {
+                        while s.cover_order.len() > 250 {
                             if let Some(old) = s.cover_order.pop_front() {
                                 s.covers.remove(&old);
                                 // Asked again if a page wants it later.
@@ -3565,7 +3604,10 @@ fn poll_events(ui: &Shared) {
                         Some(seed) => {
                             let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
                             let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
-                            rymplayer::radio::tidy(tracks, &seed, &s.played, &queued, &heard)
+                            let similar = rymplayer::radio::tidy(tracks, &seed, &s.played, &queued, &heard);
+                            // Songs like it, with liked songs mixed in (same artist first).
+                            let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
+                            rymplayer::radio::with_liked(similar, &seed, &s.liked_tracks, &skip, rymplayer::updates::now() | 1)
                         }
                         None => tracks,
                     };
