@@ -952,6 +952,8 @@ fn build(app: &Application) {
     queue_scroll.set_vexpand(true);
     let side = gtk::Stack::new();
     side.set_transition_type(gtk::StackTransitionType::Crossfade);
+    side.set_hhomogeneous(false);
+    side.set_vhomogeneous(false);
     // The lyrics page: one pill per source over the lines (LRCLIB | NetEase | KuGou | Genius | YouTube Music).
     let pills = gtk::Box::new(Orientation::Horizontal, 6);
     pills.set_margin_top(8);
@@ -1018,6 +1020,9 @@ fn build(app: &Application) {
         main_stack.add_named(&scroll, Some("page"));
         main_stack.add_named(&np_page, Some("now"));
         main_stack.set_transition_duration(380);
+        // Only the page on screen is measured (resizing measured the hidden one too).
+        main_stack.set_hhomogeneous(false);
+        main_stack.set_vhomogeneous(false);
         overlay.set_child(Some(&main_stack));
     }
     middle.append(&overlay);
@@ -1548,9 +1553,63 @@ fn build(app: &Application) {
         });
     }
     render(&ui);
+    watch_frames(&ui);
     #[cfg(windows)]
     redraw_after_display_changes(&ui.borrow().w.window);
     window.present();
+}
+
+/// Frames that took long to lay out or draw, with the window's size and what was on screen, go
+/// to rym-gtk.log (for finding what makes resizing stutter).
+fn watch_frames(ui: &Shared) {
+    fn count(w: &gtk::Widget) -> usize {
+        let mut n = 1;
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            n += count(&c);
+            child = c.next_sibling();
+        }
+        n
+    }
+    let window = ui.borrow().w.window.clone();
+    let ui = Rc::downgrade(ui);
+    window.connect_map(move |w| {
+        let Some(clock) = w.frame_clock() else { return };
+        let started = Rc::new(Cell::new(None::<Instant>));
+        let laid_out = Rc::new(Cell::new(None::<Instant>));
+        {
+            let started = started.clone();
+            clock.connect_before_paint(move |_| started.set(Some(Instant::now())));
+        }
+        {
+            // After GTK's own layout handler: the window has been laid out.
+            let laid_out = laid_out.clone();
+            clock.connect_layout(move |_| laid_out.set(Some(Instant::now())));
+        }
+        let (ui, window) = (ui.clone(), w.clone());
+        clock.connect_after_paint(move |_| {
+            let Some(start) = started.take() else { return };
+            let total = start.elapsed();
+            let layout = laid_out.take().map_or(Duration::ZERO, |t| t.duration_since(start));
+            if total < Duration::from_millis(120) {
+                return;
+            }
+            let Some(ui) = ui.upgrade() else { return };
+            let Ok(s) = ui.try_borrow() else { return };
+            log(&format!(
+                "slow frame: {} ms ({} ms layout), window {}x{}, page {}, song page {}, {} widgets in the page, {} in the lyrics, {} in Up next",
+                total.as_millis(),
+                layout.as_millis(),
+                window.width(),
+                window.height(),
+                page_name(&s.page),
+                if side_shown(&s.w) { "open" } else { "shut" },
+                count(s.w.content.upcast_ref()),
+                count(s.w.lyrics_box.upcast_ref()),
+                count(s.w.queue_box.upcast_ref()),
+            ));
+        });
+    });
 }
 
 /// Windows: when the screen's resolution changes (a game running in another resolution, say),
