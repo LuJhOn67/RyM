@@ -83,3 +83,29 @@ async fn run(mut cmd: tokio::process::Command) -> Result<String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
+
+#[cfg(test)]
+mod live {
+    /// The video plugin for real: a song's picture and sound links, and a short video downloaded
+    /// (then deleted). Prints what came back.
+    #[tokio::test]
+    #[ignore]
+    async fn links_and_download() {
+        let (video, audio) = super::links("jNQXAC9IVRw").await.unwrap();
+        println!("links: video {}, audio {}", video.starts_with("http"), audio.as_deref().is_some_and(|a| a.starts_with("http")));
+        let file = super::download("https://www.youtube.com/watch?v=jNQXAC9IVRw", true).await.unwrap();
+        let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+        println!("download: {} ({} KB)", file.extension().and_then(|e| e.to_str()).unwrap_or("?"), size / 1024);
+        std::fs::remove_file(&file).unwrap();
+        assert!(size > 50_000);
+    }
+
+    /// The store's list as this version sees it.
+    #[tokio::test]
+    #[ignore]
+    async fn store_lists_every_plugin() {
+        let list = crate::plugins::store().await.unwrap();
+        println!("store: {:?}", list.iter().map(|p| format!("{} {}", p.id, p.version)).collect::<Vec<_>>());
+        assert!(["video", "spotify", "soundcloud"].iter().all(|id| list.iter().any(|p| p.id == *id)));
+    }
+}
