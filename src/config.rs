@@ -69,6 +69,27 @@ pub struct Config {
     pub last_update_check: u64,
     /// Installed plugins: id -> version.
     pub plugins: std::collections::BTreeMap<String, String>,
+    /// Seconds two songs overlap as one fades into the next (0 = off).
+    pub crossfade: u8,
+    /// A quiet start is skipped and a long quiet end finishes the song.
+    pub skip_silence: bool,
+    /// Equalizer preset (index into `fx::PRESETS`; the last is "Custom").
+    pub eq_preset: usize,
+    /// The "Custom" preset's gains, dB per band.
+    pub eq_custom: [f32; 5],
+    /// Every song at about the same loudness.
+    pub normalize: bool,
+    /// Playback speed and pitch (1 = normal), and the reverb of the "Slowed" mode.
+    pub speed: f32,
+    pub pitch: f32,
+    pub reverb: f32,
+    /// Show the playing song on Discord (needs Discord running and an application id).
+    pub discord: bool,
+    pub discord_app_id: String,
+    /// The window app's floating lyrics line over other windows.
+    pub lyrics_overlay: bool,
+    /// Lyrics overlay: clicks go through it (else it can be dragged).
+    pub overlay_click_through: bool,
 }
 
 /// A side or place ("Left", "Bottom"...) in the app's language.
@@ -88,6 +109,32 @@ fn place(name: &str) -> String {
 pub const PIECE_SIZES: [u8; 5] = [0, 1, 2, 4, 8];
 
 impl Config {
+    /// The sound settings for the players' effects.
+    pub fn fx(&self) -> crate::fx::Settings {
+        let presets = &crate::fx::PRESETS;
+        let i = self.eq_preset.min(presets.len() - 1);
+        let eq = if i == presets.len() - 1 { self.eq_custom } else { presets[i].1 };
+        crate::fx::Settings { eq, normalize: self.normalize, skip_silence: self.skip_silence, pitch: crate::fx::shift_for(self.speed, self.pitch), reverb: self.reverb }
+    }
+
+    pub fn eq_name(&self) -> &'static str {
+        crate::fx::PRESETS[self.eq_preset.min(crate::fx::PRESETS.len() - 1)].0
+    }
+
+    /// Speed and pitch set to a quick pick ("Normal", "Nightcore", "Slowed").
+    pub fn set_mode(&mut self, name: &str) {
+        if let Some((_, speed, pitch, reverb)) = crate::fx::MODES.iter().find(|m| m.0 == name) {
+            self.speed = *speed;
+            self.pitch = *pitch;
+            self.reverb = *reverb;
+        }
+    }
+
+    /// The quick pick the speed and pitch match, if any.
+    pub fn mode_name(&self) -> &'static str {
+        crate::fx::MODES.iter().find(|m| (m.1 - self.speed).abs() < 0.01 && (m.2 - self.pitch).abs() < 0.01).map_or("Custom", |m| m.0)
+    }
+
     pub fn piece_label(&self) -> String {
         match self.download_piece_mb {
             0 => tr("Open (split evenly)").to_string(),
@@ -179,6 +226,18 @@ impl Default for Config {
             beta_updates: false,
             last_update_check: 0,
             plugins: Default::default(),
+            crossfade: 4,
+            skip_silence: true,
+            eq_preset: 0,
+            eq_custom: [0.0; 5],
+            normalize: true,
+            speed: 1.0,
+            pitch: 1.0,
+            reverb: 0.0,
+            discord: false,
+            discord_app_id: String::new(),
+            lyrics_overlay: false,
+            overlay_click_through: false,
         }
     }
 }
@@ -303,10 +362,17 @@ pub enum Setting {
     AutoUpdate,
     /// Pre-releases count as updates.
     Beta,
+    Crossfade,
+    SkipSilence,
+    Equalizer,
+    Normalize,
+    /// Speed and pitch quick picks.
+    Mode,
+    Discord,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 17] = [
+pub const SETTINGS: [Setting; 23] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -323,6 +389,12 @@ pub const SETTINGS: [Setting; 17] = [
     Setting::Language,
     Setting::AutoUpdate,
     Setting::Beta,
+    Setting::Crossfade,
+    Setting::SkipSilence,
+    Setting::Equalizer,
+    Setting::Normalize,
+    Setting::Mode,
+    Setting::Discord,
     Setting::Reset,
 ];
 
@@ -368,6 +440,12 @@ impl Config {
             Setting::Language => "Language",
             Setting::AutoUpdate => "Updates",
             Setting::Beta => "Beta updates",
+            Setting::Crossfade => "Crossfade",
+            Setting::SkipSilence => "Skip silence",
+            Setting::Equalizer => "Equalizer",
+            Setting::Normalize => "Even loudness",
+            Setting::Mode => "Speed and pitch",
+            Setting::Discord => "Discord",
             Setting::Reset => "Reset layout",
         })
     }
@@ -390,6 +468,16 @@ impl Config {
             Setting::Language => if self.arabic { "العربية" } else { "English" }.to_string(),
             Setting::AutoUpdate => tr(if self.auto_update_check { "Automatic" } else { "Off" }).to_string(),
             Setting::Beta => tr(if self.beta_updates { "On" } else { "Off" }).to_string(),
+            Setting::Crossfade => if self.crossfade == 0 { tr("Off").to_string() } else { format!("{} s", self.crossfade) },
+            Setting::SkipSilence => tr(if self.skip_silence { "On" } else { "Off" }).to_string(),
+            Setting::Equalizer => tr(self.eq_name()).to_string(),
+            Setting::Normalize => tr(if self.normalize { "On" } else { "Off" }).to_string(),
+            Setting::Mode => format!("{} ({:.2}x, {} {:.2})", tr(self.mode_name()), self.speed, tr("pitch"), self.pitch),
+            Setting::Discord => match (self.discord, self.discord_app_id.is_empty()) {
+                (false, _) => tr("Off").to_string(),
+                (true, true) => tr("On (needs an application id)").to_string(),
+                (true, false) => tr("On").to_string(),
+            },
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -415,13 +503,23 @@ impl Config {
             Setting::Vlc => self.play_in_vlc = !self.play_in_vlc,
             Setting::AutoUpdate => self.auto_update_check = !self.auto_update_check,
             Setting::Beta => self.beta_updates = !self.beta_updates,
+            Setting::Crossfade => self.crossfade = (self.crossfade as i32 + step).clamp(0, 10) as u8,
+            Setting::SkipSilence => self.skip_silence = !self.skip_silence,
+            Setting::Equalizer => self.eq_preset = (self.eq_preset as i32 + step).rem_euclid(crate::fx::PRESETS.len() as i32) as usize,
+            Setting::Normalize => self.normalize = !self.normalize,
+            Setting::Mode => {
+                let names: Vec<&str> = crate::fx::MODES.iter().map(|m| m.0).collect();
+                let i = names.iter().position(|n| *n == self.mode_name()).map_or(0, |i| (i as i32 + step).rem_euclid(names.len() as i32) as usize);
+                self.set_mode(names[i]);
+            }
+            Setting::Discord => self.discord = !self.discord,
             Setting::Language => {
                 self.arabic = !self.arabic;
                 crate::i18n::set_arabic(self.arabic);
             }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ..Config::default() }
             }
         }
     }

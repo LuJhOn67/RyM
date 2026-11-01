@@ -31,6 +31,7 @@ lofty = "0.25.5"
 ar-reshaper = "1.5.0"
 unicode-bidi = "0.3.18"
 arboard = { version = "3", default-features = false }
+discord-rich-presence = "1.1"
 
 [features]
 default = ["webview"]

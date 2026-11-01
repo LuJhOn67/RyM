@@ -78,6 +78,8 @@ enum Page {
     Artist(String),
     /// The queue ("Up next"): played songs, the playing one, what comes next.
     Queue,
+    /// "Your recap": the most played songs (the title says the hours and top artists).
+    Recap,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +163,16 @@ struct App {
     pub search_sc: bool,
     /// The liked songs (mixed into Up next).
     liked_tracks: Vec<Track>,
+    /// Sleep timer: minutes chosen and when it ends (`None` minutes: at the end of the song).
+    sleep: Option<(Option<u64>, Instant)>,
+    /// The next song starts while this one fades out; the song whose crossfade already started.
+    crossfade_next: bool,
+    crossfade_for: Option<String>,
+    /// Listening stats: when time was last added, and last written.
+    listened_at: Instant,
+    stats_written: Instant,
+    /// What Discord was last told: song, playing, position, when.
+    discord_sent: Option<(String, bool, f32, Instant)>,
     /// Songs started since memory was last given back (every 5 it is), and the last limit check.
     songs_since_cleanup: u32,
     memory_checked: Instant,
@@ -238,6 +250,12 @@ impl App {
             q: Default::default(),
             search_sc: false,
             liked_tracks: Vec::new(),
+            sleep: None,
+            crossfade_next: false,
+            crossfade_for: None,
+            listened_at: Instant::now(),
+            stats_written: Instant::now(),
+            discord_sent: None,
             songs_since_cleanup: 0,
             memory_checked: Instant::now(),
             more: None,
@@ -292,9 +310,11 @@ impl App {
                 self.pos = saved.position;
             }
         }
+        rymplayer::fx::set(self.config.fx());
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(self.volume);
+                a.set_speed(self.config.speed);
                 self.audio = Some(a);
             }
             Err(e) => self.status = format!("{}: {e}", tr("No audio device")),
@@ -500,8 +520,11 @@ impl App {
                         let known = parse_duration(&self.now_playing().map(|t| t.duration.clone()).unwrap_or_default())
                             .or_else(|| stream::cached_duration(&vid));
                         let resume = self.resume_at.take().filter(|(id, at)| *id == vid && *at > 1.0).map(|(_, at)| at);
+                        let crossfade = std::mem::take(&mut self.crossfade_next);
+                        let secs = self.config.crossfade as f32;
                         if let Some(a) = &mut self.audio {
-                            match a.play(&song, known) {
+                            let started = if crossfade { a.crossfade_to(&song, known, secs) } else { a.play(&song, known) };
+                            match started {
                                 Ok(()) => {
                                     if let Some(at) = resume {
                                         a.seek(at);
@@ -738,6 +761,10 @@ impl App {
             KeyCode::Char('h') => self.open(Page::History, tr("History").into()),
             KeyCode::Char('a') => self.open_picker(),
             KeyCode::Char('o') => self.open_song_menu(),
+            KeyCode::Char('z') => self.next_sleep(),
+            KeyCode::Char('R') => self.show_recap(),
+            KeyCode::Char('[') => self.step_mode(-1),
+            KeyCode::Char(']') => self.step_mode(1),
             KeyCode::Char('Q') => self.show_queue(),
             KeyCode::Char('L') => self.next_lyrics_source(),
             KeyCode::Char('s') => {
@@ -1056,7 +1083,7 @@ impl App {
                 Page::Mix(id) => api.mix_tracks(id).await,
                 Page::Radio(vid) => api.radio(vid).await,
                 Page::Artist(id) => api.artist_page(id).await,
-                Page::Search | Page::Local | Page::Queue => Ok(Vec::new()),
+                Page::Search | Page::Local | Page::Queue | Page::Recap => Ok(Vec::new()),
             };
             Event::Tracks(page, s(r))
         });
@@ -1127,6 +1154,7 @@ impl App {
 
     fn change_setting(&mut self, i: usize, step: i32) {
         self.config.change(SETTINGS[i], step);
+        self.apply_sound();
         stream::use_source(self.config.source);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
@@ -1448,7 +1476,10 @@ impl App {
         self.lyrics = None;
         self.lyrics_status = tr("Loading lyrics...").into();
         self.loading = true;
-        if let Some(a) = &mut self.audio {
+        // A crossfade keeps the old song playing while the new one loads.
+        if !self.crossfade_next
+            && let Some(a) = &mut self.audio
+        {
             a.stop();
         }
 
@@ -1744,6 +1775,7 @@ impl App {
                 self.spawn(async move { Event::Liked(s(api.playlist_tracks(api::LIKED_ID.into()).await)) });
             }
         }
+        self.sound_tick();
         let Some(a) = &mut self.audio else { return };
         self.pos = a.position();
         if self.loading || !a.finished() {
@@ -1751,6 +1783,114 @@ impl App {
         }
         a.stop();
         self.next();
+    }
+
+    /// Settings > Sound into the players.
+    fn apply_sound(&mut self) {
+        rymplayer::fx::set(self.config.fx());
+        if let Some(a) = &self.audio {
+            a.set_speed(self.config.speed);
+        }
+    }
+
+    /// `[` and `]`: speed and pitch quick picks (Normal, Nightcore, Slowed).
+    fn step_mode(&mut self, step: i32) {
+        self.config.change(rymplayer::config::Setting::Mode, step);
+        self.apply_sound();
+        self.config.save();
+        self.status = format!("{}: {}", tr("Speed and pitch"), self.config.value(rymplayer::config::Setting::Mode));
+    }
+
+    /// `z`: the sleep timer: 15, 30, 45, 60 minutes, end of the song, off.
+    fn next_sleep(&mut self) {
+        let next = match self.sleep.map(|(m, _)| m) {
+            None => Some(Some(15)),
+            Some(Some(m)) if m < 60 => Some(Some(m + 15)),
+            Some(Some(_)) => Some(None),
+            Some(None) => None,
+        };
+        self.sleep = next.map(|m| (m, Instant::now() + Duration::from_secs(m.unwrap_or(0) * 60)));
+        if let Some(a) = &self.audio {
+            a.set_fade(1.0);
+        }
+        self.status = match next {
+            Some(Some(m)) => format!("{}: {m} {}", tr("Sleep timer"), tr("minutes")),
+            Some(None) => tr("The music stops after this song").into(),
+            None => tr("Sleep timer off").into(),
+        };
+    }
+
+    /// `R`: "Your recap": the most played songs; hours and top artists in the title.
+    fn show_recap(&mut self) {
+        let r = rymplayer::stats::recap();
+        let artists: Vec<&str> = r.top_artists.iter().take(3).map(|(a, _)| a.as_str()).collect();
+        self.page = Page::Recap;
+        self.page_title = format!("{}: {:.1} h {} · {:.1} h {} · {}", tr("Your recap"), r.hours_month, tr("this month"), r.hours_total, tr("in all"), artists.join(", "));
+        self.busy = false;
+        self.focus = Focus::Tracks;
+        self.tracks = r.top_songs.into_iter().map(|(t, plays)| Track { album: format!("{plays} {}", tr("plays")), ..t }).collect();
+        self.track_state.select((!self.tracks.is_empty()).then_some(0));
+    }
+
+    /// Crossfade, the sleep timer, listening stats and Discord, every tick.
+    fn sound_tick(&mut self) {
+        let Some(a) = &mut self.audio else { return };
+        a.tick();
+        let (playing, pos, dur) = (a.is_playing(), a.position(), a.duration().unwrap_or(0.0));
+        let since = self.listened_at.elapsed();
+        self.listened_at = Instant::now();
+        if playing && let Some(t) = self.now_playing() {
+            rymplayer::stats::listened(t, since.as_millis().min(1000) as u64);
+        }
+        if self.stats_written.elapsed() > Duration::from_secs(60) {
+            self.stats_written = Instant::now();
+            rymplayer::stats::flush();
+        }
+        if self.loading {
+            return;
+        }
+        // Sleep timer: the last 10 seconds fade out, then the music stops.
+        if let Some((minutes, when)) = self.sleep {
+            let left = match minutes {
+                Some(_) => when.saturating_duration_since(Instant::now()).as_secs_f32(),
+                None if dur > 0.0 => dur - pos,
+                None => f32::MAX,
+            };
+            if playing && left < 10.0 {
+                if let Some(a) = &self.audio {
+                    a.set_fade((left / 10.0).clamp(0.0, 1.0));
+                    if left <= 0.25 {
+                        a.pause();
+                        a.set_fade(1.0);
+                    }
+                }
+                if left <= 0.25 {
+                    self.sleep = None;
+                    self.status = tr("Sleep timer: music stopped").into();
+                    return;
+                }
+            }
+        }
+        // Discord: told when the song, play/pause, or the position (a seek) changes.
+        if self.config.discord && !self.config.discord_app_id.is_empty() && let Some(t) = self.now_playing().cloned() {
+            let expected = self.discord_sent.as_ref().map(|(_, was, at, when)| at + if *was { when.elapsed().as_secs_f32() } else { 0.0 });
+            let changed = self.discord_sent.as_ref().is_none_or(|(id, was, ..)| *id != t.video_id || *was != playing) || expected.is_some_and(|e| (e - pos).abs() > 3.0);
+            if changed {
+                self.discord_sent = Some((t.video_id.clone(), playing, pos, Instant::now()));
+                let cover = t.thumb.as_ref().map(|u| api::thumb_sized(u, 512));
+                rymplayer::discord::show(&self.config.discord_app_id, rymplayer::discord::Show::Song { title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
+            }
+        }
+        // Crossfade: the next song starts that many seconds before this one ends.
+        let secs = self.config.crossfade as f32;
+        let now_id = self.now_playing().map(|t| t.video_id.clone());
+        let has_next = self.q.current.is_some_and(|c| c + 1 < self.q.songs.len());
+        let end_of_song_sleep = matches!(self.sleep, Some((None, _)));
+        if secs > 0.0 && playing && dur > secs + 10.0 && pos >= dur - secs && has_next && !end_of_song_sleep && self.crossfade_for != now_id {
+            self.crossfade_for = now_id;
+            self.crossfade_next = true;
+            self.next();
+        }
     }
 
     /// Five songs from the end of a page that goes on: its next part loads (once at a time).

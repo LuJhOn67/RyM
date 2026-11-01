@@ -546,6 +546,9 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("F5/u", "refresh"),
         ("a", "add to playlist"),
         ("o", "song menu"),
+        ("z", "sleep timer"),
+        ("[ ]", "speed and pitch"),
+        ("R", "your recap"),
         ("Q", "up next"),
         ("L", "lyrics source"),
         ("s", "share"),
@@ -603,7 +606,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
 
 /// The key hints' words as the static text the translations are keyed on.
 fn word(v: &str) -> &'static str {
-    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "up next", "lyrics source", "share", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
+    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "sleep timer", "speed and pitch", "your recap", "up next", "lyrics source", "share", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
         .into_iter()
         .find(|w| *w == v)
         .unwrap_or("")

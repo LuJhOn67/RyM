@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::num::NonZero;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -163,11 +164,22 @@ impl Source for FileSource {
     }
 }
 
+fn load(a: &AtomicU32) -> f32 {
+    f32::from_bits(a.load(Ordering::Relaxed))
+}
+
 pub struct Audio {
-    _sink: MixerDeviceSink,
+    sink: MixerDeviceSink,
     player: Player,
     loaded: bool,
     duration: Option<Duration>,
+    /// The volume slider (0 to 1), the speed, and a fade on top (the sleep timer's, 1 = none),
+    /// as f32 bits (set from `&self`).
+    volume: AtomicU32,
+    speed: AtomicU32,
+    fade: AtomicU32,
+    /// Crossfade: the song going out, when it started to, and how long it takes.
+    fading: Option<(Player, std::time::Instant, f32)>,
 }
 
 impl Audio {
@@ -175,37 +187,91 @@ impl Audio {
         let mut sink = DeviceSinkBuilder::open_default_sink()?;
         sink.log_on_drop(false);
         let player = Player::connect_new(sink.mixer());
-        Ok(Audio { _sink: sink, player, loaded: false, duration: None })
+        let f = |x: f32| AtomicU32::new(x.to_bits());
+        Ok(Audio { sink, player, loaded: false, duration: None, volume: f(0.8), speed: f(1.0), fade: f(1.0), fading: None })
     }
 
-    /// `known_secs`: length from YouTube Music, used when the file doesn't say (WebM).
-    /// Plays a song that is still downloading: it starts from what has arrived and waits for the rest.
-    pub fn play_arriving(&mut self, song: &crate::arriving::Arriving, known_secs: Option<f32>) -> Result<()> {
-        let src = FileSource::from_source(Box::new(song.reader()), Some(&song.ext))?;
-        self.duration = src.total_duration().or(known_secs.or(song.seconds).map(Duration::from_secs_f32));
+    /// The song's source with the sound settings (equalizer, normalization...) on it.
+    fn source(song: &crate::stream::Playable) -> Result<(crate::fx::Effects<FileSource>, Option<Duration>)> {
+        let (src, seconds) = match song {
+            crate::stream::Playable::File(path) => (FileSource::open(path)?, None),
+            crate::stream::Playable::Arriving(a) => (FileSource::from_source(Box::new(a.reader()), Some(&a.ext))?, a.seconds),
+        };
+        let d = src.total_duration().or(seconds.map(Duration::from_secs_f32));
+        Ok((crate::fx::Effects::new(src), d))
+    }
+
+    /// A cached file or a song still arriving. `known_secs`: length from YouTube Music, used
+    /// when the file doesn't say (WebM).
+    pub fn play(&mut self, song: &crate::stream::Playable, known_secs: Option<f32>) -> Result<()> {
+        let (src, d) = Self::source(song)?;
+        self.duration = d.or(known_secs.map(Duration::from_secs_f32));
         self.loaded = true;
+        self.fading = None;
         self.player.clear();
+        self.player.set_speed(load(&self.speed));
         self.player.append(src);
         self.player.play();
+        self.apply_volume();
         Ok(())
-    }
-
-    /// A cached file or a song still arriving.
-    pub fn play(&mut self, song: &crate::stream::Playable, known_secs: Option<f32>) -> Result<()> {
-        match song {
-            crate::stream::Playable::File(path) => self.play_file(path, known_secs),
-            crate::stream::Playable::Arriving(a) => self.play_arriving(a, known_secs),
-        }
     }
 
     pub fn play_file(&mut self, path: &Path, known_secs: Option<f32>) -> Result<()> {
-        let src = FileSource::open(path)?;
-        self.duration = src.total_duration().or(known_secs.map(Duration::from_secs_f32));
+        self.play(&crate::stream::Playable::File(path.to_path_buf()), known_secs)
+    }
+
+    pub fn play_arriving(&mut self, song: &crate::arriving::Arriving, known_secs: Option<f32>) -> Result<()> {
+        self.play(&crate::stream::Playable::Arriving(song.clone()), known_secs)
+    }
+
+    /// Starts `song` over `secs` while the playing one fades out (both play at once; see [`tick`](Self::tick)).
+    pub fn crossfade_to(&mut self, song: &crate::stream::Playable, known_secs: Option<f32>, secs: f32) -> Result<()> {
+        if secs <= 0.05 || !self.is_playing() {
+            return self.play(song, known_secs);
+        }
+        let (src, d) = Self::source(song)?;
+        let next = Player::connect_new(self.sink.mixer());
+        next.set_speed(load(&self.speed));
+        next.set_volume(0.0);
+        next.append(src);
+        next.play();
+        let old = std::mem::replace(&mut self.player, next);
+        self.fading = Some((old, std::time::Instant::now(), secs));
+        self.duration = d.or(known_secs.map(Duration::from_secs_f32));
         self.loaded = true;
-        self.player.clear();
-        self.player.append(src);
-        self.player.play();
         Ok(())
+    }
+
+    /// Moves a crossfade along (call it often, from the app's timer). Equal-power curves, so the
+    /// overall loudness holds.
+    pub fn tick(&mut self) {
+        let Some((old, started, secs)) = &self.fading else { return };
+        let t = (started.elapsed().as_secs_f32() / secs).min(1.0);
+        let v = self.level();
+        let a = t * std::f32::consts::FRAC_PI_2;
+        old.set_volume(v * a.cos());
+        self.player.set_volume(v * a.sin());
+        if t >= 1.0 || old.empty() {
+            self.fading = None;
+            self.player.set_volume(v);
+        }
+    }
+
+    /// A crossfade is under way.
+    pub fn crossfading(&self) -> bool {
+        self.fading.is_some()
+    }
+
+    fn level(&self) -> f32 {
+        // Perceptual curve: the slider is linear, loudness is not.
+        let v = load(&self.volume);
+        v * v * load(&self.fade)
+    }
+
+    fn apply_volume(&self) {
+        if self.fading.is_none() {
+            self.player.set_volume(self.level());
+        }
     }
 
     pub fn toggle(&self) {
@@ -213,7 +279,14 @@ impl Audio {
             self.player.play();
         } else {
             self.player.pause();
+            if let Some((old, ..)) = &self.fading {
+                old.pause();
+            }
         }
+    }
+
+    pub fn pause(&self) {
+        self.player.pause();
     }
 
     /// A track is loaded, not paused, and not finished.
@@ -232,6 +305,7 @@ impl Audio {
 
     pub fn stop(&mut self) {
         self.player.clear();
+        self.fading = None;
         self.loaded = false;
         self.duration = None;
     }
@@ -241,8 +315,21 @@ impl Audio {
     }
 
     pub fn set_volume(&self, v: f32) {
-        // Perceptual curve: slider is linear, loudness is not.
-        self.player.set_volume(v * v);
+        self.volume.store(v.to_bits(), Ordering::Relaxed);
+        self.apply_volume();
+    }
+
+    /// A fade on top of the volume (1 = none; the sleep timer goes to 0).
+    pub fn set_fade(&self, f: f32) {
+        self.fade.store(f.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.apply_volume();
+    }
+
+    /// Playback speed (0.5 to 2; it moves pitch with it, the effects' pitch shifter makes up the rest).
+    pub fn set_speed(&self, speed: f32) {
+        let speed = speed.clamp(0.5, 2.0);
+        self.speed.store(speed.to_bits(), Ordering::Relaxed);
+        self.player.set_speed(speed);
     }
 
     pub fn position(&self) -> f32 {

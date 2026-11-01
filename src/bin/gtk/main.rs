@@ -141,6 +141,9 @@ window, .rym { background: @bg@; color: @text@; }
 /* No shadow around the window: on Windows its room is drawn black, a dark frame around the app. */
 window.csd, window.csd:backdrop, window.solid-csd { box-shadow: none; margin: 0; border-radius: 0; outline: none; }
 .avatar { border-radius: 999px; }
+window.overlay-win, .overlay-win { background: rgba(14,14,18,0.72); border-radius: 16px; }
+.overlay-now { color: #ffffff; font-size: 22px; font-weight: 800; }
+.overlay-next { color: rgba(255,255,255,0.6); font-size: 15px; font-weight: 600; }
 button.src { background: @input@; color: @dim@; border: none; box-shadow: none; border-radius: 14px; padding: 2px 12px; min-height: 0; font-size: 12px; font-weight: 700; }
 button.src.on { background: @text@; color: @bg@; }
 button.src:disabled { opacity: 0.35; }
@@ -227,13 +230,28 @@ fn css(theme: usize) -> String {
 fn lyrics_css(bg: (u8, u8, u8)) -> String {
     let [sung, _, next] = rymplayer::colors::lyric_colors(bg);
     let c = |(r, g, b): (u8, u8, u8)| format!("rgb({r},{g},{b})");
-    format!(
+    let mut css = format!(
         ".lyrics {{ background: {}; }} .lyric {{ color: {}; }} .lyric.sung {{ color: {}; }} .lyric.now {{ color: #ffffff; }} .lyrics-note {{ color: {}; font-weight: 600; }}",
         c(bg),
         c(next),
         c(sung),
         c(sung)
-    )
+    );
+    // The cover's color through the player: the progress bar, the play button, and a wash on
+    // the bar, each easing into the next song's.
+    if bg != rymplayer::colors::PLAIN {
+        let accent = rymplayer::colors::mix(bg, (255, 255, 255), 0.35);
+        let wash = rymplayer::colors::mix(bg, (12, 12, 16), 0.82);
+        css.push_str(&format!(
+            " scale.progress highlight {{ background: {a}; transition: background 800ms ease; }} button.play {{ background: {a}; transition: background 800ms ease; }} .bar {{ background: {w}; transition: background 800ms ease; }} .overlay-win {{ background: rgba({r},{g},{b},0.72); }}",
+            a = c(accent),
+            w = c(wash),
+            r = wash.0,
+            g = wash.1,
+            b = wash.2
+        ));
+    }
+    css
 }
 
 fn apply_theme(provider: &CssProvider, theme: usize) {
@@ -258,8 +276,17 @@ enum Page {
     Settings,
     /// Plugin store.
     Plugins,
+    /// "Your recap": listening stats.
+    Recap,
     /// A playlist, album, mix, radio or search results.
     Songs(String),
+}
+
+/// When the sleep timer stops the music.
+#[derive(Clone, Copy, PartialEq)]
+enum Sleep {
+    At(Instant),
+    EndOfSong,
 }
 
 enum Ev {
@@ -335,6 +362,19 @@ struct Widgets {
 }
 
 struct Ui {
+    /// Sleep timer: when it ends (or at the end of the playing song).
+    sleep: Option<Sleep>,
+    /// The next song starts while this one fades out (set for its play_at).
+    crossfade_next: bool,
+    /// The song (request) whose crossfade already started.
+    crossfade_for: u64,
+    /// Listening stats: when time was last added, and last written.
+    listened_at: Instant,
+    stats_written: Instant,
+    /// What Discord was last told: song, playing, position, when.
+    discord_sent: Option<(String, bool, f32, Instant)>,
+    /// The floating lyrics window, and its two lines.
+    overlay: Option<(gtk::Window, Label, Label)>,
     /// Songs started since memory was last cleaned up (every 5 it is).
     songs_since_cleanup: u32,
     volume: f32,
@@ -855,6 +895,7 @@ fn build(app: &Application) {
     let pos = label("0:00", &["dim", "small"]);
     let len = label("0:00", &["dim", "small"]);
     let progress = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.5);
+    progress.add_css_class("progress");
     progress.set_draw_value(false);
     progress.set_hexpand(true);
     let line = gtk::Box::new(Orientation::Horizontal, 8);
@@ -867,6 +908,15 @@ fn build(app: &Application) {
     center.append(&line);
 
     let lyrics_toggle = icon_button("format-justify-left-symbolic", tr("Lyrics"), &["dim"]);
+    let speed_button = gtk::MenuButton::new();
+    speed_button.set_icon_name("media-seek-forward-symbolic");
+    speed_button.set_tooltip_text(Some(tr("Speed and pitch")));
+    speed_button.add_css_class("flat");
+    let sleep_button = gtk::MenuButton::new();
+    sleep_button.set_icon_name("alarm-symbolic");
+    sleep_button.set_tooltip_text(Some(tr("Sleep timer")));
+    sleep_button.add_css_class("flat");
+    let overlay_toggle = icon_button("view-pin-symbolic", tr("Floating lyrics"), &["dim"]);
     let vol_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.set_draw_value(false);
@@ -879,6 +929,9 @@ fn build(app: &Application) {
     right.set_size_request(320, -1);
     right.set_halign(Align::End);
     right.set_valign(Align::Center);
+    right.append(&speed_button);
+    right.append(&sleep_button);
+    right.append(&overlay_toggle);
     right.append(&lyrics_toggle);
     right.append(&vol_icon);
     right.append(&volume);
@@ -903,7 +956,9 @@ fn build(app: &Application) {
     };
     if let Some(a) = &audio {
         a.set_volume(start_volume);
+        a.set_speed(config.speed);
     }
+    rymplayer::fx::set(config.fx());
     let (tx, rx) = mpsc::channel();
     // A few threads are plenty for its background work (one per processor core made ~100 threads).
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).max_blocking_threads(8).enable_all().build().expect("async runtime");
@@ -940,6 +995,13 @@ fn build(app: &Application) {
             len,
         },
         side_closed: false,
+        sleep: None,
+        crossfade_next: false,
+        crossfade_for: 0,
+        listened_at: Instant::now(),
+        stats_written: Instant::now(),
+        discord_sent: None,
+        overlay: None,
         songs_since_cleanup: 0,
         volume: start_volume,
         resume_at: None,
@@ -1059,6 +1121,26 @@ fn build(app: &Application) {
         window.add_controller(keys);
     }
     fill_pills(&ui);
+    speed_button.set_popover(Some(&speed_popover(&ui)));
+    sleep_button.set_popover(Some(&sleep_popover(&ui)));
+    {
+        let ui2 = ui.clone();
+        overlay_toggle.connect_clicked(move |b| {
+            let on = {
+                let mut s = ui2.borrow_mut();
+                s.config.lyrics_overlay = !s.config.lyrics_overlay;
+                s.config.save();
+                s.config.lyrics_overlay
+            };
+            if on { b.remove_css_class("dim") } else { b.add_css_class("dim") }
+            show_overlay(&ui2, on);
+        });
+        if ui.borrow().config.lyrics_overlay {
+            overlay_toggle.remove_css_class("dim");
+            let ui3 = ui.clone();
+            glib::idle_add_local_once(move || show_overlay(&ui3, true));
+        }
+    }
     {
         // Near the bottom of a page that goes on, its next part loads.
         let ui2 = ui.clone();
@@ -1212,6 +1294,10 @@ fn build(app: &Application) {
     {
         let ui = ui.clone();
         window.connect_close_request(move |_| {
+            rymplayer::stats::flush();
+            if let Some((w, ..)) = ui.borrow_mut().overlay.take() {
+                w.destroy();
+            }
             save_session(&ui);
             glib::Propagation::Proceed
         });
@@ -1387,6 +1473,377 @@ fn open_paged(ui: &Shared, title: String, load: impl Future<Output = anyhow::Res
     render(ui);
 }
 
+
+/// The sound settings into the players (effects for every song, speed for the playing one) and
+/// saved.
+fn apply_sound(ui: &Shared) {
+    let s = ui.borrow();
+    rymplayer::fx::set(s.config.fx());
+    if let Some(a) = &s.audio {
+        a.set_speed(s.config.speed);
+    }
+    s.config.save();
+}
+
+fn switch(on: bool, ui: &Shared, set: impl Fn(&mut Config, bool) + 'static) -> gtk::Switch {
+    let w = gtk::Switch::new();
+    w.set_active(on);
+    w.set_valign(Align::Center);
+    let ui = ui.clone();
+    w.connect_active_notify(move |w| {
+        set(&mut ui.borrow_mut().config, w.is_active());
+        apply_sound(&ui);
+    });
+    w
+}
+
+/// Settings > Sound: crossfade, skip silence, equalizer, even loudness; Discord; floating lyrics.
+fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
+    page.append(&label(tr("Sound"), &["shelf"]));
+    let fade = Scale::with_range(Orientation::Horizontal, 0.0, 10.0, 1.0);
+    fade.set_value(config.crossfade as f64);
+    fade.set_digits(0);
+    fade.set_draw_value(true);
+    fade.set_size_request(220, -1);
+    {
+        let ui = ui.clone();
+        fade.connect_value_changed(move |w| {
+            ui.borrow_mut().config.crossfade = w.value().round() as u8;
+            apply_sound(&ui);
+        });
+    }
+    page.append(&setting_row(tr("Crossfade"), tr("Seconds the end of a song and the start of the next play together (0 = off)"), &fade));
+    page.append(&setting_row(tr("Skip silence"), tr("A quiet start is skipped; a long quiet end finishes the song"), &switch(config.skip_silence, ui, |c, on| c.skip_silence = on)));
+    page.append(&setting_row(tr("Even loudness"), tr("Every song at about the same loudness, without sudden loud parts"), &switch(config.normalize, ui, |c, on| c.normalize = on)));
+
+    let names: Vec<&str> = rymplayer::fx::PRESETS.iter().map(|p| tr(p.0)).collect();
+    let preset = gtk::DropDown::from_strings(&names);
+    preset.set_selected(config.eq_preset as u32);
+    let bands = gtk::Box::new(Orientation::Horizontal, 14);
+    let mut sliders = Vec::new();
+    for (i, hz) in rymplayer::fx::BANDS.iter().enumerate() {
+        let col = gtk::Box::new(Orientation::Vertical, 4);
+        let sl = Scale::with_range(Orientation::Vertical, -12.0, 12.0, 0.5);
+        sl.set_inverted(true);
+        sl.set_size_request(-1, 130);
+        sl.set_draw_value(false);
+        sl.set_value(config.fx().eq[i] as f64);
+        col.append(&sl);
+        col.append(&label(&if *hz >= 1000.0 { format!("{}k", hz / 1000.0) } else { format!("{hz}") }, &["dim", "small"]));
+        bands.append(&col);
+        sliders.push(sl);
+    }
+    {
+        let (ui, sliders) = (ui.clone(), sliders.clone());
+        preset.connect_selected_notify(move |d| {
+            let gains = {
+                let mut s = ui.borrow_mut();
+                s.config.eq_preset = d.selected() as usize;
+                s.config.fx().eq
+            };
+            apply_sound(&ui);
+            // The sliders show the preset (moving one makes it "Custom").
+            for (sl, g) in sliders.iter().zip(gains) {
+                sl.set_value(g as f64);
+            }
+        });
+    }
+    for (i, sl) in sliders.iter().enumerate() {
+        let (ui, preset) = (ui.clone(), preset.clone());
+        sl.connect_change_value(move |_, _, v| {
+            let custom = rymplayer::fx::PRESETS.len() - 1;
+            {
+                let mut s = ui.borrow_mut();
+                if s.config.eq_preset != custom {
+                    s.config.eq_custom = s.config.fx().eq;
+                }
+                s.config.eq_custom[i] = v.clamp(-12.0, 12.0) as f32;
+                s.config.eq_preset = custom;
+            }
+            if preset.selected() as usize != custom {
+                preset.set_selected(custom as u32);
+            }
+            apply_sound(&ui);
+            glib::Propagation::Proceed
+        });
+    }
+    page.append(&setting_row(tr("Equalizer"), tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own (move a band)"), &preset));
+    page.append(&bands);
+
+    page.append(&label("Discord", &["shelf"]));
+    let app_id = gtk::Entry::new();
+    app_id.set_text(&config.discord_app_id);
+    app_id.set_placeholder_text(Some(tr("Application ID")));
+    app_id.set_width_chars(22);
+    {
+        let ui = ui.clone();
+        app_id.connect_changed(move |e| {
+            let mut s = ui.borrow_mut();
+            s.config.discord_app_id = e.text().trim().to_string();
+            s.discord_sent = None;
+            s.config.save();
+        });
+    }
+    let discord = gtk::Switch::new();
+    discord.set_active(config.discord);
+    discord.set_valign(Align::Center);
+    {
+        let ui = ui.clone();
+        discord.connect_active_notify(move |w| {
+            let mut s = ui.borrow_mut();
+            s.config.discord = w.is_active();
+            s.discord_sent = None;
+            s.config.save();
+            if !s.config.discord {
+                rymplayer::discord::show("", rymplayer::discord::Show::Off);
+            }
+        });
+    }
+    page.append(&setting_row(tr("Show on Discord"), tr("The song you're playing on your Discord profile (Discord must be running)"), &discord));
+    page.append(&setting_row(tr("Discord application ID"), tr("Make an application at discord.com/developers and paste its ID"), &app_id));
+
+    page.append(&label(tr("Floating lyrics"), &["shelf"]));
+    let through = switch(config.overlay_click_through, ui, |c, on| c.overlay_click_through = on);
+    {
+        let ui = ui.clone();
+        through.connect_active_notify(move |_| {
+            let on = ui.borrow().config.lyrics_overlay;
+            if on {
+                show_overlay(&ui, false);
+                show_overlay(&ui, true);
+            }
+        });
+    }
+    page.append(&setting_row(tr("Clicks go through"), tr("The floating lyrics can't be dragged then, and never get in the way"), &through));
+}
+
+/// The bar's speed and pitch: two sliders and the quick picks (Normal, Nightcore, Slowed).
+fn speed_popover(ui: &Shared) -> gtk::Popover {
+    let pop = gtk::Popover::new();
+    let col = gtk::Box::new(Orientation::Vertical, 8);
+    col.set_margin_top(12);
+    col.set_margin_bottom(12);
+    col.set_margin_start(14);
+    col.set_margin_end(14);
+    let config = ui.borrow().config.clone();
+    let slider = |name: &str, v: f32| {
+        col.append(&label(name, &["dim", "small"]));
+        let sl = Scale::with_range(Orientation::Horizontal, 0.5, 2.0, 0.05);
+        sl.set_value(v as f64);
+        sl.set_digits(2);
+        sl.set_draw_value(true);
+        sl.set_size_request(240, -1);
+        col.append(&sl);
+        sl
+    };
+    let speed = slider(tr("Speed"), config.speed);
+    let pitch = slider(tr("Pitch"), config.pitch);
+    {
+        let ui = ui.clone();
+        speed.connect_value_changed(move |w| {
+            ui.borrow_mut().config.speed = w.value() as f32;
+            apply_sound(&ui);
+        });
+    }
+    {
+        let ui = ui.clone();
+        pitch.connect_value_changed(move |w| {
+            ui.borrow_mut().config.pitch = w.value() as f32;
+            apply_sound(&ui);
+        });
+    }
+    let modes = gtk::Box::new(Orientation::Horizontal, 6);
+    for (name, sp, pi, _) in rymplayer::fx::MODES {
+        let b = Button::with_label(tr(name));
+        b.add_css_class("ghost");
+        let (ui, speed, pitch) = (ui.clone(), speed.clone(), pitch.clone());
+        b.connect_clicked(move |_| {
+            ui.borrow_mut().config.set_mode(name);
+            speed.set_value(sp as f64);
+            pitch.set_value(pi as f64);
+            apply_sound(&ui);
+        });
+        modes.append(&b);
+    }
+    col.append(&modes);
+    pop.set_child(Some(&col));
+    pop
+}
+
+/// The bar's sleep timer: 15, 30, 45, 60 minutes or the end of the song; the last 10 seconds fade out.
+fn sleep_popover(ui: &Shared) -> gtk::Popover {
+    let pop = gtk::Popover::new();
+    let col = gtk::Box::new(Orientation::Vertical, 2);
+    col.set_margin_top(8);
+    col.set_margin_bottom(8);
+    let mut choices: Vec<String> = [15, 30, 45, 60].iter().map(|m| format!("{m} {}", tr("minutes"))).collect();
+    choices.push(tr("End of this song").to_string());
+    choices.push(tr("Off").to_string());
+    for (i, text) in choices.iter().enumerate() {
+        let b = Button::with_label(text);
+        b.add_css_class("flat-row");
+        let (ui, pop2) = (ui.clone(), pop.clone());
+        b.connect_clicked(move |_| {
+            pop2.popdown();
+            let sleep = match i {
+                0..=3 => Some(Sleep::At(Instant::now() + Duration::from_secs(15 * 60 * (i as u64 + 1)))),
+                4 => Some(Sleep::EndOfSong),
+                _ => None,
+            };
+            ui.borrow_mut().sleep = sleep;
+            if let Some(a) = &ui.borrow().audio {
+                a.set_fade(1.0);
+            }
+            toast(&ui, match sleep {
+                Some(Sleep::At(_)) => tr("Sleep timer set"),
+                Some(Sleep::EndOfSong) => tr("The music stops after this song"),
+                None => tr("Sleep timer off"),
+            });
+        });
+        col.append(&b);
+    }
+    pop.set_child(Some(&col));
+    pop
+}
+
+/// "Your recap": hours listened (in all and this month), top songs, top artists this month.
+fn recap_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
+    let page = page_box();
+    page.append(&label(tr("Your recap"), &["heading"]));
+    let r = rymplayer::stats::recap();
+    let numbers = gtk::Box::new(Orientation::Horizontal, 40);
+    for (n, what) in [(r.hours_month, tr("hours this month")), (r.hours_total, tr("hours in all"))] {
+        let col = gtk::Box::new(Orientation::Vertical, 2);
+        col.append(&label(&format!("{n:.1}"), &["heading"]));
+        col.append(&label(what, &["dim"]));
+        numbers.append(&col);
+    }
+    page.append(&numbers);
+    page.append(&label(tr("Top songs"), &["shelf"]));
+    if r.top_songs.is_empty() {
+        page.append(&note(tr("Play some songs and they'll show here")));
+    }
+    for (t, plays) in &r.top_songs {
+        let row = gtk::Box::new(Orientation::Horizontal, 12);
+        row.append(&cover(&ui.borrow(), t.thumb.as_ref(), ROW_PX, 42, "cover", wants));
+        let names = gtk::Box::new(Orientation::Vertical, 2);
+        names.set_hexpand(true);
+        names.append(&label(&t.title, &["title"]));
+        names.append(&label(&t.artist, &["dim", "small"]));
+        row.append(&names);
+        row.append(&label(&format!("{plays} {}", tr("plays")), &["dim", "small"]));
+        let b = Button::new();
+        b.add_css_class("flat-row");
+        b.set_child(Some(&row));
+        let (ui2, track) = (ui.clone(), t.clone());
+        b.connect_clicked(move |_| play_with_radio(&ui2, track.clone()));
+        page.append(&b);
+    }
+    page.append(&label(tr("Top artists this month"), &["shelf"]));
+    for (artist, hours) in &r.top_artists {
+        let row = gtk::Box::new(Orientation::Horizontal, 12);
+        let name = label(artist, &["title"]);
+        name.set_hexpand(true);
+        row.append(&name);
+        row.append(&label(&format!("{:.0} {}", hours * 60.0, tr("minutes")), &["dim", "small"]));
+        page.append(&row);
+    }
+    page.upcast()
+}
+
+/// The floating lyrics: a small borderless window above every other one (games too, when
+/// they're windowed) with the sung line and the next. Dragged with the mouse, or set so clicks
+/// go through it.
+fn show_overlay(ui: &Shared, on: bool) {
+    if !on {
+        if let Some((w, ..)) = ui.borrow_mut().overlay.take() {
+            w.destroy();
+        }
+        return;
+    }
+    if ui.borrow().overlay.is_some() {
+        return;
+    }
+    let win = gtk::Window::new();
+    win.set_title(Some(OVERLAY_TITLE));
+    win.set_decorated(false);
+    win.set_default_size(760, 96);
+    win.set_resizable(false);
+    win.add_css_class("rym");
+    win.add_css_class("overlay-win");
+    let col = gtk::Box::new(Orientation::Vertical, 2);
+    col.set_margin_top(10);
+    col.set_margin_bottom(10);
+    col.set_margin_start(18);
+    col.set_margin_end(18);
+    let now = label("♪", &["overlay-now"]);
+    let next = label("", &["overlay-next"]);
+    now.set_wrap(true);
+    now.set_justify(gtk::Justification::Center);
+    now.set_halign(Align::Center);
+    next.set_halign(Align::Center);
+    col.append(&now);
+    col.append(&next);
+    win.set_child(Some(&col));
+    let through = ui.borrow().config.overlay_click_through;
+    if !through {
+        // Dragged anywhere with the left button.
+        let press = gtk::GestureClick::new();
+        let w = win.clone();
+        press.connect_pressed(move |g, _, x, y| {
+            if let (Some(surface), Some(device)) = (w.surface(), g.device())
+                && let Ok(top) = surface.downcast::<gdk::Toplevel>()
+            {
+                top.begin_move(&device, g.current_button() as i32, x, y, g.current_event_time());
+            }
+        });
+        win.add_controller(press);
+    }
+    win.present();
+    // Above everything, and (if asked) not in the way of clicks.
+    glib::timeout_add_local_once(Duration::from_millis(200), move || {
+        #[cfg(windows)]
+        overlay_on_top(through);
+    });
+    if through && let Some(surface) = win.surface() {
+        surface.set_input_region(Some(&gtk::cairo::Region::create()));
+    }
+    ui.borrow_mut().overlay = Some((win, now, next));
+}
+
+const OVERLAY_TITLE: &str = "RyM floating lyrics";
+
+/// Windows: the floating lyrics window above every other (and clicks through it, when asked).
+#[cfg(windows)]
+fn overlay_on_top(click_through: bool) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+        fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+        fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
+    }
+    let title: Vec<u16> = OVERLAY_TITLE.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: plain Win32 calls with a NUL-terminated title; a missing window gives 0 and is skipped.
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+        if hwnd == 0 {
+            return;
+        }
+        const HWND_TOPMOST: isize = -1;
+        const SWP_NOMOVE: u32 = 0x2;
+        const SWP_NOSIZE: u32 = 0x1;
+        const SWP_NOACTIVATE: u32 = 0x10;
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        // Not in the taskbar or Alt+Tab (a tool window).
+        const GWL_EXSTYLE: i32 = -20;
+        const WS_EX_TOOLWINDOW: isize = 0x80;
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let _ = click_through;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW);
+    }
+}
+
 /// The open page's next part, when it goes on and nothing is loading already.
 fn load_more(ui: &Shared) {
     let Some(api) = api_of(ui) else { return };
@@ -1555,6 +2012,7 @@ fn page_name(p: &Page) -> &'static str {
         Page::History => "history",
         Page::Settings => "settings",
         Page::Plugins => "plugins",
+        Page::Recap => "recap",
         Page::Songs(_) => "songs",
     }
 }
@@ -1600,6 +2058,7 @@ fn render_page(ui: &Shared) {
         Page::Library => library_page(ui, &mut wants),
         Page::Settings => settings_page(ui),
         Page::Plugins => plugins_page(ui),
+        Page::Recap => recap_page(ui, &mut wants),
     };
     ui.borrow().w.content.append(&body);
     want_covers(ui, wants);
@@ -1952,6 +2411,14 @@ fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
         let s = ui.borrow();
         (s.playlists.clone(), s.liked.len(), s.api.as_ref().is_some_and(Api::logged_in))
     };
+    let recap = Button::with_label(tr("Your recap: listening stats"));
+    recap.add_css_class("ghost");
+    recap.set_halign(Align::Start);
+    {
+        let ui = ui.clone();
+        recap.connect_clicked(move |_| go(&ui, Page::Recap));
+    }
+    page.append(&recap);
     if !signed {
         page.append(&note(tr("Sign in (Settings) to see your playlists")));
         return page.upcast();
@@ -2084,6 +2551,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Download quality"), tr("Songs saved with right-click > Download go to Music/RymPlayer"), &quality));
+    sound_settings(ui, &page, &config);
 
     let steps = ["1", "2", "4", "6", "8", "10", "12", "16"];
     let connections = gtk::DropDown::from_strings(&steps);
@@ -2926,7 +3394,10 @@ fn play_at(ui: &Shared, i: usize) {
         s.loading = true;
         s.lyrics = None;
         s.lyric_line = None;
-        if let Some(a) = &mut s.audio {
+        // A crossfade keeps the old song playing while the new one loads.
+        if !s.crossfade_next
+            && let Some(a) = &mut s.audio
+        {
             a.stop();
         }
         s.w.bar_title.set_text(&track.title);
@@ -3169,7 +3640,72 @@ fn tick(ui: &Shared) {
     else {
         return;
     };
+    if let Some(a) = &mut s.audio {
+        a.tick();
+    }
+    // Listening stats: time while playing, written once a minute.
+    let since = s.listened_at.elapsed();
+    s.listened_at = Instant::now();
+    if playing && let Some(t) = s.q.now() {
+        rymplayer::stats::listened(t, since.as_millis().min(1000) as u64);
+    }
+    if s.stats_written.elapsed() > Duration::from_secs(60) {
+        s.stats_written = Instant::now();
+        rymplayer::stats::flush();
+    }
     if s.loading {
+        return;
+    }
+    // Sleep timer: the last 10 seconds fade out, then the music stops.
+    if let Some(sleep) = s.sleep {
+        let left = match sleep {
+            Sleep::At(when) => when.saturating_duration_since(Instant::now()).as_secs_f32(),
+            Sleep::EndOfSong if dur > 0.0 => dur - pos,
+            Sleep::EndOfSong => f32::MAX,
+        };
+        if playing && left < 10.0 {
+            let fade = (left / 10.0).clamp(0.0, 1.0);
+            if let Some(a) = &mut s.audio {
+                a.set_fade(fade);
+                if left <= 0.25 {
+                    a.pause();
+                    a.set_fade(1.0);
+                }
+            }
+            if left <= 0.25 {
+                s.sleep = None;
+                drop(s);
+                toast(ui, tr("Sleep timer: music stopped"));
+                return;
+            }
+        }
+    }
+    // Discord: told when the song, play/pause, or the position (a seek) changes.
+    if s.config.discord && !s.config.discord_app_id.is_empty() && let Some(t) = s.q.now().cloned() {
+        let expected = s.discord_sent.as_ref().map(|(_, was_playing, at, when)| at + if *was_playing { when.elapsed().as_secs_f32() } else { 0.0 });
+        let changed = s.discord_sent.as_ref().is_none_or(|(id, was_playing, ..)| *id != t.video_id || *was_playing != playing)
+            || expected.is_some_and(|e| (e - pos).abs() > 3.0);
+        if changed && loaded {
+            s.discord_sent = Some((t.video_id.clone(), playing, pos, Instant::now()));
+            let cover = t.thumb.as_ref().map(|u| rymplayer::api::thumb_sized(u, 512));
+            rymplayer::discord::show(&s.config.discord_app_id, rymplayer::discord::Show::Song { title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
+        }
+    }
+    // Crossfade: the next song starts that many seconds before this one ends.
+    let fade_secs = s.config.crossfade as f32;
+    let next_index = s.q.current.map(|c| c + 1).filter(|n| *n < s.q.songs.len());
+    if fade_secs > 0.0
+        && playing
+        && dur > fade_secs + 10.0
+        && pos >= dur - fade_secs
+        && s.crossfade_for != s.request_id
+        && s.sleep != Some(Sleep::EndOfSong)
+        && let Some(n) = next_index
+    {
+        s.crossfade_for = s.request_id;
+        s.crossfade_next = true;
+        drop(s);
+        play_at(ui, n);
         return;
     }
     // Widgets are touched only when what they show changed: each change makes GTK lay out again.
@@ -3229,6 +3765,13 @@ fn tick(ui: &Shared) {
             }
         }
         s.lyric_line = line;
+        if let Some((_, now, next)) = &s.overlay
+            && let Some(l) = &s.lyrics
+            && !l.synced.is_empty()
+        {
+            now.set_text(line.and_then(|i| l.synced.get(i)).map_or("♪", |x| if x.1.is_empty() { "♪" } else { x.1.as_str() }));
+            next.set_text(line.map_or(0, |i| i + 1).min(l.synced.len()).checked_sub(0).and_then(|i| l.synced.get(i)).map_or("", |x| x.1.as_str()));
+        }
     }
     if loaded && finished && s.q.current.is_some() && s.ended_for != s.request_id {
         s.ended_for = s.request_id;
@@ -3516,7 +4059,10 @@ fn poll_events(ui: &Shared) {
                 let Some(t) = s.q.current.and_then(|i| s.q.songs.get(i).cloned()) else { continue };
                 let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
                 let resume = s.resume_at.take().filter(|(id, at)| *id == t.video_id && *at > 1.0).map(|(_, at)| at);
+                let crossfade = std::mem::take(&mut s.crossfade_next);
+                let secs = s.config.crossfade as f32;
                 let started = match (result, &mut s.audio) {
+                    (Ok(song), Some(a)) if crossfade => a.crossfade_to(&song, known, secs).map_err(|e| e.to_string()),
                     (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()).map(|()| {
                         if let Some(at) = resume {
                             a.seek(at);
