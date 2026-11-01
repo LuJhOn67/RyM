@@ -5,7 +5,7 @@
 //! as the iced app (shared `gui_theme` setting).
 //! Build: `cargo build --release --features gtk-ui --bin RymPlayer-GTK`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
@@ -1163,7 +1163,67 @@ fn build(app: &Application) {
         });
     }
     render(&ui);
+    #[cfg(windows)]
+    redraw_after_display_changes(&ui.borrow().w.window);
     window.present();
+}
+
+/// Windows: when the screen's resolution changes (a game running in another resolution, say),
+/// the window can lose the surface it draws on through the graphics card and show black from
+/// then on. Display changes are noted, and when the window is used again its surface is made anew.
+#[cfg(windows)]
+fn redraw_after_display_changes(window: &ApplicationWindow) {
+    let Some(display) = gdk::Display::default() else { return };
+    let changed = Rc::new(Cell::new(false));
+    fn watch(m: &gdk::Monitor, changed: &Rc<Cell<bool>>) {
+        let c = changed.clone();
+        m.connect_geometry_notify(move |m| {
+            let g = m.geometry();
+            log(&format!("display changed: {}x{}", g.width(), g.height()));
+            c.set(true);
+        });
+        let c = changed.clone();
+        m.connect_scale_factor_notify(move |_| c.set(true));
+    }
+    let monitors = display.monitors();
+    for i in 0..monitors.n_items() {
+        if let Some(m) = monitors.item(i).and_downcast::<gdk::Monitor>() {
+            watch(&m, &changed);
+        }
+    }
+    {
+        let changed = changed.clone();
+        monitors.connect_items_changed(move |list, at, _, added| {
+            log("display changed: screens added or removed");
+            changed.set(true);
+            for i in at..at + added {
+                if let Some(m) = list.item(i).and_downcast::<gdk::Monitor>() {
+                    watch(&m, &changed);
+                }
+            }
+        });
+    }
+    // Not while a game holds the screen: only once the window is in use again.
+    window.connect_is_active_notify(move |w| {
+        if w.is_active() && changed.replace(false) {
+            let w = w.clone();
+            glib::idle_add_local_once(move || remake_surface(&w));
+        }
+    });
+}
+
+/// Throws the window's drawing surface away and makes a new one (same size, same state).
+#[cfg(windows)]
+fn remake_surface(w: &ApplicationWindow) {
+    log("display changed: making the window's drawing surface anew");
+    let (width, height, maximized) = (w.width(), w.height(), w.is_maximized());
+    w.set_visible(false);
+    WidgetExt::unrealize(w);
+    w.set_default_size(width, height);
+    if maximized {
+        w.maximize();
+    }
+    w.present();
 }
 
 /// The last session's queue, with its song in the bar, paused where it was left: play goes on from there.
@@ -2437,15 +2497,23 @@ fn render_queue(ui: &Shared) {
         }
         row.add_controller(click);
         // Holding 2 s lifts the row ("pops out"); letting go puts it down ("pops in").
+        // GTK allows at most twice the system's long press (about 1 s): the second one is waited
+        // for here, while the row is still held.
         let hold = gtk::GestureLongPress::new();
-        hold.set_delay_factor(4.0);
+        hold.set_delay_factor(2.0);
         {
             let (ui, row) = (ui.clone(), row.clone());
-            hold.connect_pressed(move |_, _, _| {
-                let mut s = ui.borrow_mut();
-                s.armed = Some(i);
-                s.held = true;
-                row.add_css_class("lifted");
+            hold.connect_pressed(move |g, _, _| {
+                let (ui, row, g) = (ui.clone(), row.clone(), g.downgrade());
+                glib::timeout_add_local_once(Duration::from_millis(1000), move || {
+                    if !g.upgrade().is_some_and(|g| g.is_active()) {
+                        return;
+                    }
+                    let mut s = ui.borrow_mut();
+                    s.armed = Some(i);
+                    s.held = true;
+                    row.add_css_class("lifted");
+                });
             });
         }
         {
