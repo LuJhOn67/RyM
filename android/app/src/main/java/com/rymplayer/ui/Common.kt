@@ -128,17 +128,22 @@ private fun Placeholder(size: Dp, shape: RoundedCornerShape) {
 @Composable
 fun coverColor(url: String?): Color {
     val context = LocalContext.current
-    var target by remember { mutableStateOf(Color(0xFF2A2A30)) }
+    var target by remember { mutableStateOf(url?.let { CoverColors.get(it) }?.let { Color(it) } ?: Color(0xFF2A2A30)) }
     LaunchedEffect(url) {
         if (url == null) return@LaunchedEffect
+        CoverColors.get(url)?.let { target = Color(it); return@LaunchedEffect }
         val req = ImageRequest.Builder(context).data(thumbSized(url, 96)).allowHardware(false).build()
         val bmp = ((context.imageLoader.execute(req) as? SuccessResult)?.drawable as? BitmapDrawable)?.bitmap ?: return@LaunchedEffect
         val p = Palette.from(bmp).generate()
         val rgb = (p.vibrantSwatch ?: p.mutedSwatch ?: p.dominantSwatch)?.rgb ?: return@LaunchedEffect
+        CoverColors.put(url, rgb)
         target = Color(rgb)
     }
     return animateColorAsState(target, tween(900), label = "cover").value
 }
+
+/** Covers' colours already worked out (Palette runs once per cover). */
+private val CoverColors = android.util.LruCache<String, Int>(128)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

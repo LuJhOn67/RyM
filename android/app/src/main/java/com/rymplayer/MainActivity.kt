@@ -117,7 +117,7 @@ fun RymApp(vm: AppViewModel) {
 
 @Composable
 private fun Main(vm: AppViewModel) {
-    BackHandler(vm.video != null || vm.storeOpen || vm.settingsOpen || vm.playerOpen || vm.stack.isNotEmpty() || vm.tab != Screen.Home) { vm.back() }
+    BackHandler(vm.video != null || vm.recapOpen || vm.storeOpen || vm.settingsOpen || vm.playerOpen || vm.stack.isNotEmpty() || vm.tab != Screen.Home) { vm.back() }
     val tint = coverColor(vm.player.current?.thumb)
     Box(Modifier.fillMaxSize()) {
         Scaffold(
@@ -165,6 +165,10 @@ private fun Main(vm: AppViewModel) {
         AnimatedVisibility(vm.storeOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
             com.rymplayer.ui.PluginStorePage(vm)
         }
+        AnimatedVisibility(vm.recapOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
+            com.rymplayer.ui.RecapPage(vm)
+        }
+        if (vm.lyricsPill && !vm.playerOpen) com.rymplayer.ui.LyricsPill(vm)
         vm.video?.let { com.rymplayer.ui.VideoPage(vm, it) }
         vm.update?.let { com.rymplayer.ui.UpdateDialog(vm, it) }
         if (vm.linkOpen) com.rymplayer.ui.LinkDialog(vm)

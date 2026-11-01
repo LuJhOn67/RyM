@@ -28,6 +28,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
@@ -218,6 +222,11 @@ fun LibraryPage(vm: AppViewModel) {
             }
         }
         item {
+            LibraryRow(tr("Your recap"), tr("Hours listened, top songs and artists"), Brush.linearGradient(listOf(Color(0xFFFF8A00), Color(0xFFE52E71))), Icons.Default.Insights) {
+                vm.recapOpen = true
+            }
+        }
+        item {
             LibraryRow(tr("Downloads"), tr("Saved on this phone, play without internet"), Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
                 vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", tr("Downloads")))
             }
@@ -353,3 +362,38 @@ private fun DownloadAll(vm: AppViewModel) {
 
 @Composable
 fun SectionLabel(text: String) = Text(text.uppercase(), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+/** "Your recap": hours listened (this month and in all), the most played songs, the top artists this month. */
+@Composable
+fun RecapPage(vm: AppViewModel) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val r = remember { com.rymplayer.data.Recent.recap(ctx) }
+    LazyColumn(Modifier.fillMaxSize().background(Color(0xFF0B0B0D)).statusBarsPadding(), contentPadding = PaddingValues(bottom = 32.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
+                IconButton({ vm.recapOpen = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }
+                Text(tr("Your recap"), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        item {
+            Row(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
+                for ((n, what) in listOf(r.hoursMonth to tr("hours this month"), r.hoursTotal to tr("hours in all"))) {
+                    Column {
+                        Text("%.1f".format(n), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                        Text(what, color = Dim)
+                    }
+                }
+            }
+        }
+        item { Text(tr("Top songs"), fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 18.dp, bottom = 6.dp)) }
+        if (r.topSongs.isEmpty()) item { Text(tr("Play some songs and they'll show here"), color = Dim, modifier = Modifier.padding(16.dp)) }
+        items(r.topSongs) { (t, plays) -> SongRow(vm, t.copy(album = "$plays ${tr("plays")}"), false, { vm.playRadio(t) }) }
+        item { Text(tr("Top artists this month"), fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 18.dp, bottom = 6.dp)) }
+        items(r.topArtists) { (artist, hours) ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+                Text(artist, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text("${(hours * 60).toInt()} ${tr("minutes")}", color = Dim)
+            }
+        }
+    }
+}

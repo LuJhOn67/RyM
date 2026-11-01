@@ -35,4 +35,52 @@ object Recent {
             .sortedWith(compareByDescending<Track> { p.getInt("n:${it.videoId}", 0) }.thenByDescending { p.getLong("t:${it.videoId}", 0L) })
             .take(n)
     }
+
+    // ------------------------------------------------------------ listening stats
+
+    /** Time listened since the last write: artist -> ms (written once a minute, not every second). */
+    private val pending = HashMap<String, Long>()
+
+    private fun stats(ctx: Context) = ctx.getSharedPreferences("stats", Context.MODE_PRIVATE)
+
+    fun month(now: Long = System.currentTimeMillis()): String =
+        java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date(now))
+
+    @Synchronized
+    fun listened(t: Track, ms: Long) {
+        if (ms <= 0 || ms > 6 * 60 * 60 * 1000L) return
+        val artist = t.artist.split(',', '&').first().trim()
+        pending[artist] = (pending[artist] ?: 0L) + ms
+    }
+
+    @Synchronized
+    fun flushListening(ctx: Context) {
+        if (pending.isEmpty()) return
+        val p = stats(ctx)
+        val m = month()
+        val edit = p.edit()
+        var total = p.getLong("total", 0L)
+        var monthMs = p.getLong("m:$m", 0L)
+        for ((artist, ms) in pending) {
+            total += ms
+            monthMs += ms
+            if (artist.isNotEmpty()) edit.putLong("a:$m:$artist", p.getLong("a:$m:$artist", 0L) + ms)
+        }
+        edit.putLong("total", total).putLong("m:$m", monthMs).apply()
+        pending.clear()
+    }
+
+    /** "Your recap": hours this month and in all, the most played songs (with plays), the top artists this month (with hours). */
+    data class Recap(val hoursMonth: Float, val hoursTotal: Float, val topSongs: List<Pair<Track, Int>>, val topArtists: List<Pair<String, Float>>)
+
+    fun recap(ctx: Context): Recap {
+        flushListening(ctx)
+        val p = stats(ctx)
+        val m = month()
+        val counts = prefs(ctx)
+        val songs = tracks(ctx).map { it to counts.getInt("n:${it.videoId}", 0) }.filter { it.second > 0 }.sortedByDescending { it.second }.take(10)
+        val prefix = "a:$m:"
+        val artists = p.all.filterKeys { it.startsWith(prefix) }.map { (k, v) -> k.removePrefix(prefix) to ((v as? Long ?: 0L) / 3_600_000f) }.sortedByDescending { it.second }.take(10)
+        return Recap(p.getLong("m:$m", 0L) / 3_600_000f, p.getLong("total", 0L) / 3_600_000f, songs, artists)
+    }
 }

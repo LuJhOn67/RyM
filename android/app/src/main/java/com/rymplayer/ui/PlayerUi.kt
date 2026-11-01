@@ -2,10 +2,15 @@ package com.rymplayer.ui
 
 import com.rymplayer.tr
 import androidx.compose.animation.AnimatedContent
+import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -161,7 +166,15 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
             IconButton({ vm.playerOpen = false }) { Icon(Icons.Default.KeyboardArrowDown, tr("Close"), tint = Color.White, modifier = Modifier.size(30.dp)) }
             Text(tr("Now playing"), Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.8f))
             val context = LocalContext.current
+            var sheet by remember { mutableStateOf<String?>(null) }
+            IconButton({ sheet = "speed" }) { Icon(Icons.Default.Speed, tr("Speed and pitch"), tint = Color.White) }
+            IconButton({ sheet = "sleep" }) { Icon(Icons.Default.Bedtime, tr("Sleep timer"), tint = if (vm.sound.sleepAt != 0L) MaterialTheme.colorScheme.primary else Color.White) }
+            IconButton({ vm.toggleLyricsPill() }) { Icon(Icons.Default.Subtitles, tr("Floating lyrics"), tint = if (vm.lyricsPill) MaterialTheme.colorScheme.primary else Color.White) }
             IconButton({ shareSong(context, t) }) { Icon(Icons.Default.Share, tr("Share"), tint = Color.White) }
+            when (sheet) {
+                "speed" -> SpeedSheet(vm) { sheet = null }
+                "sleep" -> SleepSheet(vm) { sheet = null }
+            }
             IconButton({ vm.player.current?.let { vm.menu = com.rymplayer.MenuFor(it, vm.player.index) } }) {
                 Icon(Icons.Default.MoreVert, tr("More"), tint = Color.White)
             }
@@ -203,7 +216,8 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 onValueChange = { dragging = it },
                 onValueChangeFinished = { dragging?.let(p::seekTo); dragging = null },
                 valueRange = 0f..dur.coerceAtLeast(1f),
-                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.2f)),
+                // The cover's color on the bar (it eases into the next song's).
+                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = lerp(tint, Color.White, 0.45f), inactiveTrackColor = Color.White.copy(alpha = 0.2f)),
             )
             Row {
                 Text(fmtTime(dragging ?: p.position), color = Dim, fontSize = 12.sp)
@@ -281,7 +295,7 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
         }
         return
     }
-    val cur = Lrclib.currentLine(l.synced, vm.player.position)
+    val cur = vm.lyricLine
     var viewport by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(cur) {
         if (cur != null) state.animateScrollToItem(cur, -(viewport / 3).toInt())
@@ -509,5 +523,74 @@ private fun QueueView(vm: AppViewModel) {
                 }
             }
         }
+    }
+}
+
+/** Speed and pitch: two sliders and the quick picks (Normal, Nightcore, Slowed). */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SpeedSheet(vm: AppViewModel, onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp)) {
+            Text(tr("Speed and pitch"), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            Text("${tr("Speed")}: ${"%.2f".format(vm.sound.speed)}x", color = Dim)
+            Slider(vm.sound.speed, { vm.changeSound(vm.sound.copy(speed = (it * 20).roundToInt() / 20f)) }, valueRange = 0.5f..2f)
+            Text("${tr("Pitch")}: ${"%.2f".format(vm.sound.pitch)}", color = Dim)
+            Slider(vm.sound.pitch, { vm.changeSound(vm.sound.copy(pitch = (it * 20).roundToInt() / 20f)) }, valueRange = 0.5f..2f)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (m in com.rymplayer.playback.Sound.MODES) {
+                    androidx.compose.material3.FilterChip(
+                        vm.sound.modeName == m.name,
+                        { vm.changeSound(vm.sound.copy(speed = m.speed, pitch = m.pitch, reverb = m.reverb)) },
+                        { Text(tr(m.name)) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** The sleep timer: 15, 30, 45, 60 minutes, the end of the song, or off; the last 10 seconds fade out. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepSheet(vm: AppViewModel, onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Text(tr("Sleep timer"), fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+            val choices = listOf(15, 30, 45, 60).map { "$it ${tr("minutes")}" to it as Int? } + listOf(tr("End of this song") to null, tr("Off") to 0)
+            for ((text, minutes) in choices) {
+                Text(text, fontSize = 16.sp, modifier = Modifier.fillMaxWidth().clickable { vm.setSleep(minutes); onDismiss() }.padding(horizontal = 22.dp, vertical = 14.dp))
+            }
+        }
+    }
+}
+
+/**
+ * The floating lyrics: the sung line in a pill over the app (drag it anywhere); it changes only
+ * when the line does.
+ */
+@Composable
+fun LyricsPill(vm: AppViewModel) {
+    val l = vm.lyrics ?: return
+    val line = vm.lyricLine?.let { l.synced.getOrNull(it)?.second } ?: return
+    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset(0f, 0f)) }
+    Box(Modifier.fillMaxSize().statusBarsPadding().padding(top = 8.dp), contentAlignment = Alignment.TopCenter) {
+        Text(
+            line.ifEmpty { "♪" },
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            modifier = Modifier
+                .graphicsLayer { translationX = offset.x; translationY = offset.y }
+                .pointerInput(Unit) { detectDragGestures { _, d -> offset += d } }
+                .padding(horizontal = 24.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(Color.Black.copy(alpha = 0.72f))
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+        )
     }
 }

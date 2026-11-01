@@ -24,6 +24,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -163,6 +168,34 @@ fun SettingsPage(vm: AppViewModel) {
                 if (com.rymplayer.playback.Vlc.installed(ctx)) {
                     Divider()
                     SwitchRow(Icons.Default.PlayArrow, tr("Play songs in VLC"), tr("Each song opens in VLC instead of the built-in player"), vm.playInVlc) { vm.togglePlayInVlc() }
+                }
+            }
+            Section(tr("Sound")) {
+                val snd = vm.sound
+                TapRow(Icons.Default.SwapHoriz, tr("Crossfade"), tr("The end of a song fades out as the next fades in · tap to change"), if (snd.crossfade == 0) tr("Off") else "${snd.crossfade} s") {
+                    vm.changeSound(snd.copy(crossfade = (snd.crossfade + 1) % 11))
+                }
+                Divider()
+                SwitchRow(Icons.Default.ContentCut, tr("Skip silence"), tr("Silent parts at the start and end of songs are skipped"), snd.skipSilence) { vm.changeSound(snd.copy(skipSilence = !snd.skipSilence)) }
+                Divider()
+                SwitchRow(Icons.Default.GraphicEq, tr("Even loudness"), tr("Every song at about the same loudness, without sudden loud parts"), snd.normalize) { vm.changeSound(snd.copy(normalize = !snd.normalize)) }
+                Divider()
+                TapRow(Icons.Default.Equalizer, tr("Equalizer"), tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own (move a band)"), tr(com.rymplayer.playback.Sound.PRESETS[snd.eqPreset].first)) {
+                    vm.changeSound(snd.copy(eqPreset = (snd.eqPreset + 1) % com.rymplayer.playback.Sound.PRESETS.size))
+                }
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+                    snd.gains.forEachIndexed { i, g ->
+                        val hz = com.rymplayer.playback.Sound.BANDS[i]
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (hz >= 1000) "${(hz / 1000).toString().removeSuffix(".0")}k" else "${hz.toInt()}", color = Dim, fontSize = 12.sp, modifier = Modifier.width(44.dp))
+                            androidx.compose.material3.Slider(g, { v ->
+                                // Moving a band makes the preset "Custom".
+                                val custom = snd.gains.toMutableList().also { it[i] = (v * 2).roundToInt() / 2f }
+                                vm.changeSound(snd.copy(eqPreset = com.rymplayer.playback.Sound.PRESETS.lastIndex, eqCustom = custom))
+                            }, valueRange = -12f..12f, modifier = Modifier.weight(1f))
+                            Text("${if (g > 0) "+" else ""}${g.toInt()}", color = Dim, fontSize = 12.sp, modifier = Modifier.width(32.dp))
+                        }
+                    }
                 }
             }
             Section(tr("Extensions")) {

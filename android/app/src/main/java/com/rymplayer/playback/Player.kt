@@ -81,7 +81,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             c.addListener(object : ExoListener.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     playing = isPlaying
-                    if (isPlaying) startTicker()
+                    countListening()
+                    if (isPlaying) startTicker() else saveSession()
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
@@ -116,17 +117,50 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         }, ContextCompat.getMainExecutor(context))
     }
 
+    /**
+     * While playing: the shown position once a second, only while the app is on screen (the
+     * lyrics follow on their own, see the view model); where it is, kept every 15 seconds, and
+     * listening time written once a minute, in the background too.
+     */
     private fun startTicker() {
         if (ticker?.isActive == true) return
         ticker = scope.launch {
             while (isActive && controller?.isPlaying == true) {
-                position = (controller?.currentPosition ?: 0L) / 1000f
-                // Where it is, kept every 3 seconds (a crash loses at most that much).
-                if (System.currentTimeMillis() - sessionSavedAt > 3000) saveSession()
-                delay(100)
+                if (visible) position = exactPosition()
+                if (System.currentTimeMillis() - sessionSavedAt > 15_000) saveSession()
+                if (System.currentTimeMillis() - statsWrittenAt > 60_000) {
+                    countListening()
+                    com.rymplayer.data.Recent.flushListening(context)
+                    statsWrittenAt = System.currentTimeMillis()
+                }
+                delay(if (visible) 1000 else 15_000)
             }
-            position = (controller?.currentPosition ?: 0L) / 1000f
+            position = exactPosition()
         }
+    }
+
+    /** The app is on screen (the position is shown; otherwise it isn't kept up to date). */
+    var visible by mutableStateOf(true)
+
+    /** Changes when the user seeks (the lyrics jump with it). */
+    var seeks by mutableIntStateOf(0)
+        private set
+
+    /** The player's own position, in seconds. */
+    fun exactPosition(): Float = (controller?.currentPosition ?: 0L) / 1000f
+
+    /** Playback speed (1 = normal). */
+    val speed: Float get() = controller?.playbackParameters?.speed ?: 1f
+
+    /** Listening time: counted from play/pause and song changes, added to the stats in batches. */
+    private var playingSince = 0L
+    private var statsWrittenAt = System.currentTimeMillis()
+
+    private fun countListening() {
+        val now = System.currentTimeMillis()
+        val t = current
+        if (playingSince > 0 && t != null) com.rymplayer.data.Recent.listened(t, now - playingSince)
+        playingSince = if (controller?.isPlaying == true) now else 0L
     }
 
     /** Songs played this session (Up next leaves them out). */
@@ -245,6 +279,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
 
     fun play(i: Int) {
         val t = queue.getOrNull(i) ?: return
+        // The song that was playing gets its listening time before the new one starts.
+        countListening()
         tapped = System.currentTimeMillis()
         android.util.Log.w("RyM", "timing: play ${t.title} (${t.videoId})")
         // Moving on to the next song uses up one added song; jumping elsewhere forgets them.
@@ -364,6 +400,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     fun seekTo(secs: Float) {
         controller?.seekTo((secs * 1000).toLong())
         position = secs
+        seeks++
     }
 
     fun remove(i: Int) {

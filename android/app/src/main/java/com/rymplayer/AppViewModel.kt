@@ -32,6 +32,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /** The song a menu is open for, and its place in the queue when opened from "Up next". */
@@ -97,6 +98,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val cookie = prefs.getString("cookie", null)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
+        followLyrics()
         player.likedSongs = { likedTracks }
         // What was playing last time, paused where it was left.
         player.restoreSession()
@@ -107,6 +109,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Full-screen pages over everything: settings, the plugin store, a video. */
     var settingsOpen by mutableStateOf(false)
+    /** "Your recap" (listening stats) is open. */
+    var recapOpen by mutableStateOf(false)
+
+    /** Sound settings (applied by the playback service as they're saved). */
+    var sound by mutableStateOf(com.rymplayer.playback.Sound.load(app))
+        private set
+
+    fun changeSound(s: com.rymplayer.playback.Sound.Settings) {
+        sound = s
+        com.rymplayer.playback.Sound.save(getApplication(), s)
+    }
+
+    /** Sleep timer: minutes from now, null for the end of the song, 0 to turn it off. */
+    fun setSleep(minutes: Int?) {
+        val at = when (minutes) {
+            null -> -1L
+            0 -> 0L
+            else -> System.currentTimeMillis() + minutes * 60_000L
+        }
+        changeSound(com.rymplayer.playback.Sound.load(getApplication()).copy(sleepAt = at))
+        status = tr(if (at == 0L) "Sleep timer off" else if (at < 0) "The music stops after this song" else "Sleep timer set")
+    }
+
+    /** The floating lyrics line over the app. */
+    var lyricsPill by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("lyrics_pill", false))
+        private set
+
+    fun toggleLyricsPill() {
+        lyricsPill = !lyricsPill
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lyrics_pill", lyricsPill).apply()
+    }
+
+    /** The sung line of the playing song's synced lyrics. */
+    var lyricLine by mutableStateOf<Int?>(null)
+        private set
     var storeOpen by mutableStateOf(false)
     /** Video plugin: the song whose video is showing. */
     var video by mutableStateOf<Track?>(null)
@@ -273,6 +310,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** True when something was closed. */
     fun back(): Boolean = when {
         video != null -> { video = null; true }
+        recapOpen -> { recapOpen = false; true }
         storeOpen -> { storeOpen = false; true }
         settingsOpen -> { settingsOpen = false; true }
         playerOpen -> { playerOpen = false; true }
@@ -485,10 +523,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         syncJob = viewModelScope.launch { runCatching { api.playlist(LIKED_ID) }.onSuccess(::syncLiked) }
     }
 
+    /**
+     * The sung line, moved exactly when the next line is due (one wake-up per line, not a timer
+     * ticking all the time), and only while the app is on screen and playing; a seek, a pause or
+     * new lyrics start it over.
+     */
+    private fun followLyrics() = viewModelScope.launch {
+        androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId) }
+            .collectLatest {
+                val synced = lyrics?.synced.orEmpty()
+                if (synced.isEmpty()) {
+                    lyricLine = null
+                    return@collectLatest
+                }
+                while (true) {
+                    val pos = player.exactPosition()
+                    val i = Lrclib.currentLine(synced, pos)
+                    lyricLine = i
+                    if (!player.playing || !player.visible) break
+                    val next = synced.getOrNull((i ?: -1) + 1)?.first ?: break
+                    delay(((next - pos) / player.speed.coerceAtLeast(0.1f) * 1000).toLong().coerceIn(30L, 10_000L) + 15)
+                }
+            }
+    }
+
     private var foregroundJob: Job? = null
 
     /** App on screen: liked songs are re-read every two minutes (and right away). */
     fun onForeground() {
+        player.visible = true
         if (foregroundJob?.isActive == true) return
         foregroundJob = viewModelScope.launch {
             while (isActive) {
@@ -500,7 +563,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onBackground() {
         foregroundJob?.cancel()
+        // Nothing on screen to update: the position and lyrics stop following until it's back.
+        player.visible = false
         player.saveSession()
+        Recent.flushListening(getApplication())
     }
 
     private fun load(page: Screen.Songs) {
