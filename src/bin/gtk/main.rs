@@ -1974,9 +1974,24 @@ fn speed_popover(ui: &Shared) -> gtk::Popover {
     let mix = switch(config.automix, ui, |c, on| c.automix = on);
     mix_row.append(&mix);
     col.append(&mix_row);
+    // Skip silence too (the quiet starts and ends of songs, in mixes as well).
+    let quiet_row = gtk::Box::new(Orientation::Horizontal, 10);
+    let quiet_name = label(tr("Skip silence"), &["title"]);
+    quiet_name.set_hexpand(true);
+    quiet_row.append(&quiet_name);
+    let quiet = switch(config.skip_silence, ui, |c, on| c.skip_silence = on);
+    quiet_row.append(&quiet);
+    col.append(&quiet_row);
     {
         let ui = ui.clone();
-        pop.connect_show(move |_| mix.set_active(ui.borrow().config.automix));
+        pop.connect_show(move |_| {
+            let (automix, skip) = {
+                let s = ui.borrow();
+                (s.config.automix, s.config.skip_silence)
+            };
+            mix.set_active(automix);
+            quiet.set_active(skip);
+        });
     }
     pop.set_child(Some(&col));
     pop

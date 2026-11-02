@@ -287,7 +287,8 @@ impl Audio {
         let beat = if smart { self.meter.next_beat_frame(0.15) } else { None };
         let rate = self.meter.rate() as f32;
         let gate = beat.filter(|(at, _)| (*at as f32 - self.meter.frames() as f32) < rate * 1.2).map(|(at, _)| (self.meter.clone(), at));
-        let (src, d, meter) = Self::source(song, gate, smart)?;
+        // Cue-in: its silent start skipped, unless "Skip silence" is off.
+        let (src, d, meter) = Self::source(song, gate, smart && crate::fx::get().skip_silence)?;
         let next = Player::connect_new(self.sink.mixer());
         next.set_speed(load(&self.speed));
         next.set_volume(0.0);

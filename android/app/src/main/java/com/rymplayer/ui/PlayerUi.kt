@@ -555,6 +555,14 @@ private fun SpeedSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                 }
                 androidx.compose.material3.Switch(vm.sound.automix, { vm.changeSound(vm.sound.copy(automix = it)) })
             }
+            // Skip silence too (the quiet starts and ends of songs, in mixes as well).
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(tr("Skip silence"), fontWeight = FontWeight.SemiBold)
+                    Text(tr("Silent parts at the start and end of songs are skipped"), color = Dim, fontSize = 13.sp)
+                }
+                androidx.compose.material3.Switch(vm.sound.skipSilence, { vm.changeSound(vm.sound.copy(skipSilence = it)) })
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

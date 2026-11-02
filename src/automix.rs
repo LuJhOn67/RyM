@@ -2,7 +2,8 @@
 //! (no models):
 //! - cue-out: the change starts as soon as the song has faded out (below -28 dB for 400 ms in its
 //!   last 15 seconds), or at the mix window before its end;
-//! - cue-in: the next song's silent start is skipped, so it comes in on its first sound;
+//! - cue-in: the next song's silent start is skipped, so it comes in on its first sound (when
+//!   "Skip silence" is on);
 //! - equal-power gains (cos / sin), so the loudness holds through the change;
 //! - bass swap: the outgoing song loses its lows (a high-pass rising to 200 Hz) while the
 //!   incoming one brings its own, so the two basses don't clash;

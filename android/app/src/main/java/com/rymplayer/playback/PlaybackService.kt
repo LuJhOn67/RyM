@@ -217,8 +217,8 @@ class PlaybackService : MediaSessionService() {
         new.stop()
         new.clearMediaItems()
         new.volume = 0f
-        // Cue-in: the next song's silent start is skipped.
-        new.skipSilenceEnabled = true
+        // Cue-in: the next song's silent start is skipped, unless "Skip silence" is off.
+        new.skipSilenceEnabled = s.skipSilence
         // The audio focus goes to the incoming player (the outgoing one would be paused by it).
         old.setAudioAttributes(attributes, false)
         new.setAudioAttributes(attributes, true)
