@@ -1,6 +1,7 @@
 //! Everything drawn on screen: an icon rail, a search bar, card grids, a slim player bar,
 //! and a full player page. The content background is washed with the cover's color.
 
+use rymplayer::config::{Config, Setting};
 use iced::widget::text::Wrapping;
 use iced::widget::{
     Column, Row, button, center, column, container, image, mouse_area, opaque, pin, row, scrollable, slider, space, stack,
@@ -111,7 +112,7 @@ impl Gui {
         let badge = container(icon(Icon::Play, size as f32 * 0.45, Color::WHITE))
             .padding(size as f32 * 0.18)
             .style(style::card_bg(p.accent, 999.0));
-        row![badge, line("Legacy Player", size, BOLD, p.text)].spacing(10).align_y(Alignment::Center).into()
+        row![badge, line("Iced Player", size, BOLD, p.text)].spacing(10).align_y(Alignment::Center).into()
     }
 
     // ---------------------------------------------------------------- chrome
@@ -138,7 +139,8 @@ impl Gui {
                 .push(item(Icon::Library, tr("Library"), Page::Library, tr("Library")))
                 .push(item(Icon::History, tr("History"), Page::History, tr("History")));
         }
-        col.push(space().height(Fill))
+        col.push(item(Icon::Note, tr("Your recap"), Page::Recap, tr("Your recap")))
+            .push(space().height(Fill))
             .push(item(Icon::Settings, tr("Settings"), Page::Settings, tr("Settings")))
             .push(space().height(12))
             .width(Fill)
@@ -495,6 +497,25 @@ impl Gui {
         ]
         .align_y(Alignment::Center);
 
+        // Sound: each row shows its value; the pill moves it on (‹ back, for the ones with steps).
+        let sound_row = |s: Setting, about: &'static str, steps: bool| {
+            let mut r = row![column![line(Config::label(s), 15, SEMI, p.text), line(about, 13, FONT, p.dim)].spacing(4).width(Fill)].spacing(8).align_y(Alignment::Center);
+            if steps {
+                r = r.push(button(line("‹", 15, BOLD, p.text)).padding([6, 12]).style(style::chip(p)).on_press(Message::Sound(s, -1)));
+            }
+            r.push(button(line(self.config.value(s), 13, BOLD, p.pill_text)).padding([6, 16]).style(style::pill(p)).on_press(Message::Sound(s, 1)))
+        };
+        let sound = column![
+            sound_row(Setting::Crossfade, tr("Seconds the end of a song and the start of the next play together (0 = off)"), true),
+            sound_row(Setting::Automix, tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), false),
+            sound_row(Setting::SkipSilence, tr("A quiet start is skipped; a long quiet end finishes the song"), false),
+            sound_row(Setting::Normalize, tr("Every song at about the same loudness, without sudden loud parts"), false),
+            sound_row(Setting::Equalizer, tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own"), true),
+            sound_row(Setting::Mode, tr("Normal, Nightcore or Slowed"), true),
+            sound_row(Setting::Discord, tr("Show the playing song on Discord (needs an application id)"), false),
+        ]
+        .spacing(14);
+
         let account: Element<'_, Message> = if self.logged_in() {
             button(line(tr("Sign out"), 13, SEMI, p.text)).padding([7, 16]).style(style::chip(p)).on_press(Message::SignOut).into()
         } else {
@@ -508,13 +529,15 @@ impl Gui {
             heading(tr("Look"), p),
             tint_row,
             lang_row,
+            heading(tr("Sound"), p),
+            sound,
             heading(tr("Updates"), p),
             auto_row,
             beta_row,
             check_row,
             heading(tr("Plugin store"), p),
             plugin_rows,
-            line(format!("RyM Legacy Player {}", rymplayer::VERSION), 12, FONT, p.dim),
+            line(format!("RyM Iced Player {}", rymplayer::VERSION), 12, FONT, p.dim),
             gpu_row,
             source_row,
             download_row,
@@ -816,6 +839,18 @@ impl Gui {
                 .push(small(if disliked { Icon::ThumbDownFilled } else { Icon::ThumbDown }, if disliked { p.accent } else { p.dim }, Message::Dislike(t.clone())))
                 .push(small(Icon::PlaylistAdd, p.dim, Message::AddTo(t.clone())));
         }
+        // Sleep timer (minutes left, or the end of the song), speed and pitch, smart automix.
+        let word = |s: String, on: bool, msg: Message| button(line(s, 12, BOLD, if on { p.accent } else { p.dim })).padding([8, 6]).style(style::icon_button(p)).on_press(msg);
+        let sleep = match self.sleep {
+            None => "Zz".to_string(),
+            Some((Some(_), when)) => format!("Zz {}", when.saturating_duration_since(std::time::Instant::now()).as_secs().div_ceil(60)),
+            Some((None, _)) => format!("Zz {}", tr("End")),
+        };
+        let mode = self.config.mode_name();
+        right = right
+            .push(word(sleep, self.sleep.is_some(), Message::Sleep))
+            .push(word(tr(mode).to_string(), mode != "Normal", Message::Sound(Setting::Mode, 1)))
+            .push(word("MIX".into(), self.config.automix, Message::Sound(Setting::Automix, 1)));
         let lrc_active = self.now_playing_open && self.tab == Tab::Lyrics;
         right = right
             .push(
@@ -856,7 +891,7 @@ impl Gui {
             Dialog::Update(r) => {
                 let kind = if r.beta { tr("New beta") } else { tr("New update") };
                 let notes = Column::with_children(r.plain_notes().into_iter().map(|l| text(l).size(14).font(FONT).color(p.text).into())).spacing(4);
-                let file = if cfg!(windows) { "RyM-Legacy-Player.exe" } else { "RyM-linux-x86_64.tar.gz" };
+                let file = if cfg!(windows) { "RyM-Iced-Player.exe" } else { "RyM-linux-x86_64.tar.gz" };
                 column![
                     line(format!("{kind}: RyM {}", r.version), 22, BOLD, p.text),
                     line(format!("{} {}", tr("You have"), rymplayer::VERSION), 13, FONT, p.dim),

@@ -1,5 +1,5 @@
 //! Colors and widget styles. Light themes follow a clean desktop-player look; the dark ones
-//! include YouTube Music and Spotify styles. Every theme can be tinted by the cover art.
+//! include two night themes (red and green). Every theme can be tinted by the cover art.
 
 use iced::widget::{button, container, scrollable, slider, text_input};
 use iced::{Background, Border, Color, Shadow, Theme};
@@ -12,7 +12,7 @@ pub struct Palette {
     pub bg: Color,
     /// Main content area.
     pub surface: Color,
-    /// Rounded content panel (Spotify); 0 means flat.
+    /// Rounded content panel; 0 means flat.
     pub panel_radius: f32,
     pub bar: Color,
     pub hover: Color,
@@ -80,7 +80,7 @@ pub const PALETTES: [Palette; 6] = [
         menu: rgb(30, 38, 50),
     },
     Palette {
-        name: "YouTube Music",
+        name: "Red night",
         light: false,
         bg: rgb(3, 3, 3),
         surface: rgb(15, 14, 13),
@@ -98,7 +98,7 @@ pub const PALETTES: [Palette; 6] = [
         menu: rgb(58, 52, 49),
     },
     Palette {
-        name: "Spotify",
+        name: "Green night",
         light: false,
         bg: rgb(0, 0, 0),
         surface: rgb(18, 18, 18),

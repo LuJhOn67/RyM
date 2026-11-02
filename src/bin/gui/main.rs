@@ -1,5 +1,5 @@
 #![windows_subsystem = "windows"]
-//! RymPlayer with a window: YouTube Music / Spotify inspired, software-rendered to stay light.
+//! RyM Iced Player: the iced window app, software-rendered to stay light.
 
 mod icons;
 mod right_click;
@@ -76,6 +76,8 @@ pub enum Page {
     /// The user's playlists as cards.
     Library,
     Settings,
+    /// "Your recap": listening stats.
+    Recap,
 }
 
 /// What a right-click menu is about.
@@ -226,6 +228,10 @@ pub enum Message {
     DownloadAll,
     BatchProgress(stream::Batch),
     Disliked(String, bool, Result<(), String>),
+    /// Settings > Sound (and the bar): a sound setting moved one step.
+    Sound(rymplayer::config::Setting, i32),
+    /// The bar's sleep timer: 15, 30, 45, 60 minutes, the end of the song, off.
+    Sleep,
     Ignore,
 }
 
@@ -335,6 +341,25 @@ pub struct Gui {
     pub radio_pending: bool,
     /// Songs in a row that couldn't be fetched; playback stops at 3.
     failures: u32,
+    /// Sleep timer: minutes chosen (None: at the end of the song) and when it ends.
+    pub sleep: Option<(Option<u64>, Instant)>,
+    /// The next song starts while this one fades out; the song whose crossfade already started.
+    crossfade_next: bool,
+    crossfade_for: Option<String>,
+    /// Listening stats: when time was last added, and last written.
+    listened_at: Instant,
+    stats_written: Instant,
+    /// What Discord was last told: song, playing, position, when.
+    discord_sent: Option<(String, bool, f32, Instant)>,
+    /// Songs started since memory was last cleaned up (every 5 it is).
+    songs_since_cleanup: u32,
+    /// The song left off last time and the second to go on from, until it plays.
+    resume_at: Option<(String, f32)>,
+    /// What the session file last got (song, second, volume, queue length), and when.
+    session_key: Option<(String, u32, u32, usize)>,
+    session_saved: Instant,
+    /// The liked songs (mixed into Up next).
+    liked_tracks: Vec<Track>,
     /// VLC playing the current song, when "Play songs in" is VLC.
     vlc: Option<std::process::Child>,
 
@@ -417,6 +442,17 @@ impl Gui {
             volume: 0.8,
             radio_pending: false,
             failures: 0,
+            sleep: None,
+            crossfade_next: false,
+            crossfade_for: None,
+            listened_at: Instant::now(),
+            stats_written: Instant::now(),
+            discord_sent: None,
+            songs_since_cleanup: 0,
+            resume_at: None,
+            session_key: None,
+            session_saved: Instant::now(),
+            liked_tracks: Vec::new(),
             vlc: None,
             lyrics: None,
             lyrics_status: String::new(),
@@ -457,9 +493,24 @@ impl Gui {
         stream::use_source(gui.config.source);
         stream::download_best(gui.config.download_best);
         stream::download_parallel(gui.config.download_connections, gui.config.download_piece_mb);
+        rymplayer::fx::set(gui.config.fx());
+        // The last session: its queue, its song paused where it was left, its volume.
+        if let Some(saved) = rymplayer::session::load() {
+            let q = saved.queue();
+            if let Some(c) = q.current {
+                gui.resume_at = q.songs.get(c).map(|t| (t.video_id.clone(), saved.position));
+                gui.queue = q.songs;
+                gui.current = Some(c);
+                gui.pos = saved.position;
+                gui.volume = saved.volume;
+                let wanted: Vec<_> = gui.queue.get(c).map(|t| t.thumb.clone()).into_iter().collect();
+                first.push(gui.want_images(wanted.iter().flat_map(|u| [(u, ROW_PX), (u, ART_PX)])));
+            }
+        }
         match Audio::new() {
             Ok(a) => {
                 a.set_volume(gui.volume);
+                a.set_speed(gui.config.speed);
                 gui.audio = Some(a);
             }
             Err(e) => gui.status = format!("{}: {e}", tr("No audio device")),
@@ -490,8 +541,8 @@ impl Gui {
 
     fn title(&self) -> String {
         match self.now_playing() {
-            Some(t) => format!("{} · {} — RyM Legacy Player", t.title, t.artist),
-            None => "RyM Legacy Player".into(),
+            Some(t) => format!("{} · {} — RyM Iced Player", t.title, t.artist),
+            None => "RyM Iced Player".into(),
         }
     }
 
@@ -836,10 +887,25 @@ impl Gui {
                             .now_playing()
                             .and_then(|t| parse_duration(&t.duration))
                             .or_else(|| stream::cached_duration(&vid));
-                        if let Some(a) = &mut self.audio
-                            && let Err(e) = a.play(&song, known)
-                        {
-                            self.status = format!("{}: {e}", tr("Can't play"));
+                        let crossfade = std::mem::take(&mut self.crossfade_next);
+                        let automix = self.config.automix;
+                        let secs = if automix { rymplayer::automix::mix_secs(self.config.crossfade) } else { self.config.crossfade as f32 };
+                        let resume = self.resume_at.take().filter(|(id, at)| *id == vid && *at > 1.0).map(|(_, at)| at);
+                        if let Some(a) = &mut self.audio {
+                            let started = match (crossfade, automix) {
+                                (true, true) => a.automix_to(&song, known, secs),
+                                (true, false) => a.crossfade_to(&song, known, secs),
+                                _ => a.play(&song, known),
+                            };
+                            match started {
+                                Err(e) => self.status = format!("{}: {e}", tr("Can't play")),
+                                Ok(()) => {
+                                    if let Some(at) = resume {
+                                        a.seek(at);
+                                        self.pos = at;
+                                    }
+                                }
+                            }
                         }
                         return self.prefetch_next();
                     }
@@ -857,9 +923,42 @@ impl Gui {
                 }
             }
             Message::Toggle => {
-                if let Some(a) = &self.audio {
-                    a.toggle();
+                match &self.audio {
+                    Some(a) if a.is_loaded() => a.toggle(),
+                    // The song left off last time: it loads and goes on from there.
+                    _ => {
+                        if let Some(i) = self.current
+                            && !self.loading
+                        {
+                            return self.play(i);
+                        }
+                    }
                 }
+            }
+            Message::Sound(setting, step) => {
+                self.config.change(setting, step);
+                rymplayer::fx::set(self.config.fx());
+                if let Some(a) = &self.audio {
+                    a.set_speed(self.config.speed);
+                }
+                self.config.save();
+            }
+            Message::Sleep => {
+                let next = match self.sleep.map(|(m, _)| m) {
+                    None => Some(Some(15)),
+                    Some(Some(m)) if m < 60 => Some(Some(m + 15)),
+                    Some(Some(_)) => Some(None),
+                    Some(None) => None,
+                };
+                self.sleep = next.map(|m| (m, Instant::now() + Duration::from_secs(m.unwrap_or(0) * 60)));
+                if let Some(a) = &self.audio {
+                    a.set_fade(1.0);
+                }
+                self.status = match next {
+                    Some(Some(m)) => format!("{}: {m} {}", tr("Sleep timer"), tr("minutes")),
+                    Some(None) => tr("The music stops after this song").into(),
+                    None => tr("Sleep timer off").into(),
+                };
             }
             Message::Next => return self.next(),
             Message::Prev => {
@@ -896,16 +995,29 @@ impl Gui {
             }
             Message::Tick => {
                 let Some(a) = &mut self.audio else { return Task::none() };
-                self.pos = a.position();
+                a.tick();
+                if a.is_loaded() {
+                    self.pos = a.position();
+                }
                 if !self.loading && a.finished() {
                     a.stop();
                     return self.next();
                 }
                 self.track_lyrics();
+                return self.sound_tick();
             }
             Message::Radio(result) => {
                 self.radio_pending = false;
                 if let Ok(tracks) = result {
+                    // Songs like it, with liked songs mixed in (same artist first).
+                    let tracks = match self.now_playing().cloned() {
+                        Some(seed) if !self.liked_tracks.is_empty() => {
+                            let skip: HashSet<String> = self.queue.iter().map(|t| t.video_id.clone()).collect();
+                            let seed_random = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64);
+                            rymplayer::radio::with_liked(tracks, &seed, &self.liked_tracks, &skip, seed_random)
+                        }
+                        _ => tracks,
+                    };
                     let fresh: Vec<Track> =
                         tracks.into_iter().filter(|t| !self.queue.iter().any(|q| q.video_id == t.video_id)).collect();
                     let wanted: Vec<_> = fresh.iter().map(|t| t.thumb.clone()).collect();
@@ -1071,6 +1183,7 @@ impl Gui {
             }
             Message::Liked(Ok(t)) => {
                 self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                self.liked_tracks = t.clone();
                 if self.page == Page::Playlist(api::LIKED_ID.into()) && !self.busy {
                     self.tracks = t;
                 }
@@ -1317,6 +1430,17 @@ impl Gui {
     }
 
     fn open(&mut self, page: Page, title: String) -> Task<Message> {
+        // "Your recap": the most played songs; hours and top artists in the title.
+        if page == Page::Recap {
+            let r = rymplayer::stats::recap();
+            let artists: Vec<&str> = r.top_artists.iter().take(3).map(|(a, _)| a.as_str()).collect();
+            self.page = Page::Recap;
+            self.page_title = format!("{}: {:.1} h {} · {:.1} h {} · {}", tr("Your recap"), r.hours_month, tr("this month"), r.hours_total, tr("in all"), artists.join(", "));
+            self.busy = false;
+            self.tracks = r.top_songs.into_iter().map(|(t, plays)| Track { album: format!("{plays} {}", tr("plays")), ..t }).collect();
+            let wanted: Vec<_> = self.tracks.iter().map(|t| t.thumb.clone()).collect();
+            return self.want_images(wanted.iter().map(|u| (u, ROW_PX)));
+        }
         let Some(api) = self.api.clone() else { return Task::none() };
         // The saved home feed stays on screen until the fresh one arrives.
         let keep = page == Page::Home && self.page == Page::Home && !self.tracks.is_empty();
@@ -1345,7 +1469,7 @@ impl Gui {
                         Page::Mix(id) => api.mix_tracks(id).await,
                         Page::Radio(vid) => api.radio(vid).await,
                         Page::Artist(id) => api.artist_page(id).await,
-                        Page::Library | Page::Settings => Ok(Vec::new()),
+                        Page::Library | Page::Settings | Page::Recap => Ok(Vec::new()),
                     }
                 }
             },
@@ -1385,12 +1509,29 @@ impl Gui {
         self.lyrics = None;
         self.lyrics_status = tr("Looking for lyrics...").into();
         self.loading = true;
-        if let Some(a) = &mut self.audio {
-            a.stop();
-        }
         let vid = track.video_id.clone();
         // "Play songs in: VLC" with VLC installed: the song opens there instead.
         let in_vlc = self.config.play_in_vlc && rymplayer::vlc::find().is_some();
+        if in_vlc {
+            self.crossfade_next = false;
+        }
+        // A crossfade keeps the old song playing while the new one loads.
+        if !self.crossfade_next
+            && let Some(a) = &mut self.audio
+        {
+            a.stop();
+        }
+        // Another song than the one left off last time: that one's second no longer counts.
+        if self.resume_at.as_ref().is_some_and(|(id, _)| *id != vid) {
+            self.resume_at = None;
+        }
+        rymplayer::recent::played(&track);
+        // Memory is cleaned up every 5 songs.
+        self.songs_since_cleanup += 1;
+        if self.songs_since_cleanup >= 5 {
+            self.songs_since_cleanup = 0;
+            rymplayer::memory::trim();
+        }
         if self.config.play_in_vlc && !in_vlc {
             self.status = tr("VLC isn't installed: playing here").into();
         }
@@ -1448,6 +1589,90 @@ impl Gui {
         Task::perform(api.radio(vid), |r| Message::Radio(s(r)))
     }
 
+    /// Listening stats, the session file, the sleep timer, Discord, and the crossfade or smart
+    /// automix, every tick.
+    fn sound_tick(&mut self) -> Task<Message> {
+        let Some(a) = &self.audio else { return Task::none() };
+        let (playing, pos, dur) = (a.is_playing(), a.position(), a.duration().unwrap_or(0.0));
+        let since = self.listened_at.elapsed();
+        self.listened_at = Instant::now();
+        if playing && let Some(t) = self.now_playing() {
+            rymplayer::stats::listened(t, since.as_millis().min(1000) as u64);
+        }
+        if self.stats_written.elapsed() > Duration::from_secs(60) {
+            self.stats_written = Instant::now();
+            rymplayer::stats::flush();
+        }
+        if self.session_saved.elapsed() > Duration::from_secs(3) {
+            self.session_saved = Instant::now();
+            self.save_session();
+        }
+        if self.loading {
+            return Task::none();
+        }
+        // Sleep timer: the last 10 seconds fade out, then the music stops.
+        if let Some((minutes, when)) = self.sleep {
+            let left = match minutes {
+                Some(_) => when.saturating_duration_since(Instant::now()).as_secs_f32(),
+                None if dur > 0.0 => dur - pos,
+                None => f32::MAX,
+            };
+            if playing && left < 10.0
+                && let Some(a) = &self.audio
+            {
+                a.set_fade((left / 10.0).clamp(0.0, 1.0));
+                if left <= 0.25 {
+                    a.pause();
+                    a.set_fade(1.0);
+                    self.sleep = None;
+                    self.status = tr("Sleep timer: music stopped").into();
+                    return Task::none();
+                }
+            }
+        }
+        // Discord: told when the song, play/pause, or the position (a seek) changes.
+        if self.config.discord
+            && !self.config.discord_app_id.is_empty()
+            && let Some(t) = self.now_playing().cloned()
+        {
+            let expected = self.discord_sent.as_ref().map(|(_, was, at, when)| at + if *was { when.elapsed().as_secs_f32() } else { 0.0 });
+            let changed = self.discord_sent.as_ref().is_none_or(|(id, was, ..)| *id != t.video_id || *was != playing) || expected.is_some_and(|e| (e - pos).abs() > 3.0);
+            if changed {
+                self.discord_sent = Some((t.video_id.clone(), playing, pos, Instant::now()));
+                let cover = t.thumb.as_ref().map(|u| api::thumb_sized(u, 512));
+                rymplayer::discord::show(&self.config.discord_app_id, rymplayer::discord::Show::Song { title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
+            }
+        }
+        // Crossfade: the next song starts that many seconds before this one ends. Smart automix:
+        // also as soon as it has faded out in its last 15 seconds (asked early so it has loaded).
+        let automix = self.config.automix;
+        let secs = if automix { rymplayer::automix::mix_secs(self.config.crossfade) } else { self.config.crossfade as f32 };
+        let lead = if automix { rymplayer::automix::LOAD_LEAD } else { 0.0 };
+        let now_id = self.now_playing().map(|t| t.video_id.clone());
+        let has_next = self.current.is_some_and(|c| c + 1 < self.queue.len());
+        let end_of_song_sleep = matches!(self.sleep, Some((None, _)));
+        let due = pos >= dur - secs - lead || (automix && pos >= dur - rymplayer::automix::WINDOW_SECS && self.audio.as_ref().is_some_and(|a| a.faded_out()));
+        if secs > 0.0 && playing && dur > secs + 10.0 && due && has_next && !end_of_song_sleep && self.crossfade_for != now_id {
+            self.crossfade_for = now_id;
+            self.crossfade_next = true;
+            return self.next();
+        }
+        Task::none()
+    }
+
+    /// What plays and where, so the next start (or one after a crash) picks up there.
+    fn save_session(&mut self) {
+        let Some(t) = self.now_playing() else { return };
+        let pos = self.audio.as_ref().filter(|a| a.is_loaded()).map_or(self.pos, Audio::position);
+        let key = (t.video_id.clone(), pos as u32, (self.volume * 100.0) as u32, self.queue.len());
+        if self.session_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.session_key = Some(key);
+        let q = rymplayer::queue::Queue { songs: self.queue.clone(), current: self.current, added: 0 };
+        rymplayer::session::save(&rymplayer::session::Session::new(&q, pos, self.volume));
+    }
+
     /// The next song (and its lyrics) download while this one plays.
     fn prefetch_next(&self) -> Task<Message> {
         let Some(t) = self.current.and_then(|i| self.queue.get(i + 1)) else { return Task::none() };
@@ -1472,7 +1697,7 @@ async fn download(t: Track) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod shots {
-    //! Renders screens to PNG without opening a window: `cargo test --bin RyM-Legacy-Player -- --ignored`.
+    //! Renders screens to PNG without opening a window: `cargo test --bin RyM-Iced-Player -- --ignored`.
     //! Output lands in `target/gui-shots/`.
 
     use super::*;
@@ -1515,7 +1740,7 @@ mod shots {
     }
 
     /// The lyrics page alone, offline: a made-up song with a red cover, the third line being sung.
-    /// `cargo test --bin RyM-Legacy-Player lyrics_shot -- --ignored` (PNG in target/gui-shots).
+    /// `cargo test --bin RyM-Iced-Player lyrics_shot -- --ignored` (PNG in target/gui-shots).
     #[test]
     #[ignore]
     fn lyrics_shot() {
@@ -1555,7 +1780,7 @@ mod shots {
         shot(&gui, "lyrics-offline");
     }
 
-    /// The settings page in Arabic, offline: `cargo test --bin RyM-Legacy-Player arabic_shot -- --ignored`.
+    /// The settings page in Arabic, offline: `cargo test --bin RyM-Iced-Player arabic_shot -- --ignored`.
     #[test]
     #[ignore]
     fn arabic_shot() {
@@ -1712,7 +1937,7 @@ mod queue_tests {
 
 #[cfg(test)]
 mod frame_cost {
-    //! How long one full software-rendered frame takes: `cargo test --release --bin RyM-Legacy-Player frame_cost -- --ignored --nocapture`.
+    //! How long one full software-rendered frame takes: `cargo test --release --bin RyM-Iced-Player frame_cost -- --ignored --nocapture`.
 
     use super::*;
     use iced_test::simulator::Simulator;

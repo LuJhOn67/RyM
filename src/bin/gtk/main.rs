@@ -2906,7 +2906,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             }
         });
     }
-    page.append(&setting_row(tr("Theme"), tr("Shared with RyM Legacy Player"), &theme));
+    page.append(&setting_row(tr("Theme"), tr("Shared with RyM Iced Player"), &theme));
 
     let source = gtk::DropDown::from_strings(&[tr("Auto"), "yt-dlp", "InnerTube"]);
     source.set_selected(match config.source {
