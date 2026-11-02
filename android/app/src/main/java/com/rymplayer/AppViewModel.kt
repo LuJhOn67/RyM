@@ -526,9 +526,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The sung line, moved exactly when the next line is due (one wake-up per line, not a timer
      * ticking all the time), and only while the app is on screen and playing; a seek, a pause or
-     * new lyrics start it over.
+     * new lyrics start it over. It starts once the view model is fully made (on the next turn of
+     * the main thread): started at once from init, it set [lyricLine] before that existed.
      */
-    private fun followLyrics() = viewModelScope.launch {
+    private fun followLyrics() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
         androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId) }
             .collectLatest {
                 val synced = lyrics?.synced.orEmpty()
