@@ -116,6 +116,29 @@ import com.rymplayer.data.fmtTime
 fun MiniPlayer(vm: AppViewModel, tint: Color) {
     val p = vm.player
     val t = p.current ?: return
+    if (vm.ytmTheme) {
+        // RyM YTM: a flat bar across the screen, the progress as a thin line under it.
+        Column(Modifier.fillMaxWidth().background(Color(0xFF212121)).clickable { vm.playerOpen = true }) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Cover(t.thumb, 44.dp, 120, 4.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Marquee(t.title, 15, FontWeight.SemiBold, Color.White)
+                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+                }
+                PlayPause(vm, 30)
+            }
+            val dur = p.duration
+            LinearProgressIndicator(
+                progress = { if (dur > 0) (p.position / dur).coerceIn(0f, 1f) else 0f },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = Color.White,
+                trackColor = Color.Transparent,
+                drawStopIndicator = {},
+            )
+        }
+        return
+    }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(14.dp))
             .background(lerp(Color(0xFF1C1C21), tint, 0.35f)).clickable { vm.playerOpen = true },

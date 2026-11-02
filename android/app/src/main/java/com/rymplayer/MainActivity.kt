@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -70,7 +71,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { RymTheme { RymApp(viewModel()) } }
+        setContent {
+            val model: AppViewModel = viewModel()
+            RymTheme(model.ytmTheme) { RymApp(model) }
+        }
         showUpdateFrom(intent)
     }
 
@@ -121,14 +125,22 @@ private fun Main(vm: AppViewModel) {
     val tint = coverColor(vm.player.current?.thumb)
     Box(Modifier.fillMaxSize()) {
         Scaffold(
-            containerColor = Color(0xFF0B0B0D),
+            containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
                 Column {
                     MiniPlayer(vm, tint)
-                    NavigationBar(containerColor = Color(0xFF111114)) {
+                    // RyM YTM: a black bar, the chosen tab in white without a pill behind it.
+                    NavigationBar(containerColor = if (vm.ytmTheme) Color.Black else Color(0xFF111114)) {
                         val tabs = listOf(Triple(Screen.Home, tr("Home"), Icons.Default.Home), Triple(Screen.Search, tr("Search"), Icons.Default.Search), Triple(Screen.Library, tr("Library"), Icons.Default.LibraryMusic))
+                        val colors = if (vm.ytmTheme) androidx.compose.material3.NavigationBarItemDefaults.colors(
+                            selectedIconColor = Color.White,
+                            selectedTextColor = Color.White,
+                            unselectedIconColor = com.rymplayer.ui.Dim,
+                            unselectedTextColor = com.rymplayer.ui.Dim,
+                            indicatorColor = Color.Transparent,
+                        ) else androidx.compose.material3.NavigationBarItemDefaults.colors()
                         for ((screen, label, icon) in tabs) {
-                            NavigationBarItem(vm.tab == screen && vm.stack.isEmpty(), { vm.selectTab(screen) }, { Icon(icon, label) }, label = { Text(label) })
+                            NavigationBarItem(vm.tab == screen && vm.stack.isEmpty(), { vm.selectTab(screen) }, { Icon(icon, label) }, label = { Text(label) }, colors = colors)
                         }
                     }
                 }

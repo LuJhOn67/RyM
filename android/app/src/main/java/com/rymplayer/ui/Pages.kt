@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -110,7 +112,12 @@ fun HomePage(vm: AppViewModel) {
     // Pull down for a fresh feed.
     androidx.compose.material3.pulltorefresh.PullToRefreshBox(isRefreshing = vm.homeLoading, onRefresh = vm::loadHome) {
     LazyColumn(state = state, contentPadding = pagePadding) {
-        item { Title(tr("For you"), Modifier.padding(top = 8.dp)) }
+        item { HomeTitle(vm) }
+        if (vm.ytmTheme) {
+            itemsIndexed(ytmSections(vm.home), key = { i, _ -> "ytm$i" }) { i, sec -> YtmSection(vm, sec, current, Modifier.appear(sec.name, 60 * i.coerceAtMost(6))) }
+            if (vm.loadingMore) item { MoreSpinner() }
+            return@LazyColumn
+        }
         itemsIndexed(blocks, key = { i, _ -> i }) { i, b ->
             when (b) {
                 is HomeBlock.Header -> Text(tr(b.name), fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.appear(b.name, 60 * i.coerceAtMost(6)).padding(start = 16.dp, top = 14.dp, bottom = 10.dp))
@@ -124,6 +131,104 @@ fun HomePage(vm: AppViewModel) {
         }
         if (vm.loadingMore) item { MoreSpinner() }
     }
+    }
+}
+
+/** "For you" and the button that switches the phone's theme (classic / RyM YTM). */
+@Composable
+private fun HomeTitle(vm: AppViewModel) {
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Title(tr("For you"), Modifier.weight(1f))
+        IconButton(vm::toggleTheme) {
+            Icon(Icons.Default.Palette, tr("Switch theme"), tint = if (vm.ytmTheme) MaterialTheme.colorScheme.primary else Dim)
+        }
+    }
+}
+
+/** RyM YTM: a shelf with its songs (as quick picks) or its cards. */
+private data class YtmShelf(val name: String, val items: List<Track>, val songs: Boolean)
+
+private fun ytmSections(home: List<Track>): List<YtmShelf> {
+    val out = mutableListOf<YtmShelf>()
+    var i = 0
+    while (i < home.size) {
+        val name = home[i].album
+        var end = i
+        while (end < home.size && home[end].album == name) end++
+        val run = home.subList(i, end).toList()
+        out += YtmShelf(name, run, run.all { it.link == null })
+        i = end
+    }
+    return out
+}
+
+/**
+ * RyM YTM: a shelf's name in large type; songs as quick picks (four rows a column, columns side
+ * by side) with "Play all", other shelves as big covers sideways.
+ */
+@Composable
+private fun YtmSection(vm: AppViewModel, sec: YtmShelf, current: String?, modifier: Modifier) {
+    Column(modifier.padding(top = 18.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(tr(sec.name), fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (sec.songs) {
+                OutlinedButton(
+                    { vm.playFrom(sec.items.map { it.copy(album = "") }, 0) },
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) { Text(tr("Play all"), fontSize = 13.sp, color = Color.White) }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (sec.songs) {
+            val width = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp * 0.88f).dp
+            androidx.compose.foundation.lazy.grid.LazyHorizontalGrid(
+                rows = androidx.compose.foundation.lazy.grid.GridCells.Fixed(minOf(4, sec.items.size)),
+                modifier = Modifier.height((minOf(4, sec.items.size) * 68).dp),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+            ) {
+                items(sec.items.size) { k -> QuickPick(vm, sec.items[k], current == sec.items[k].videoId, width) }
+            }
+        } else {
+            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                items(sec.items) { t -> BigCard(vm, t) }
+            }
+        }
+    }
+}
+
+/** A quick pick: cover, title, artist (and length), and its menu. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun QuickPick(vm: AppViewModel, t: Track, playing: Boolean, width: androidx.compose.ui.unit.Dp) {
+    val song = t.copy(album = "")
+    Row(
+        Modifier.width(width).height(68.dp).clip(RoundedCornerShape(6.dp))
+            .combinedClickable(onClick = { vm.playRadio(song) }, onLongClick = { vm.menu = com.rymplayer.MenuFor(song) })
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Cover(t.thumb, 54.dp, 160, 4.dp)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = if (playing) MaterialTheme.colorScheme.primary else Color.White)
+            Text(listOf(t.artist, t.duration).filter { it.isNotBlank() }.joinToString(" • "), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+        }
+        IconButton({ vm.menu = com.rymplayer.MenuFor(song) }) { Icon(Icons.Default.MoreVert, tr("More"), tint = Color.White) }
+    }
+}
+
+/** A big cover (a playlist, album, mix or song) with its title and what it is. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun BigCard(vm: AppViewModel, t: Track) {
+    val hold: (() -> Unit)? = if (t.link == null) ({ vm.menu = com.rymplayer.MenuFor(t) }) else null
+    Column(Modifier.width(176.dp).combinedClickable(onClick = { vm.openLink(t) }, onLongClick = hold)) {
+        Cover(t.thumb, 176.dp, 360, 6.dp)
+        Spacer(Modifier.height(8.dp))
+        Text(t.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+        Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
     }
 }
 
@@ -368,7 +473,7 @@ fun SectionLabel(text: String) = Text(text.uppercase(), color = MaterialTheme.co
 fun RecapPage(vm: AppViewModel) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val r = remember { com.rymplayer.data.Recent.recap(ctx) }
-    LazyColumn(Modifier.fillMaxSize().background(Color(0xFF0B0B0D)).statusBarsPadding(), contentPadding = PaddingValues(bottom = 32.dp)) {
+    LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding(), contentPadding = PaddingValues(bottom = 32.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
                 IconButton({ vm.recapOpen = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }

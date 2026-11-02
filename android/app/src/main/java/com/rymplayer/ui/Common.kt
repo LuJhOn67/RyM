@@ -86,14 +86,17 @@ import com.rymplayer.data.thumbSized
 val Accent = Color(0xFFFF2D55)
 val Dim = Color(0xFFAAAAAA)
 
+/** The pages' background: near black, or pure black in RyM YTM. */
+fun pageColor(ytm: Boolean) = if (ytm) Color.Black else Color(0xFF0B0B0D)
+
 @Composable
-fun RymTheme(content: @Composable () -> Unit) {
+fun RymTheme(ytm: Boolean = false, content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Accent,
-            background = Color(0xFF0B0B0D),
-            surface = Color(0xFF0B0B0D),
-            surfaceVariant = Color(0xFF1C1C21),
+            primary = if (ytm) Color(0xFFFF3048) else Accent,
+            background = pageColor(ytm),
+            surface = pageColor(ytm),
+            surfaceVariant = if (ytm) Color(0xFF212121) else Color(0xFF1C1C21),
             onSurfaceVariant = Dim,
             // Pure white text on the dark pages (the default is a light grey).
             onBackground = Color.White,

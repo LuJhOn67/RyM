@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.AutoAwesome
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Equalizer
@@ -82,7 +83,7 @@ import com.rymplayer.data.Plugins
 import com.rymplayer.data.Updates
 import com.rymplayer.tr
 
-private val Page = Color(0xFF0B0B0D)
+private val Page: Color @Composable get() = MaterialTheme.colorScheme.background
 private val CardColor = Color(0xFF17171B)
 
 /** A page's top bar: back arrow and title. */
@@ -170,6 +171,9 @@ fun SettingsPage(vm: AppViewModel) {
                     Divider()
                     SwitchRow(Icons.Default.PlayArrow, tr("Play songs in VLC"), tr("Each song opens in VLC instead of the built-in player"), vm.playInVlc) { vm.togglePlayInVlc() }
                 }
+            }
+            Section(tr("Theme")) {
+                TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }
             }
             Section(tr("Sound")) {
                 val snd = vm.sound

@@ -141,6 +141,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lyrics_pill", lyricsPill).apply()
     }
 
+    /** The phone's look: RyM YTM (pure black, quick picks, big shelves) or the classic one. */
+    var ytmTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("theme_ytm", false))
+        private set
+
+    fun toggleTheme() {
+        ytmTheme = !ytmTheme
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("theme_ytm", ytmTheme).apply()
+    }
+
     /** The sung line of the playing song's synced lyrics. */
     var lyricLine by mutableStateOf<Int?>(null)
         private set
