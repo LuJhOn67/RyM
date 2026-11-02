@@ -1811,6 +1811,7 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
         });
     }
     page.append(&setting_row(tr("Crossfade"), tr("Seconds the end of a song and the start of the next play together (0 = off)"), &fade));
+    page.append(&setting_row(tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), &switch(config.automix, ui, |c, on| c.automix = on)));
     page.append(&setting_row(tr("Skip silence"), tr("A quiet start is skipped; a long quiet end finishes the song"), &switch(config.skip_silence, ui, |c, on| c.skip_silence = on)));
     page.append(&setting_row(tr("Even loudness"), tr("Every song at about the same loudness, without sudden loud parts"), &switch(config.normalize, ui, |c, on| c.normalize = on)));
 
@@ -1964,6 +1965,19 @@ fn speed_popover(ui: &Shared) -> gtk::Popover {
         modes.append(&b);
     }
     col.append(&modes);
+    // Smart automix on or off, from the player too (it shows the setting each time it opens).
+    let mix_row = gtk::Box::new(Orientation::Horizontal, 10);
+    mix_row.set_margin_top(6);
+    let mix_name = label(tr("Smart Automix"), &["title"]);
+    mix_name.set_hexpand(true);
+    mix_row.append(&mix_name);
+    let mix = switch(config.automix, ui, |c, on| c.automix = on);
+    mix_row.append(&mix);
+    col.append(&mix_row);
+    {
+        let ui = ui.clone();
+        pop.connect_show(move |_| mix.set_active(ui.borrow().config.automix));
+    }
     pop.set_child(Some(&col));
     pop
 }
@@ -4065,13 +4079,18 @@ fn tick(ui: &Shared) {
             rymplayer::discord::show(&s.config.discord_app_id, rymplayer::discord::Show::Song { title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
         }
     }
-    // Crossfade: the next song starts that many seconds before this one ends.
-    let fade_secs = s.config.crossfade as f32;
+    // Crossfade: the next song starts that many seconds before this one ends. Smart automix:
+    // also as soon as it has faded out in its last 15 seconds.
+    let automix = s.config.automix;
+    let fade_secs = if automix { rymplayer::automix::mix_secs(s.config.crossfade) } else { s.config.crossfade as f32 };
     let next_index = s.q.current.map(|c| c + 1).filter(|n| *n < s.q.songs.len());
+    let lead = if automix { rymplayer::automix::LOAD_LEAD } else { 0.0 };
+    let due = pos >= dur - fade_secs - lead
+        || (automix && pos >= dur - rymplayer::automix::WINDOW_SECS && s.audio.as_ref().is_some_and(|a| a.faded_out()));
     if fade_secs > 0.0
         && playing
         && dur > fade_secs + 10.0
-        && pos >= dur - fade_secs
+        && due
         && s.crossfade_for != s.request_id
         && s.sleep != Some(Sleep::EndOfSong)
         && let Some(n) = next_index
@@ -4500,8 +4519,10 @@ fn poll_events(ui: &Shared) {
                 let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
                 let resume = s.resume_at.take().filter(|(id, at)| *id == t.video_id && *at > 1.0).map(|(_, at)| at);
                 let crossfade = std::mem::take(&mut s.crossfade_next);
-                let secs = s.config.crossfade as f32;
+                let automix = s.config.automix;
+                let secs = if automix { rymplayer::automix::mix_secs(s.config.crossfade) } else { s.config.crossfade as f32 };
                 let started = match (result, &mut s.audio) {
+                    (Ok(song), Some(a)) if crossfade && automix => a.automix_to(&song, known, secs).map_err(|e| e.to_string()),
                     (Ok(song), Some(a)) if crossfade => a.crossfade_to(&song, known, secs).map_err(|e| e.to_string()),
                     (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()).map(|()| {
                         if let Some(at) = resume {

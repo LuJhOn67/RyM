@@ -1,6 +1,7 @@
 //! RymPlayer's shared core: YouTube Music access, playback, lyrics, settings and sign-in.
 //! Used by the terminal app (`RymPlayer`) and the window apps (`RyM-Legacy-Player`, `RymPlayer-GTK`).
 
+pub mod automix;
 pub mod api;
 pub mod arriving;
 pub mod audio;

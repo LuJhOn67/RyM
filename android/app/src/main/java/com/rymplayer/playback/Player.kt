@@ -72,6 +72,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     init {
         QueueBridge.next = { next() }
         QueueBridge.prev = { prev() }
+        QueueBridge.hasNext = { index + 1 < queue.size }
         future.addListener({
             val c = runCatching { future.get() }.getOrElse {
                 ready.completeExceptionally(it)
@@ -424,6 +425,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         saveSession()
         QueueBridge.next = null
         QueueBridge.prev = null
+        QueueBridge.hasNext = null
         loadJob?.cancel()
         ticker?.cancel()
         MediaController.releaseFuture(future)

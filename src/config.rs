@@ -71,6 +71,8 @@ pub struct Config {
     pub plugins: std::collections::BTreeMap<String, String>,
     /// Seconds two songs overlap as one fades into the next (0 = off).
     pub crossfade: u8,
+    /// Smart automix: songs change like a DJ mix (see `automix`); off: the plain crossfade.
+    pub automix: bool,
     /// A quiet start is skipped and a long quiet end finishes the song.
     pub skip_silence: bool,
     /// Equalizer preset (index into `fx::PRESETS`; the last is "Custom").
@@ -227,6 +229,7 @@ impl Default for Config {
             last_update_check: 0,
             plugins: Default::default(),
             crossfade: 4,
+            automix: false,
             skip_silence: true,
             eq_preset: 0,
             eq_custom: [0.0; 5],
@@ -363,6 +366,8 @@ pub enum Setting {
     /// Pre-releases count as updates.
     Beta,
     Crossfade,
+    /// Smart automix on or off.
+    Automix,
     SkipSilence,
     Equalizer,
     Normalize,
@@ -372,7 +377,7 @@ pub enum Setting {
     Reset,
 }
 
-pub const SETTINGS: [Setting; 23] = [
+pub const SETTINGS: [Setting; 24] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -390,6 +395,7 @@ pub const SETTINGS: [Setting; 23] = [
     Setting::AutoUpdate,
     Setting::Beta,
     Setting::Crossfade,
+    Setting::Automix,
     Setting::SkipSilence,
     Setting::Equalizer,
     Setting::Normalize,
@@ -441,6 +447,7 @@ impl Config {
             Setting::AutoUpdate => "Updates",
             Setting::Beta => "Beta updates",
             Setting::Crossfade => "Crossfade",
+            Setting::Automix => "Smart Automix",
             Setting::SkipSilence => "Skip silence",
             Setting::Equalizer => "Equalizer",
             Setting::Normalize => "Even loudness",
@@ -469,6 +476,7 @@ impl Config {
             Setting::AutoUpdate => tr(if self.auto_update_check { "Automatic" } else { "Off" }).to_string(),
             Setting::Beta => tr(if self.beta_updates { "On" } else { "Off" }).to_string(),
             Setting::Crossfade => if self.crossfade == 0 { tr("Off").to_string() } else { format!("{} s", self.crossfade) },
+            Setting::Automix => tr(if self.automix { "On" } else { "Off" }).to_string(),
             Setting::SkipSilence => tr(if self.skip_silence { "On" } else { "Off" }).to_string(),
             Setting::Equalizer => tr(self.eq_name()).to_string(),
             Setting::Normalize => tr(if self.normalize { "On" } else { "Off" }).to_string(),
@@ -504,6 +512,7 @@ impl Config {
             Setting::AutoUpdate => self.auto_update_check = !self.auto_update_check,
             Setting::Beta => self.beta_updates = !self.beta_updates,
             Setting::Crossfade => self.crossfade = (self.crossfade as i32 + step).clamp(0, 10) as u8,
+            Setting::Automix => self.automix = !self.automix,
             Setting::SkipSilence => self.skip_silence = !self.skip_silence,
             Setting::Equalizer => self.eq_preset = (self.eq_preset as i32 + step).rem_euclid(crate::fx::PRESETS.len() as i32) as usize,
             Setting::Normalize => self.normalize = !self.normalize,
@@ -519,7 +528,7 @@ impl Config {
             }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, automix: self.automix, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ..Config::default() }
             }
         }
     }

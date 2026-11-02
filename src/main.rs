@@ -521,9 +521,14 @@ impl App {
                             .or_else(|| stream::cached_duration(&vid));
                         let resume = self.resume_at.take().filter(|(id, at)| *id == vid && *at > 1.0).map(|(_, at)| at);
                         let crossfade = std::mem::take(&mut self.crossfade_next);
-                        let secs = self.config.crossfade as f32;
+                        let automix = self.config.automix;
+                        let secs = if automix { rymplayer::automix::mix_secs(self.config.crossfade) } else { self.config.crossfade as f32 };
                         if let Some(a) = &mut self.audio {
-                            let started = if crossfade { a.crossfade_to(&song, known, secs) } else { a.play(&song, known) };
+                            let started = match (crossfade, automix) {
+                                (true, true) => a.automix_to(&song, known, secs),
+                                (true, false) => a.crossfade_to(&song, known, secs),
+                                _ => a.play(&song, known),
+                            };
                             match started {
                                 Ok(()) => {
                                     if let Some(at) = resume {
@@ -1881,12 +1886,16 @@ impl App {
                 rymplayer::discord::show(&self.config.discord_app_id, rymplayer::discord::Show::Song { title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
             }
         }
-        // Crossfade: the next song starts that many seconds before this one ends.
-        let secs = self.config.crossfade as f32;
+        // Crossfade: the next song starts that many seconds before this one ends. Smart automix:
+        // also as soon as it has faded out in its last 15 seconds.
+        let automix = self.config.automix;
+        let secs = if automix { rymplayer::automix::mix_secs(self.config.crossfade) } else { self.config.crossfade as f32 };
         let now_id = self.now_playing().map(|t| t.video_id.clone());
         let has_next = self.q.current.is_some_and(|c| c + 1 < self.q.songs.len());
         let end_of_song_sleep = matches!(self.sleep, Some((None, _)));
-        if secs > 0.0 && playing && dur > secs + 10.0 && pos >= dur - secs && has_next && !end_of_song_sleep && self.crossfade_for != now_id {
+        let lead = if automix { rymplayer::automix::LOAD_LEAD } else { 0.0 };
+        let due = pos >= dur - secs - lead || (automix && pos >= dur - rymplayer::automix::WINDOW_SECS && self.audio.as_ref().is_some_and(|a| a.faded_out()));
+        if secs > 0.0 && playing && dur > secs + 10.0 && due && has_next && !end_of_song_sleep && self.crossfade_for != now_id {
             self.crossfade_for = now_id;
             self.crossfade_next = true;
             self.next();

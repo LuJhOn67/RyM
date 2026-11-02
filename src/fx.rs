@@ -211,6 +211,8 @@ pub struct Effects<S: Source<Item = f32>> {
     quiet: u64,
     frames: u64,
     total: Option<u64>,
+    /// Skip the quiet start even with "Skip silence" off (the automix's cue-in).
+    skip_start: bool,
 }
 
 /// About -50 dB: quieter than this is silence.
@@ -240,9 +242,16 @@ impl<S: Source<Item = f32>> Effects<S> {
             quiet: 0,
             frames: 0,
             total,
+            skip_start: false,
         };
         fx.update();
         fx
+    }
+
+    /// The quiet start is skipped whatever the settings say (the automix's cue-in).
+    pub fn skip_start(mut self) -> Self {
+        self.skip_start = true;
+        self
     }
 
     /// Picks up changed settings.
@@ -279,14 +288,14 @@ impl<S: Source<Item = f32>> Effects<S> {
             }
             self.frames += 1;
             let peak = self.frame.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-            if self.settings.skip_silence {
-                // A quiet start (up to 10 s) is skipped.
-                if !self.started {
-                    if peak < SILENCE && self.frames < self.rate as u64 * 10 {
-                        continue;
-                    }
-                    self.started = true;
+            // A quiet start (up to 10 s) is skipped.
+            if (self.settings.skip_silence || self.skip_start) && !self.started {
+                if peak < SILENCE && self.frames < self.rate as u64 * 10 {
+                    continue;
                 }
+                self.started = true;
+            }
+            if self.settings.skip_silence {
                 // Over 3 s of silence in the song's second half: it's over.
                 self.quiet = if peak < SILENCE { self.quiet + 1 } else { 0 };
                 if self.quiet > self.rate as u64 * 3 && self.total.is_some_and(|t| self.frames > t / 2) {

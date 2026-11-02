@@ -547,6 +547,14 @@ private fun SpeedSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                     )
                 }
             }
+            // Smart automix on or off, from the player too.
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(tr("Smart Automix"), fontWeight = FontWeight.SemiBold)
+                    Text(tr("Songs blend like a DJ mix"), color = Dim, fontSize = 13.sp)
+                }
+                androidx.compose.material3.Switch(vm.sound.automix, { vm.changeSound(vm.sound.copy(automix = it)) })
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

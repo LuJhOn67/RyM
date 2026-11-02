@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
@@ -175,6 +176,8 @@ fun SettingsPage(vm: AppViewModel) {
                 TapRow(Icons.Default.SwapHoriz, tr("Crossfade"), tr("The end of a song fades out as the next fades in · tap to change"), if (snd.crossfade == 0) tr("Off") else "${snd.crossfade} s") {
                     vm.changeSound(snd.copy(crossfade = (snd.crossfade + 1) % 11))
                 }
+                Divider()
+                SwitchRow(Icons.Default.AutoAwesome, tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), snd.automix) { vm.changeSound(snd.copy(automix = !snd.automix)) }
                 Divider()
                 SwitchRow(Icons.Default.ContentCut, tr("Skip silence"), tr("Silent parts at the start and end of songs are skipped"), snd.skipSilence) { vm.changeSound(snd.copy(skipSilence = !snd.skipSilence)) }
                 Divider()

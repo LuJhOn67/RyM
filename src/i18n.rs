@@ -103,6 +103,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "Smart Automix" => "الدمج الذكي (Automix)",
+        "Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing" => "الأغاني تندمج مثل مكس DJ: عند خفوت الأغنية، على الإيقاع، وبلا تصادم الجهير",
         "Back" => "رجوع",
         "More" => "المزيد",
         "Floating lyrics" => "كلمات عائمة",

@@ -46,11 +46,13 @@ object Sound {
         val reverb: Boolean = false,
         /** Sleep timer: when it stops (ms since 1970), -1 at the end of the song, 0 off. */
         val sleepAt: Long = 0,
+        /** Smart automix (see [Automix]); off: the plain crossfade. */
+        val automix: Boolean = false,
     ) {
         val gains: List<Float> get() = if (eqPreset == PRESETS.lastIndex) eqCustom else PRESETS[eqPreset.coerceIn(0, PRESETS.lastIndex)].second.toList()
         val modeName: String get() = MODES.firstOrNull { abs(it.speed - speed) < 0.01f && abs(it.pitch - pitch) < 0.01f }?.name ?: "Custom"
         /** Nothing changes the sound: the phone may decode it in its power-saving audio path. */
-        val untouched: Boolean get() = crossfade == 0 && !skipSilence && gains.all { it == 0f } && !normalize && speed == 1f && pitch == 1f && !reverb
+        val untouched: Boolean get() = crossfade == 0 && !automix && !skipSilence && gains.all { it == 0f } && !normalize && speed == 1f && pitch == 1f && !reverb
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -67,6 +69,7 @@ object Sound {
             pitch = p.getFloat("pitch", 1f),
             reverb = p.getBoolean("reverb", false),
             sleepAt = p.getLong("sleep_at", 0),
+            automix = p.getBoolean("automix", false),
         )
     }
 
@@ -81,6 +84,7 @@ object Sound {
             putFloat("pitch", s.pitch)
             putBoolean("reverb", s.reverb)
             putLong("sleep_at", s.sleepAt)
+            putBoolean("automix", s.automix)
         }.apply()
     }
 
