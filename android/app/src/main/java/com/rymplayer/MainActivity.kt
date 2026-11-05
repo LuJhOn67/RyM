@@ -76,11 +76,29 @@ class MainActivity : ComponentActivity() {
             RymTheme(model.ytmTheme) { RymApp(model) }
         }
         showUpdateFrom(intent)
+        // Not again when the screen turns (the same intent comes back with the saved state).
+        if (savedInstanceState == null) openFrom(intent)
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         showUpdateFrom(intent)
+        openFrom(intent)
+    }
+
+    /** The notification (the playing song), a YouTube Music link, or something shared to RyM. */
+    private fun openFrom(intent: android.content.Intent?) {
+        when {
+            intent == null -> {}
+            intent.getBooleanExtra(OPEN_PLAYER, false) -> vm.playerOpen = vm.player.current != null
+            intent.action == android.content.Intent.ACTION_VIEW -> intent.dataString?.let(vm::openLink)
+            intent.action == android.content.Intent.ACTION_SEND -> intent.getStringExtra(android.content.Intent.EXTRA_TEXT)?.let(vm::openShared)
+        }
+    }
+
+    companion object {
+        const val OPEN_PLAYER = "open_player"
     }
 
     /** Opened from the "new update" notification: look again and show the patch notes. */

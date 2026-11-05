@@ -85,7 +85,16 @@ class PlaybackService : MediaSessionService() {
         for (i in 0..1) players[i] = build(i)
         Sound.listen(this, soundChanged)
         applySound()
-        session = MediaSession.Builder(this, wrap(players[0]!!)).build()
+        // Tapping the notification (or the lock screen's player) opens RyM on the playing song.
+        val open = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            android.content.Intent(this, com.rymplayer.MainActivity::class.java)
+                .putExtra(com.rymplayer.MainActivity.OPEN_PLAYER, true)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        session = MediaSession.Builder(this, wrap(players[0]!!)).setSessionActivity(open).build()
         QueueBridge.cancelMix = { handler.post { cancelMix() } }
     }
 

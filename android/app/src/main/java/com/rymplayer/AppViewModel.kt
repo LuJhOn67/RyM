@@ -328,6 +328,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         else -> false
     }
 
+    /** A YouTube Music (or YouTube) link opened in RyM: the song plays, a list opens. */
+    fun openLink(link: String) {
+        val target = com.rymplayer.data.YouTubeLinks.parse(link)
+        if (target == null) {
+            status = tr("Not a YouTube Music link")
+            return
+        }
+        settingsOpen = false
+        storeOpen = false
+        recapOpen = false
+        when (target) {
+            is com.rymplayer.data.YouTubeLinks.Target.Song -> playSongId(target.videoId)
+            is com.rymplayer.data.YouTubeLinks.Target.Playlist -> { playerOpen = false; open(Screen.Songs(Screen.Kind.Playlist, target.id, tr("Playlist"))) }
+            is com.rymplayer.data.YouTubeLinks.Target.Mix -> { playerOpen = false; open(Screen.Songs(Screen.Kind.Mix, target.id, tr("Mix"))) }
+            is com.rymplayer.data.YouTubeLinks.Target.Album -> { playerOpen = false; open(Screen.Songs(Screen.Kind.Album, target.id, tr("Album"))) }
+            is com.rymplayer.data.YouTubeLinks.Target.Artist -> { playerOpen = false; open(Screen.Songs(Screen.Kind.Artist, target.id, tr("Artist"))) }
+        }
+    }
+
+    /** Shared to RyM: a YouTube Music link opens; anything else (a Spotify link, words) is searched. */
+    fun openShared(text: String) {
+        val link = com.rymplayer.data.YouTubeLinks.firstLink(text)
+        if (link != null && com.rymplayer.data.YouTubeLinks.parse(link) != null) return openLink(link)
+        query = text.trim()
+        playerOpen = false
+        selectTab(Screen.Search)
+        search()
+    }
+
+    /** A song by its id (from a link): its details and songs like it come from its radio. */
+    private fun playSongId(videoId: String) {
+        viewModelScope.launch {
+            val radio = runCatching { api.radio(videoId) }.getOrNull().orEmpty()
+            val song = radio.firstOrNull { it.videoId == videoId } ?: Track(videoId, tr("Song"), "")
+            player.start(listOf(song), 0)
+            playerOpen = true
+            player.append(player.tidy(radio.filter { it.videoId != videoId }, song))
+        }
+    }
+
     fun openLink(t: Track) {
         FeedMemory.opened(getApplication(), t)
         when (val l = t.link) {
