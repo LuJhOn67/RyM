@@ -28,6 +28,13 @@ object QueueBridge {
     @Volatile var prev: (() -> Unit)? = null
     /** A song comes after the playing one (the automix needs one to mix into). */
     @Volatile var hasNext: (() -> Boolean)? = null
+    /**
+     * The automix: the app moves its queue on to the next song and hands over that song's media
+     * item (null when it can't, and then nothing moved), for the service to start itself.
+     */
+    @Volatile var mixNext: (((MediaItem?) -> Unit) -> Unit)? = null
+    /** A song was picked by hand: a mix that hasn't started sounding yet is dropped. */
+    @Volatile var cancelMix: (() -> Unit)? = null
 }
 
 /**
@@ -79,6 +86,7 @@ class PlaybackService : MediaSessionService() {
         Sound.listen(this, soundChanged)
         applySound()
         session = MediaSession.Builder(this, wrap(players[0]!!)).build()
+        QueueBridge.cancelMix = { handler.post { cancelMix() } }
     }
 
     @OptIn(UnstableApi::class)
@@ -109,7 +117,10 @@ class PlaybackService : MediaSessionService() {
             override fun onAudioSessionIdChanged(audioSessionId: Int) = applySound()
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 val m = mix
-                if (isPlaying && m != null && m.new === exo && m.began == 0L) m.began = SystemClock.elapsedRealtime()
+                if (isPlaying && m != null && m.new === exo && m.began == 0L) {
+                    m.began = SystemClock.elapsedRealtime()
+                    moveSession(m)
+                }
                 handler.removeCallbacks(fades)
                 if (isPlaying || mix != null) handler.post(fades)
             }
@@ -150,9 +161,10 @@ class PlaybackService : MediaSessionService() {
                 if (playWhenReady && held()) askToStart(exo) else super.setPlayWhenReady(playWhenReady)
                 if (!playWhenReady) endMix()
             }
-            // Pausing in the middle of a mix ends it: the song going out stops.
+            // Pausing in the middle of a mix ends it: both songs stop.
             override fun pause() {
                 super.pause()
+                mix?.new?.pause()
                 endMix()
             }
         }
@@ -197,6 +209,8 @@ class PlaybackService : MediaSessionService() {
         val m = mix ?: return
         mix = null
         android.util.Log.w("RyM", "automix: done ($why) after ${SystemClock.elapsedRealtime() - m.asked} ms (nudge ${m.nudge})")
+        // The next song is the one that goes on now, sounding or not.
+        moveSession(m)
         m.old.stop()
         m.old.clearMediaItems()
         m.oldMeter.highpass = 0f
@@ -207,13 +221,41 @@ class PlaybackService : MediaSessionService() {
     }
 
     /**
-     * Starts a smart automix: the session moves to the other player, the app plays the next song
-     * on it, and this one plays on, fading out (see [fades]).
+     * The media session moves to the incoming player, once it sounds (or the mix ends). Moved
+     * while it was still silent, the service would drop out of the foreground for a moment, and
+     * with the screen off Android doesn't let it back in: the music stops on many phones.
+     */
+    private fun moveSession(m: Mix) {
+        val i = players.indexOf(m.new)
+        if (i < 0 || i == active) return
+        active = i
+        session?.player = wrap(m.new)
+    }
+
+    /** A song picked by hand while the next one is still loading for a mix: that one is dropped. */
+    private fun cancelMix() {
+        val m = mix ?: return
+        if (m.began != 0L) return
+        mix = null
+        android.util.Log.w("RyM", "automix: dropped (a song was picked)")
+        m.new.stop()
+        m.new.clearMediaItems()
+        m.old.volume = 1f
+        m.oldMeter.highpass = 0f
+        m.new.setAudioAttributes(attributes, false)
+        m.old.setAudioAttributes(attributes, true)
+    }
+
+    /**
+     * Starts a smart automix: the app moves its queue on and hands over the next song, which the
+     * service loads on the other player and starts on a beat; the session moves there once it
+     * sounds, while this one plays on, fading out (see [fades]).
      */
     private fun startMix(s: Sound.Settings) {
         val old = players[active] ?: return
         val i = 1 - active
         val new = players[i] ?: return
+        val ask = QueueBridge.mixNext ?: return
         new.stop()
         new.clearMediaItems()
         new.volume = 0f
@@ -226,9 +268,22 @@ class PlaybackService : MediaSessionService() {
         mix = Mix(old, meters[active], new, meters[i], (Automix.mixSecs(s.crossfade) * 1000).toLong(), outBeat?.bpm)
         android.util.Log.w("RyM", "automix: start at ${old.currentPosition} of ${old.duration} ms, tempo ${outBeat?.bpm}")
         easing = null
-        active = i
-        session?.player = wrap(new)
-        QueueBridge.next?.invoke()
+        val m = mix
+        ask { item ->
+            if (mix !== m || m == null) return@ask
+            if (item == null) {
+                // No next song after all: this one plays to its end as usual.
+                mix = null
+                android.util.Log.w("RyM", "automix: no next song")
+                new.setAudioAttributes(attributes, false)
+                old.setAudioAttributes(attributes, true)
+                return@ask
+            }
+            new.setMediaItem(item)
+            new.prepare()
+            m.playAsked = true
+            startOnBeat(new)
+        }
     }
 
     /**
@@ -340,14 +395,20 @@ class PlaybackService : MediaSessionService() {
         if (t >= 1f) endMix("mixed") else if (m.old.playbackState == Player.STATE_ENDED) endMix("the old song ended at ${m.old.currentPosition} of ${m.old.duration} ms")
     }
 
-    /** Swiping the app away while paused stops the service; while playing, music continues. */
+    /**
+     * Swiping the app away while paused stops the service; while playing, music continues. (The
+     * service stays in the foreground for 10 minutes after the music stops, so songs changing with
+     * the screen off aren't refused by Android; it is stopped here on purpose.)
+     */
+    @OptIn(UnstableApi::class)
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         val player = session?.player
-        if (player == null || !player.playWhenReady || player.mediaItemCount == 0) stopSelf()
+        if (player == null || !player.playWhenReady || player.mediaItemCount == 0) pauseAllPlayersAndStopSelf()
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        QueueBridge.cancelMix = null
         Sound.unlisten(this, soundChanged)
         effects.forEach { it?.release() }
         players.forEach { it?.release() }

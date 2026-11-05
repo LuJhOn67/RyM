@@ -73,6 +73,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.next = { next() }
         QueueBridge.prev = { prev() }
         QueueBridge.hasNext = { index + 1 < queue.size }
+        QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
         future.addListener({
             val c = runCatching { future.get() }.getOrElse {
                 ready.completeExceptionally(it)
@@ -280,6 +281,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
 
     fun play(i: Int) {
         val t = queue.getOrNull(i) ?: return
+        // A mix still loading its song gives way to the one picked here.
+        QueueBridge.cancelMix?.invoke()
         // The song that was playing gets its listening time before the new one starts.
         countListening()
         tapped = System.currentTimeMillis()
@@ -322,15 +325,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 return@launch
             }
             if (current?.videoId != t.videoId) return@launch
-            // Title, artist and cover for the notification and the lock screen.
-            val meta = MediaMetadata.Builder()
-                .setTitle(t.title)
-                .setArtist(t.artist)
-                .apply { thumbSized(t.thumb, 544)?.let { setArtworkUri(Uri.parse(it)) } }
-                .build()
-            // SoundCloud's songs come in pieces (HLS).
-            val hls = ".m3u8" in url
-            val item = MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).apply { if (hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }.build()
+            val item = mediaItem(t, url)
             // The song left off last time starts where it was (given with the song: a seek sent
             // right after loading it was lost).
             val from = resumeAt?.takeIf { it.first == t.videoId && it.second > 1000 }?.second
@@ -343,6 +338,46 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             // Last song of the queue: a radio of similar songs follows it.
             keepGoing(t)
         }
+    }
+
+    /** The player's item for [t]: its link, and title, artist and cover for the notification. */
+    private fun mediaItem(t: Track, url: String): MediaItem {
+        val meta = MediaMetadata.Builder()
+            .setTitle(t.title)
+            .setArtist(t.artist)
+            .apply { thumbSized(t.thumb, 544)?.let { setArtworkUri(Uri.parse(it)) } }
+            .build()
+        // SoundCloud's songs come in pieces (HLS).
+        val hls = ".m3u8" in url
+        return MediaItem.Builder().setMediaId(t.videoId).setUri(url).setMediaMetadata(meta).apply { if (hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }.build()
+    }
+
+    /**
+     * The automix moves on to the next song: its link first (nothing changes when there isn't
+     * one), then the queue, the stats and the lyrics, like [play]; the service starts the song.
+     */
+    private suspend fun advanceForMix(): MediaItem? {
+        val i = index + 1
+        val t = queue.getOrNull(i) ?: return null
+        if (useVlc && Vlc.installed(context)) return null
+        val url = Downloads.uriFor(context, t.videoId)?.toString()
+            ?: runCatching { Streams.playable(context, t.videoId) }.getOrNull()
+            ?: return null
+        if (index + 1 != i || queue.getOrNull(i)?.videoId != t.videoId) return null
+        countListening()
+        android.util.Log.w("RyM", "timing: mix into ${t.title} (${t.videoId})")
+        added = (added - 1).coerceAtLeast(0)
+        resumeAt = null
+        index = i
+        playCount++
+        played += t.videoId
+        com.rymplayer.data.Recent.played(context, t)
+        position = 0f
+        saveSession(0)
+        onTrackChanged(t)
+        Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
+        keepGoing(t)
+        return mediaItem(t, url)
     }
 
     fun pause() {
@@ -426,6 +461,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.next = null
         QueueBridge.prev = null
         QueueBridge.hasNext = null
+        QueueBridge.mixNext = null
         loadJob?.cancel()
         ticker?.cancel()
         MediaController.releaseFuture(future)
