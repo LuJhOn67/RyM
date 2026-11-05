@@ -910,6 +910,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val found = findLyrics(t)
             lyrics = found
             lyricsStatus = if (found == null) tr("No lyrics for this song") else ""
+            // Every source is asked right away, so the source buttons switch at once.
+            loadLyricsSources()
             // The next song's lyrics are ready before it starts.
             player.queue.getOrNull(player.index + 1)?.let { next ->
                 if (LyricsCache.get(getApplication(), next.videoId) == null) findLyrics(next)

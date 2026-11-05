@@ -3851,6 +3851,26 @@ fn fill_pills(ui: &Shared) {
 
 /// A source pill: that provider's lyrics (its next version when it already shows); the sources
 /// are looked up first when they aren't in yet.
+/// Every source's lyrics for the playing song, asked as soon as its own lyrics are in, so the
+/// source pills switch at once.
+fn prefetch_sources(ui: &Shared) {
+    let Some(t) = now_playing(ui) else { return };
+    {
+        let mut s = ui.borrow_mut();
+        let have = s.alt_lyrics.as_ref().is_some_and(|(id, _)| *id == t.video_id);
+        if have || s.sources_for.as_deref() == Some(t.video_id.as_str()) {
+            return;
+        }
+        s.sources_for = Some(t.video_id.clone());
+    }
+    let (api, shown) = (api_of(ui), ui.borrow().lyrics.clone());
+    post(ui, async move {
+        let list = rymplayer::lyrics::sources(api, t.clone(), shown).await;
+        Ev::LyricsSources(t.video_id, list)
+    });
+    fill_pills(ui);
+}
+
 fn pick_source(ui: &Shared, p: &'static str) {
     use rymplayer::lyric_sources::provider;
     let Some(t) = now_playing(ui) else { return };
@@ -4888,6 +4908,7 @@ fn poll_events(ui: &Shared) {
                 log(&format!("  lyrics for {vid}: {}", found.as_ref().map_or("none".to_string(), |l| format!("{} synced lines, from {}", l.synced.len(), l.source))));
                 if now_playing(ui).is_some_and(|t| t.video_id == vid) {
                     show_lyrics(ui, found);
+                    prefetch_sources(ui);
                 }
             }
             Ev::Rated(vid, like, Err(e)) => {
