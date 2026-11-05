@@ -68,6 +68,8 @@ object I18n {
         "No lyrics for this song" to "لا توجد كلمات لهذه الأغنية",
         "These lyrics aren't synced to the song" to "هذه الكلمات غير متزامنة مع الأغنية",
         "Lyrics from" to "الكلمات من",
+        "Devices" to "الأجهزة",
+        "The music playing here can move to RyM on your PC (same Wi-Fi and Google account)" to "الموسيقى اللي تشتغل هنا تقدر تنتقل لـ RyM بالكمبيوتر (نفس الواي فاي وحساب Google)",
         "Update now" to "حدّث الآن",
         "Downloading the update..." to "جارٍ تنزيل التحديث...",
         "Couldn't update" to "تعذّر التحديث",

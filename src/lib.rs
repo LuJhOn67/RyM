@@ -16,6 +16,7 @@ pub mod likes;
 pub mod local;
 pub mod login;
 pub mod lyric_sources;
+pub mod link;
 pub mod lyrics;
 pub mod memory;
 pub mod page_cache;

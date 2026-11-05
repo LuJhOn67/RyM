@@ -73,6 +73,11 @@ pub struct Config {
     pub crossfade: u8,
     /// Smart automix: songs change like a DJ mix (see `automix`); off: the plain crossfade.
     pub automix: bool,
+    /// Music Cross Ears (RyM Link) on: the phone's music can move to this PC.
+    pub cross_ears: bool,
+    /// RyM Link: music playing on the phone (same Wi-Fi and account) moves here as the window
+    /// app opens; off: it asks first.
+    pub link_auto: bool,
     /// A quiet start is skipped and a long quiet end finishes the song.
     pub skip_silence: bool,
     /// Equalizer preset (index into `fx::PRESETS`; the last is "Custom").
@@ -230,6 +235,8 @@ impl Default for Config {
             plugins: Default::default(),
             crossfade: 4,
             automix: false,
+            cross_ears: true,
+            link_auto: true,
             skip_silence: true,
             eq_preset: 0,
             eq_custom: [0.0; 5],
@@ -528,7 +535,7 @@ impl Config {
             }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, automix: self.automix, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, automix: self.automix, link_auto: self.link_auto, cross_ears: self.cross_ears, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ..Config::default() }
             }
         }
     }

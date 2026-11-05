@@ -241,6 +241,13 @@ class MusicApi(private val cookie: String?) {
     suspend fun search(q: String): List<Track> =
         songRows(post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }))
 
+    /** The signed-in account's name and "@handle" (for RyM Link: devices of one account find each other). */
+    suspend fun account(): Pair<String, String>? {
+        val h = post("account/account_menu", buildJsonObject {}).findAll("activeAccountHeaderRenderer").firstOrNull() ?: return null
+        fun text(e: kotlinx.serialization.json.JsonElement?) = e.runsText().ifEmpty { e.at("simpleText").str.orEmpty() }
+        return text(h.at("accountName")) to text(h.at("channelHandle"))
+    }
+
     /** A search suggestion; [forget] (it's from the account's search history) takes it off. */
     data class Suggestion(val text: String, val forget: String?) {
         val fromHistory: Boolean get() = forget != null

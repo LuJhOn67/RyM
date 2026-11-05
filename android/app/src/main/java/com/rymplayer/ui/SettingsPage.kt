@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.AutoAwesome
 import kotlin.math.roundToInt
@@ -171,6 +172,9 @@ fun SettingsPage(vm: AppViewModel) {
                     Divider()
                     SwitchRow(Icons.Default.PlayArrow, tr("Play songs in VLC"), tr("Each song opens in VLC instead of the built-in player"), vm.playInVlc) { vm.togglePlayInVlc() }
                 }
+            }
+            Section(tr("Devices")) {
+                SwitchRow(Icons.Default.Devices, "Music Cross Ears", tr("The music playing here can move to RyM on your PC (same Wi-Fi and Google account)"), vm.crossEars) { vm.toggleCrossEars() }
             }
             Section(tr("Theme")) {
                 TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }

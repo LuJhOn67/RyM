@@ -74,6 +74,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.prev = { prev() }
         QueueBridge.hasNext = { index + 1 < queue.size }
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
+        Link.pause = { pause() }
         future.addListener({
             val c = runCatching { future.get() }.getOrElse {
                 ready.completeExceptionally(it)
@@ -84,7 +85,10 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     playing = isPlaying
                     countListening()
-                    if (isPlaying) startTicker() else saveSession()
+                    if (isPlaying) {
+                        startTicker()
+                        linkSnapshot()
+                    } else saveSession()
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
@@ -192,6 +196,12 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         }
         context.getSharedPreferences("session", Context.MODE_PRIVATE).edit()
             .putInt("index", if (i < 0) -1 else i - from).putLong("ms", ms.coerceAtLeast(0)).apply()
+        linkSnapshot(ms)
+    }
+
+    /** What plays, for RyM Link (a PC on the Wi-Fi can take it over from this second). */
+    private fun linkSnapshot(ms: Long = controller?.currentPosition ?: 0L) {
+        Link.snapshot = if (index < 0) null else Link.Snapshot(queue.toList(), index, ms.coerceAtLeast(0), System.currentTimeMillis(), controller?.isPlaying == true, speed)
     }
 
     /** The last session's queue, its song paused where it was left: play goes on from there. */
@@ -437,6 +447,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         controller?.seekTo((secs * 1000).toLong())
         position = secs
         seeks++
+        linkSnapshot((secs * 1000).toLong())
     }
 
     fun remove(i: Int) {
@@ -462,6 +473,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.prev = null
         QueueBridge.hasNext = null
         QueueBridge.mixNext = null
+        Link.pause = null
         loadJob?.cancel()
         ticker?.cancel()
         MediaController.releaseFuture(future)

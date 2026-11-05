@@ -413,6 +413,9 @@ enum Ev {
     Suggestions(String, anyhow::Result<Vec<rymplayer::api::Suggestion>>),
     /// The update downloaded and put in place: the program to start again.
     Installed(anyhow::Result<PathBuf>),
+    /// RyM Link: a device's note on the Wi-Fi, and the music taken over from a phone.
+    Peer(rymplayer::link::Announce, std::net::IpAddr),
+    TookOver(String, anyhow::Result<rymplayer::link::State>),
     Done,
 }
 
@@ -562,6 +565,8 @@ struct Ui {
     /// What the suggestions were last asked for, and the wait before asking (typing goes on).
     suggest_for: Option<String>,
     suggest_wait: Option<glib::SourceId>,
+    /// RyM Link: the phone song already taken over or asked about (device, song), so it's once.
+    link_seen: Option<(String, String)>,
 }
 
 type Shared = Rc<RefCell<Ui>>;
@@ -1301,6 +1306,7 @@ fn build(app: &Application) {
         play_asked: Instant::now(),
         suggest_for: None,
         suggest_wait: None,
+        link_seen: None,
     }));
     if ui.borrow().audio.is_none() {
         toast(&ui, tr("No audio device found"));
@@ -1409,6 +1415,13 @@ fn build(app: &Application) {
         window.add_controller(keys);
     }
     fill_pills(&ui);
+    {
+        // RyM Link: the phones on this Wi-Fi say what they play.
+        let tx = ui.borrow().tx.clone();
+        rymplayer::link::listen(move |note, ip| {
+            let _ = tx.send(Ev::Peer(note, ip));
+        });
+    }
     speed_button.set_popover(Some(&speed_popover(&ui)));
     sleep_button.set_popover(Some(&sleep_popover(&ui)));
     {
@@ -1874,6 +1887,16 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     }
     page.append(&setting_row(tr("Crossfade"), tr("Seconds the end of a song and the start of the next play together (0 = off)"), &fade));
     page.append(&setting_row(tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), &switch(config.automix, ui, |c, on| c.automix = on)));
+    page.append(&setting_row(
+        "Music Cross Ears",
+        tr("Music playing on your phone can move to this PC (same Wi-Fi and Google account); off: the phone is ignored"),
+        &switch(config.cross_ears, ui, |c, on| c.cross_ears = on),
+    ));
+    page.append(&setting_row(
+        tr("Take over from the phone"),
+        tr("Music playing on your phone (same Wi-Fi and account) moves here when RyM opens; off: it asks first"),
+        &switch(config.link_auto, ui, |c, on| c.link_auto = on),
+    ));
     page.append(&setting_row(tr("Skip silence"), tr("A quiet start is skipped; a long quiet end finishes the song"), &switch(config.skip_silence, ui, |c, on| c.skip_silence = on)));
     page.append(&setting_row(tr("Even loudness"), tr("Every song at about the same loudness, without sudden loud parts"), &switch(config.normalize, ui, |c, on| c.normalize = on)));
 
@@ -4333,6 +4356,77 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     account.set_visible(true);
 }
 
+/// RyM Link: a phone of the same account plays while this app is idle: the music moves here
+/// (or, with "ask" chosen, a question first). Once per song and phone.
+fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
+    let (mine, idle, auto) = {
+        let s = ui.borrow();
+        // Music Cross Ears off: the phones are ignored.
+        if !s.config.cross_ears {
+            return;
+        }
+        let mine = s.account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));
+        let idle = !s.loading && !s.audio.as_ref().is_some_and(|a| a.is_playing());
+        (mine, idle, s.config.link_auto)
+    };
+    let Some(key) = mine else { return };
+    if note.kind != "phone" || note.account != key || !note.playing || note.video_id.is_empty() || !idle {
+        return;
+    }
+    let seen = (note.device.clone(), note.video_id.clone());
+    if ui.borrow().link_seen.as_ref() == Some(&seen) {
+        return;
+    }
+    ui.borrow_mut().link_seen = Some(seen);
+    let take = {
+        let ui = ui.clone();
+        let (device, port, key) = (note.device.clone(), note.port, key.clone());
+        move || {
+            let device = device.clone();
+            let key = key.clone();
+            post(&ui, async move { Ev::TookOver(device, rymplayer::link::take_over(ip, port, &key).await) });
+        }
+    };
+    if auto {
+        take();
+        return;
+    }
+    // Asked first: what plays on the phone, and "Play here".
+    let parent = ui.borrow().w.window.clone();
+    let win = gtk::Window::builder().transient_for(&parent).modal(true).default_width(420).title("RyM").build();
+    win.add_css_class("rym");
+    let col = gtk::Box::new(Orientation::Vertical, 10);
+    col.set_margin_top(18);
+    col.set_margin_bottom(18);
+    col.set_margin_start(20);
+    col.set_margin_end(20);
+    col.append(&label(&format!("{} {}", tr("Playing on"), note.device), &["dim"]));
+    col.append(&label(&note.title, &["heading"]));
+    col.append(&label(&note.artist, &["dim"]));
+    let buttons = gtk::Box::new(Orientation::Horizontal, 10);
+    buttons.set_halign(Align::End);
+    let no = Button::with_label(tr("Not now"));
+    no.add_css_class("ghost");
+    let yes = Button::with_label(tr("Play here"));
+    yes.add_css_class("pill");
+    {
+        let win = win.clone();
+        no.connect_clicked(move |_| win.close());
+    }
+    {
+        let win = win.clone();
+        yes.connect_clicked(move |_| {
+            take();
+            win.close();
+        });
+    }
+    buttons.append(&no);
+    buttons.append(&yes);
+    col.append(&buttons);
+    win.set_child(Some(&col));
+    win.present();
+}
+
 /// Asks for suggestions for the search box's text after `wait_ms` (each keystroke starts the
 /// wait again, so only the last one asks).
 fn ask_suggestions(ui: &Shared, wait_ms: u64) {
@@ -4760,6 +4854,22 @@ fn poll_events(ui: &Shared) {
                 }
             }
             Ev::Installed(Err(e)) => toast(ui, &format!("{}: {e}", tr("Couldn't update"))),
+            Ev::Peer(note, ip) => heard_peer(ui, note, ip),
+            Ev::TookOver(device, Ok(state)) => {
+                let current = state.current;
+                let songs: Vec<Track> = state.songs.into_iter().map(Track::from).collect();
+                {
+                    let mut s = ui.borrow_mut();
+                    let vid = songs.get(current).map(|t| t.video_id.clone()).unwrap_or_default();
+                    s.q = rymplayer::queue::Queue { songs, current: Some(current), added: 0 };
+                    // The song goes on from the phone's second.
+                    s.resume_at = Some((vid, state.position));
+                    s.side_closed = false;
+                }
+                play_at(ui, current);
+                toast(ui, &format!("{} {device}", tr("Playing here, moved from")));
+            }
+            Ev::TookOver(_, Err(e)) => toast(ui, &format!("{}: {e}", tr("Couldn't move the music from the phone"))),
             Ev::LyricsSources(vid, list) => {
                 let wanted = {
                     let mut s = ui.borrow_mut();

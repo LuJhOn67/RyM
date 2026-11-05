@@ -173,6 +173,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lyrics_pill", lyricsPill).apply()
     }
 
+    /** Music Cross Ears: this phone's music can move to a PC of the same account (RyM Link). */
+    var crossEars by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("cross_ears", true).also { com.rymplayer.playback.Link.enabled = it })
+        private set
+
+    fun toggleCrossEars() {
+        crossEars = !crossEars
+        com.rymplayer.playback.Link.enabled = crossEars
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("cross_ears", crossEars).apply()
+    }
+
     /** The phone's look: RyM YTM (pure black, quick picks, big shelves) or the classic one. */
     var ytmTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("theme_ytm", false))
         private set
@@ -675,6 +685,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** App on screen: liked songs are re-read every two minutes (and right away). */
     fun onForeground() {
         player.visible = true
+        // RyM Link: the account's key, so a PC signed in to it can take the music over.
+        if (com.rymplayer.playback.Link.account == null && api.signedIn) {
+            viewModelScope.launch {
+                runCatching { api.account() }
+                    .onFailure { android.util.Log.w("RyM", "link: no account (${it.message})") }
+                    .getOrNull()?.let { (name, handle) ->
+                        com.rymplayer.playback.Link.account = com.rymplayer.playback.Link.accountKey(name, handle)
+                        android.util.Log.w("RyM", "link: account key ${com.rymplayer.playback.Link.account}")
+                    }
+            }
+        }
         if (foregroundJob?.isActive == true) return
         foregroundJob = viewModelScope.launch {
             while (isActive) {
