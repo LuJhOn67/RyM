@@ -900,7 +900,11 @@ impl Gui {
                     row![
                         space::horizontal(),
                         button(line(tr("Later"), 14, SEMI, p.text)).padding([9, 18]).style(style::ghost(p, false)).on_press(Message::CloseDialog),
-                        button(line(tr("Download"), 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::OpenLink(r.download_for(file))),
+                        if cfg!(windows) && r.download_for(file).ends_with(".exe") {
+                            button(line(tr("Update now"), 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::InstallUpdate(r.download_for(file)))
+                        } else {
+                            button(line(tr("Download"), 14, BOLD, p.pill_text)).padding([9, 20]).style(style::pill(p)).on_press(Message::OpenLink(r.download_for(file)))
+                        },
                     ]
                     .spacing(8),
                 ]

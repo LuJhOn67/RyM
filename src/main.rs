@@ -19,6 +19,8 @@ use config::{Config, SETTINGS, Side};
 use lyrics::Lyrics;
 
 fn main() -> anyhow::Result<()> {
+    // What the last update put aside goes now.
+    rymplayer::updates::clean_old();
     if std::env::args().any(|a| a == "--login") {
         login::run();
     }
@@ -118,6 +120,8 @@ enum Event {
     More(Page, Result<api::Paged, String>),
     /// A newer RyM on GitHub (None: up to date); true when asked with U.
     Update(Result<Option<rymplayer::updates::Release>, String>, bool),
+    /// The update downloaded and put in place.
+    Installed(Result<std::path::PathBuf, String>),
     /// The plugin store's list.
     Store(Result<Vec<rymplayer::plugins::Plugin>, String>),
     /// A video's picture and sound links, to watch it.
@@ -594,6 +598,8 @@ impl App {
                 self.focus = Focus::Tracks;
             }
             Event::ArtistFound(..) => self.status = tr("Artist not found").into(),
+            Event::Installed(Ok(_)) => self.status = tr("Updated: quit (q) and open RyM again to use the new version").into(),
+            Event::Installed(Err(e)) => self.status = format!("{}: {e}", tr("Couldn't update")),
             Event::Update(result, asked) => match result {
                 Ok(Some(r)) => self.update = Some(r),
                 Ok(None) if asked => self.status = tr("You have the latest version").into(),
@@ -711,7 +717,14 @@ impl App {
         if let Some(r) = self.update.clone() {
             match k.code {
                 KeyCode::Enter => {
-                    let _ = rymplayer::updates::open_link(&r.download_for(if cfg!(windows) { "RyM.exe" } else { "RyM-linux-x86_64.tar.gz" }));
+                    let url = r.download_for(if cfg!(windows) { "RyM.exe" } else { "RyM-linux-x86_64.tar.gz" });
+                    // Windows: the new RyM.exe downloads and goes in place here.
+                    if cfg!(windows) && url.ends_with(".exe") {
+                        self.status = tr("Downloading the update...").into();
+                        self.spawn(async move { Event::Installed(s(rymplayer::updates::install(&url, |_| {}).await)) });
+                    } else {
+                        let _ = rymplayer::updates::open_link(&url);
+                    }
                     self.update = None;
                 }
                 KeyCode::Esc | KeyCode::Char('q') => self.update = None,

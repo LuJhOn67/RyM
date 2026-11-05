@@ -241,6 +241,34 @@ class MusicApi(private val cookie: String?) {
     suspend fun search(q: String): List<Track> =
         songRows(post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }))
 
+    /** A search suggestion; [forget] (it's from the account's search history) takes it off. */
+    data class Suggestion(val text: String, val forget: String?) {
+        val fromHistory: Boolean get() = forget != null
+    }
+
+    /**
+     * YouTube Music's suggestions for what's typed so far; signed in, the account's own search
+     * history comes first (the same on every device), with nothing typed too.
+     */
+    suspend fun searchSuggestions(input: String): List<Suggestion> {
+        val page = post("music/get_search_suggestions", buildJsonObject { put("input", input) })
+        val out = mutableListOf<Suggestion>()
+        for (r in page.findAll("historySuggestionRenderer")) {
+            val text = r.at("suggestion").runsText()
+            if (text.isNotBlank()) out += Suggestion(text, r.findAll("feedbackToken").firstOrNull().str ?: "")
+        }
+        for (r in page.findAll("searchSuggestionRenderer")) {
+            val text = r.at("suggestion").runsText()
+            if (text.isNotBlank() && out.none { it.text.equals(text, ignoreCase = true) }) out += Suggestion(text, null)
+        }
+        return out
+    }
+
+    /** Takes a search off the account's history. */
+    suspend fun forgetSearch(token: String) {
+        post("feedback", buildJsonObject { put("feedbackTokens", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(token)) }) })
+    }
+
     /** Listening history; `album` holds the period ("Today", "Yesterday"...). */
     suspend fun history(): List<Track> = browse("FEmusic_history").findAll("musicShelfRenderer").flatMap { shelf ->
         val period = shelf.at("title").runsText()

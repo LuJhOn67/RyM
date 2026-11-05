@@ -409,6 +409,10 @@ enum Ev {
     VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
     /// Every source's lyrics for a song (the source switcher).
     LyricsSources(String, Vec<Lyrics>),
+    /// Search suggestions for what was typed (the account's search history first).
+    Suggestions(String, anyhow::Result<Vec<rymplayer::api::Suggestion>>),
+    /// The update downloaded and put in place: the program to start again.
+    Installed(anyhow::Result<PathBuf>),
     Done,
 }
 
@@ -431,6 +435,10 @@ struct Widgets {
     toast_text: Label,
     account: gtk::MenuButton,
     sign_in: Button,
+    /// The search box, and the list of suggestions under it.
+    search: gtk::Entry,
+    suggest: gtk::Popover,
+    suggest_box: gtk::Box,
     lyrics_box: gtk::Box,
     lyrics_scroll: gtk::ScrolledWindow,
     /// The side panel: lyrics or the queue ("Up next").
@@ -551,6 +559,9 @@ struct Ui {
     shown_slider: f32,
     /// When the playing song was asked for (for the log).
     play_asked: Instant,
+    /// What the suggestions were last asked for, and the wait before asking (typing goes on).
+    suggest_for: Option<String>,
+    suggest_wait: Option<glib::SourceId>,
 }
 
 type Shared = Rc<RefCell<Ui>>;
@@ -584,6 +595,8 @@ fn log(line: &str) {
 
 fn main() {
     configure_gtk_runtime();
+    // What the last update put aside goes now.
+    rymplayer::updates::clean_old();
     // GTK's own warnings and errors (a lost graphics context, say) go to rym-gtk.log too: the
     // window app has no console to print them to.
     glib::log_set_writer_func(|level, fields| {
@@ -821,6 +834,17 @@ fn build(app: &Application) {
     search_row.append(&search_in);
     search_row.append(&search);
     header.set_title_widget(Some(&search_row));
+    // Suggestions under the search box: the account's own search history (the same on the
+    // phone), then YouTube Music's suggestions. It never takes the focus from the box.
+    let suggest_box = gtk::Box::new(Orientation::Vertical, 0);
+    let suggest = gtk::Popover::new();
+    suggest.set_parent(&search);
+    suggest.set_autohide(false);
+    suggest.set_has_arrow(false);
+    suggest.set_can_focus(false);
+    suggest.set_position(gtk::PositionType::Bottom);
+    suggest.set_halign(Align::Start);
+    suggest.set_child(Some(&suggest_box));
     // RyM YTM: the menu button (folds the side menu) and the name on the left.
     let menu_button = icon_button("open-menu-symbolic", tr("Menu"), &[]);
     if ytm {
@@ -1197,6 +1221,9 @@ fn build(app: &Application) {
             toast_text,
             account: account.clone(),
             sign_in: sign_in.clone(),
+            search: search.clone(),
+            suggest: suggest.clone(),
+            suggest_box: suggest_box.clone(),
             lyrics_box,
             lyrics_scroll,
             side,
@@ -1272,6 +1299,8 @@ fn build(app: &Application) {
         shown_pos: None,
         shown_slider: -1.0,
         play_asked: Instant::now(),
+        suggest_for: None,
+        suggest_wait: None,
     }));
     if ui.borrow().audio.is_none() {
         toast(&ui, tr("No audio device found"));
@@ -1291,10 +1320,43 @@ fn build(app: &Application) {
         let ui = ui.clone();
         search.connect_activate(move |e| {
             let q = e.text().trim().to_string();
+            ui.borrow().w.suggest.popdown();
             if !q.is_empty() {
                 search_songs(&ui, q);
             }
         });
+    }
+    {
+        // Typing: suggestions once it pauses for a moment.
+        let ui = ui.clone();
+        search.connect_changed(move |e| {
+            if e.has_focus() || e.first_child().is_some_and(|c| c.has_focus()) {
+                ask_suggestions(&ui, 200);
+            }
+        });
+    }
+    {
+        // Into the box: the history (or suggestions for what's there); out of it: the list goes
+        // (a moment later, so a click on it still counts).
+        let focus = gtk::EventControllerFocus::new();
+        let ui2 = ui.clone();
+        focus.connect_enter(move |_| ask_suggestions(&ui2, 0));
+        let ui2 = ui.clone();
+        focus.connect_leave(move |_| {
+            let ui = ui2.clone();
+            glib::timeout_add_local_once(Duration::from_millis(250), move || ui.borrow().w.suggest.popdown());
+        });
+        search.add_controller(focus);
+        let keys = gtk::EventControllerKey::new();
+        let ui2 = ui.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape && ui2.borrow().w.suggest.is_visible() {
+                ui2.borrow().w.suggest.popdown();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        search.add_controller(keys);
     }
     {
         let ui = ui.clone();
@@ -3101,19 +3163,40 @@ fn show_update(ui: &Shared, r: &rymplayer::updates::Release) {
     buttons.set_halign(Align::End);
     let later = Button::with_label(tr("Later"));
     later.add_css_class("ghost");
-    let get = Button::with_label(tr("Download"));
+    // Windows: the update downloads and goes in place here, then RyM opens again on it.
+    let get = Button::with_label(if cfg!(windows) { tr("Update now") } else { tr("Download") });
     get.add_css_class("pill");
     let file = if cfg!(windows) { "RyM-GTK-Windows.zip" } else { "RyM-linux-x86_64.tar.gz" };
     let url = r.download_for(file);
+    let how = label("", &["dim"]);
+    col.append(&how);
     {
         let win = win.clone();
         later.connect_clicked(move |_| win.close());
     }
     {
-        let win = win.clone();
-        get.connect_clicked(move |_| {
-            let _ = rymplayer::updates::open_link(&url);
-            win.close();
+        let (win, ui, later) = (win.clone(), ui.clone(), later.clone());
+        get.connect_clicked(move |b| {
+            if !cfg!(windows) || !url.ends_with(".zip") {
+                let _ = rymplayer::updates::open_link(&url);
+                win.close();
+                return;
+            }
+            b.set_sensitive(false);
+            later.set_sensitive(false);
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+            {
+                // The download's progress on the dialog, until it's done.
+                let (done, how) = (done.clone(), how.downgrade());
+                glib::timeout_add_local(Duration::from_millis(200), move || {
+                    let Some(how) = how.upgrade() else { return glib::ControlFlow::Break };
+                    let p = f32::from_bits(done.load(std::sync::atomic::Ordering::Relaxed));
+                    how.set_text(&format!("{} {:.0}%", tr("Downloading the update..."), p * 100.0));
+                    if p >= 1.0 { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+                });
+            }
+            let url = url.clone();
+            post(&ui, async move { Ev::Installed(rymplayer::updates::install(&url, move |p| done.store(p.to_bits(), std::sync::atomic::Ordering::Relaxed)).await) });
         });
     }
     buttons.append(&later);
@@ -4250,6 +4333,76 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     account.set_visible(true);
 }
 
+/// Asks for suggestions for the search box's text after `wait_ms` (each keystroke starts the
+/// wait again, so only the last one asks).
+fn ask_suggestions(ui: &Shared, wait_ms: u64) {
+    if let Some(id) = ui.borrow_mut().suggest_wait.take() {
+        id.remove();
+    }
+    let ui2 = ui.clone();
+    let id = glib::timeout_add_local_once(Duration::from_millis(wait_ms), move || {
+        ui2.borrow_mut().suggest_wait = None;
+        let Some(api) = api_of(&ui2) else { return };
+        let text = ui2.borrow().w.search.text().trim().to_string();
+        ui2.borrow_mut().suggest_for = Some(text.clone());
+        post(&ui2, async move { Ev::Suggestions(text.clone(), api.search_suggestions(text).await) });
+    });
+    ui.borrow_mut().suggest_wait = Some(id);
+}
+
+/// The suggestions under the search box: a click searches it; a past search can be taken off the
+/// account's history (✕).
+fn show_suggestions(ui: &Shared, list: Vec<rymplayer::api::Suggestion>) {
+    let (pop, rows, entry) = {
+        let s = ui.borrow();
+        (s.w.suggest.clone(), s.w.suggest_box.clone(), s.w.search.clone())
+    };
+    clear(&rows);
+    if list.is_empty() || !entry.has_focus() && !entry.first_child().is_some_and(|c| c.has_focus()) {
+        pop.popdown();
+        return;
+    }
+    rows.set_size_request(entry.width().max(320), -1);
+    for sug in list.into_iter().take(10) {
+        let row = gtk::Box::new(Orientation::Horizontal, 10);
+        let pick = Button::new();
+        pick.add_css_class("flat-row");
+        pick.set_hexpand(true);
+        let inner = gtk::Box::new(Orientation::Horizontal, 10);
+        inner.append(&gtk::Image::from_icon_name(if sug.from_history() { "document-open-recent-symbolic" } else { "system-search-symbolic" }));
+        let l = label(&sug.text, &[]);
+        l.set_hexpand(true);
+        inner.append(&l);
+        pick.set_child(Some(&inner));
+        {
+            let (ui, text, pop, entry) = (ui.clone(), sug.text.clone(), pop.clone(), entry.clone());
+            pick.connect_clicked(move |_| {
+                entry.set_text(&text);
+                pop.popdown();
+                search_songs(&ui, text.clone());
+            });
+        }
+        row.append(&pick);
+        if let Some(token) = sug.forget.clone().filter(|t| !t.is_empty()) {
+            let x = icon_button("window-close-symbolic", tr("Remove from search history"), &["dim"]);
+            let (ui, row2, rows2) = (ui.clone(), row.clone(), rows.clone());
+            x.connect_clicked(move |_| {
+                rows2.remove(&row2);
+                if let Some(api) = api_of(&ui) {
+                    let token = token.clone();
+                    post(&ui, async move {
+                        let _ = api.forget_search(token).await;
+                        Ev::Done
+                    });
+                }
+            });
+            row.append(&x);
+        }
+        rows.append(&row);
+    }
+    pop.popup();
+}
+
 /// Opens or closes the playing song's page: it rises over the pages, its cover zooming in, with
 /// the lyrics and Up next beside it.
 fn show_side(w: &Widgets, open: bool) {
@@ -4591,6 +4744,22 @@ fn poll_events(ui: &Shared) {
                     s.w.lyrics_provider.load_from_string(&lyrics_css(bg, s.w.ytm));
                 }
             }
+            Ev::Suggestions(asked, Ok(list)) => {
+                if ui.borrow().suggest_for.as_deref() == Some(asked.as_str()) {
+                    show_suggestions(ui, list);
+                }
+            }
+            Ev::Suggestions(..) => {}
+            Ev::Installed(Ok(exe)) => {
+                // The new version opens where this one leaves off.
+                save_session(ui);
+                if std::process::Command::new(&exe).spawn().is_ok() {
+                    ui.borrow().w.window.close();
+                } else {
+                    toast(ui, tr("Updated: open RyM again to use the new version"));
+                }
+            }
+            Ev::Installed(Err(e)) => toast(ui, &format!("{}: {e}", tr("Couldn't update"))),
             Ev::LyricsSources(vid, list) => {
                 let wanted = {
                     let mut s = ui.borrow_mut();

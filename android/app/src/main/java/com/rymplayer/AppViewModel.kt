@@ -70,6 +70,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     val pages = androidx.compose.runtime.mutableStateMapOf<Screen.Songs, List<Track>>()
     var query by mutableStateOf("")
+
+    /** Suggestions under the search box: the account's search history first (the same as on the PC). */
+    var suggestions by mutableStateOf<List<com.rymplayer.data.MusicApi.Suggestion>>(emptyList())
+        private set
+    private var suggestJob: Job? = null
+
+    /** Typing in the search box: suggestions once it pauses for a moment. */
+    fun typeQuery(q: String) {
+        query = q
+        askSuggestions(250)
+    }
+
+    fun askSuggestions(waitMs: Long = 0) {
+        suggestJob?.cancel()
+        val text = query.trim()
+        suggestJob = viewModelScope.launch {
+            delay(waitMs)
+            suggestions = runCatching { api.searchSuggestions(text) }.getOrDefault(emptyList())
+        }
+    }
+
+    /** A past search taken off the account's history. */
+    fun forgetSearch(s: com.rymplayer.data.MusicApi.Suggestion) {
+        suggestions = suggestions - s
+        val token = s.forget?.takeIf { it.isNotEmpty() } ?: return
+        viewModelScope.launch { runCatching { api.forgetSearch(token) } }
+    }
+
+    fun searchFor(text: String) {
+        query = text
+        search()
+    }
     val liked = mutableStateListOf<String>()
 
     val player = Player(app, viewModelScope)
@@ -184,6 +216,47 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Looks on GitHub for a newer RyM; [asked]: from the settings, so "up to date" is said too. */
+    /** The update downloading in the app (0 to 1), or null. */
+    var updateProgress by mutableStateOf<Float?>(null)
+        private set
+
+    /**
+     * Downloads the new APK here and opens Android's installer on it (no browser). The first time,
+     * Android asks to let RyM install apps: its settings page opens, then Update is pressed again.
+     */
+    fun installUpdate(r: com.rymplayer.data.Updates.Release) {
+        val ctx = getApplication<Application>()
+        val url = r.apk ?: return
+        if (!ctx.packageManager.canRequestPackageInstalls()) {
+            status = tr("Allow RyM to install updates, then press Update now again")
+            runCatching {
+                ctx.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:${ctx.packageName}"))
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+            return
+        }
+        if (updateProgress != null) return
+        updateProgress = 0f
+        viewModelScope.launch {
+            val file = runCatching { com.rymplayer.data.Updates.download(ctx, url) { p -> updateProgress = p } }
+                .onFailure { status = "${tr("Couldn't update")}: ${it.message}" }
+                .getOrNull()
+            updateProgress = null
+            if (file == null) return@launch
+            update = null
+            val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", file)
+            runCatching {
+                ctx.startActivity(
+                    android.content.Intent(android.content.Intent.ACTION_VIEW)
+                        .setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }.onFailure { status = "${tr("Couldn't update")}: ${it.message}" }
+        }
+    }
+
     fun checkUpdates(asked: Boolean) {
         if (checking) return
         checking = true

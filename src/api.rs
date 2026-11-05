@@ -427,6 +427,31 @@ impl Api {
             .collect())
     }
 
+    /// YouTube Music's search suggestions for what's typed so far; signed in, its own search
+    /// history comes first (the same on every device of the account), with an empty `input` too.
+    pub async fn search_suggestions(&self, input: String) -> Result<Vec<Suggestion>> {
+        let query = RawBrowse { path: "music/get_search_suggestions", body: body(&[("input", &input)]), ctoken: None };
+        let raw = match self {
+            Api::Guest(y) => y.raw_json_query(query).await,
+            Api::User(y) => y.raw_json_query(query).await,
+        }
+        .map_err(err)?;
+        Ok(suggestions(&serde_json::from_str(&raw)?))
+    }
+
+    /// Takes a search off the account's history (the token comes with the suggestion).
+    pub async fn forget_search(&self, token: String) -> Result<()> {
+        let mut b = serde_json::Map::new();
+        b.insert("feedbackTokens".into(), Value::from(vec![token]));
+        let query = RawBrowse { path: "feedback", body: b, ctoken: None };
+        match self {
+            Api::Guest(y) => y.raw_json_query(query).await,
+            Api::User(y) => y.raw_json_query(query).await,
+        }
+        .map_err(err)?;
+        Ok(())
+    }
+
     async fn raw_browse(&self, body: serde_json::Map<String, Value>, ctoken: Option<String>) -> Result<Value> {
         let query = RawBrowse { path: "browse", body, ctoken };
         let raw = match self {
@@ -661,6 +686,43 @@ struct RawBrowse {
     path: &'static str,
     body: serde_json::Map<String, Value>,
     ctoken: Option<String>,
+}
+
+/// A search suggestion: the words, and (from the account's search history) the token that
+/// takes it off.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestion {
+    pub text: String,
+    pub forget: Option<String>,
+}
+
+impl Suggestion {
+    pub fn from_history(&self) -> bool {
+        self.forget.is_some()
+    }
+}
+
+/// History first, then suggestions, each once.
+fn suggestions(v: &Value) -> Vec<Suggestion> {
+    let words = |r: &Value| -> Option<String> {
+        let runs = r.get("suggestion")?.get("runs")?.as_array()?;
+        Some(runs.iter().filter_map(|x| x.get("text").and_then(Value::as_str)).collect::<String>()).filter(|t| !t.trim().is_empty())
+    };
+    let mut out: Vec<Suggestion> = Vec::new();
+    for r in all(v, "historySuggestionRenderer") {
+        let forget = all(r, "feedbackToken").into_iter().find_map(Value::as_str).map(String::from);
+        if let Some(text) = words(r) {
+            out.push(Suggestion { text, forget: forget.or_else(|| Some(String::new())) });
+        }
+    }
+    for r in all(v, "searchSuggestionRenderer") {
+        if let Some(text) = words(r)
+            && !out.iter().any(|s| s.text.eq_ignore_ascii_case(&text))
+        {
+            out.push(Suggestion { text, forget: None });
+        }
+    }
+    out
 }
 
 fn body(pairs: &[(&str, &str)]) -> serde_json::Map<String, Value> {
@@ -978,5 +1040,25 @@ mod live_probe {
         println!("artist page: {songs} songs, {} albums/singles", page.len() - songs);
         let found = api.artist_id_for("Daft Punk".into()).await.unwrap();
         println!("artist by name found: {}", found.is_some());
+    }
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::*;
+
+    /// Read only: what YouTube Music suggests, and whether the account's search history comes
+    /// back: `cargo test --lib live_search_suggestions -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_search_suggestions() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).expect("signed in");
+        let api = Api::with_cookie(cookie).await.unwrap();
+        for input in ["", "mac de"] {
+            let list = api.search_suggestions(input.to_string()).await.unwrap();
+            let history = list.iter().filter(|s| s.from_history()).count();
+            let tokens = list.iter().filter(|s| s.forget.as_deref().is_some_and(|t| !t.is_empty())).count();
+            println!("input {input:?}: {} suggestions, {history} from the account's history ({tokens} with a forget token); first: {:?}", list.len(), list.iter().take(4).map(|s| &s.text).collect::<Vec<_>>());
+        }
     }
 }

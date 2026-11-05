@@ -313,15 +313,24 @@ fun UpdateDialog(vm: AppViewModel, r: Updates.Release) {
                 Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()).padding(top = 6.dp)) {
                     Text(r.plainNotes, fontSize = 14.sp)
                 }
+                // Downloading in the app.
+                vm.updateProgress?.let { p ->
+                    Spacer(Modifier.padding(top = 10.dp))
+                    Text("${tr("Downloading the update...")} ${(p * 100).toInt()}%", color = Dim, fontSize = 13.sp)
+                    androidx.compose.material3.LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+                }
             }
         },
         confirmButton = {
             Button({
-                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(r.apk ?: r.page))) }
-                vm.update = null
-            }) { Text(tr("Download")) }
+                // The APK downloads here and Android's installer opens; without one, the release page.
+                if (r.apk != null) vm.installUpdate(r) else {
+                    runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(r.page))) }
+                    vm.update = null
+                }
+            }, enabled = vm.updateProgress == null) { Text(if (r.apk != null) tr("Update now") else tr("Download")) }
         },
-        dismissButton = { TextButton({ vm.update = null }) { Text(tr("Later")) } },
+        dismissButton = { TextButton({ vm.update = null }, enabled = vm.updateProgress == null) { Text(tr("Later")) } },
     )
 }
 

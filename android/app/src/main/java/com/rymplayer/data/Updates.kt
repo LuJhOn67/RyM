@@ -41,6 +41,36 @@ object Updates {
 
     private val http = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
 
+    /**
+     * Downloads the new APK into the app's cache (for Android's installer); [progress] gets 0 to 1.
+     * No time limit for the whole download, only for connecting.
+     */
+    suspend fun download(ctx: android.content.Context, url: String, progress: (Float) -> Unit): java.io.File =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val dir = java.io.File(ctx.cacheDir, "updates").apply { mkdirs() }
+            val out = java.io.File(dir, "RyM-update.apk")
+            val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
+            client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { resp ->
+                if (!resp.isSuccessful) error("GitHub answered ${resp.code}")
+                val body = resp.body ?: error("empty download")
+                val total = body.contentLength().toFloat()
+                body.byteStream().use { input ->
+                    out.outputStream().use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            output.write(buf, 0, n)
+                            done += n
+                            if (total > 0) progress((done / total).coerceAtMost(1f))
+                        }
+                    }
+                }
+            }
+            out
+        }
+
     /** "v6.7", "6.7.0" -> [6, 7]; not a version: empty. */
     fun parse(v: String): List<Int> {
         val core = v.trim().trimStart('v', 'V').takeWhile { it.isDigit() || it == '.' }

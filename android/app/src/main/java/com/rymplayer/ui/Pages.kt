@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NorthWest
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -289,7 +291,7 @@ fun SearchPage(vm: AppViewModel) {
         Title(tr("Search"))
         OutlinedTextField(
             value = vm.query,
-            onValueChange = { vm.query = it },
+            onValueChange = vm::typeQuery,
             placeholder = { Text(tr("Songs, artists, albums")) },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             singleLine = true,
@@ -311,6 +313,25 @@ fun SearchPage(vm: AppViewModel) {
         )
         if (links.isNotEmpty()) {
             Text("${tr("You can also paste a link from")} ${links.joinToString(" / ")}", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
+        // The account's search history (nothing typed), or suggestions for what's typed.
+        LaunchedEffect(Unit) { vm.askSuggestions() }
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(vertical = 6.dp)) {
+            items(vm.suggestions, key = { (if (it.fromHistory) "h:" else "s:") + it.text }) { sug ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { vm.searchFor(sug.text) }.padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(if (sug.fromHistory) Icons.Default.History else Icons.Default.Search, null, tint = Dim)
+                    Spacer(Modifier.width(16.dp))
+                    Text(sug.text, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 16.sp)
+                    if (sug.fromHistory) {
+                        IconButton({ vm.forgetSearch(sug) }) { Icon(Icons.Default.Close, tr("Remove from search history"), tint = Dim) }
+                    } else {
+                        IconButton({ vm.typeQuery(sug.text) }) { Icon(Icons.Default.NorthWest, tr("Fill in"), tint = Dim) }
+                    }
+                }
+            }
         }
     }
 }

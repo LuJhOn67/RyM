@@ -5786,6 +5786,7 @@ dependencies = [
  "directories",
  "discord-rich-presence",
  "embed-resource",
+ "flate2",
  "gtk4",
  "iced",
  "iced_test",

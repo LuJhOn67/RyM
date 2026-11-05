@@ -133,6 +133,144 @@ pub fn due(auto: bool, last_checked: u64) -> bool {
     auto && now().saturating_sub(last_checked) >= CHECK_EVERY.as_secs()
 }
 
+// ---------------------------------------------------------------- updating in place
+
+/// Downloads a release file (an app's .exe, or the GTK app's zip) and puts it in place of this
+/// program and the files beside it. A running program (and the libraries it loaded) can be
+/// renamed on Windows, not overwritten: each file replaced is renamed to `<name>.old` first, and
+/// those go at the next start ([`clean_old`]). `progress` gets 0 to 1 as it downloads. Returns
+/// the program to start again.
+pub async fn install(url: &str, progress: impl Fn(f32) + Send + 'static) -> Result<std::path::PathBuf> {
+    let http = reqwest::Client::builder()
+        .user_agent(concat!("RyM/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(20))
+        .build()?;
+    let mut resp = http.get(url).send().await?.error_for_status().map_err(|e| anyhow!("GitHub: {e}"))?;
+    let total = resp.content_length().unwrap_or(0) as f32;
+    let mut data = Vec::with_capacity(total as usize);
+    while let Some(chunk) = resp.chunk().await? {
+        data.extend_from_slice(&chunk);
+        if total > 0.0 {
+            progress((data.len() as f32 / total).min(1.0));
+        }
+    }
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().ok_or_else(|| anyhow!("no folder for the program"))?.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf> {
+        if data.starts_with(b"PK\x03\x04") {
+            let files = unzip(&data)?;
+            // The zip holds a folder ("RyM-GTK/..."): its insides go beside this program.
+            let top = files.first().and_then(|(n, _)| n.split('/').next()).map(str::to_string);
+            let strip = top.filter(|t| files.iter().all(|(n, _)| n.starts_with(&format!("{t}/"))));
+            for (name, bytes) in &files {
+                let rel = match &strip {
+                    Some(t) => name[t.len() + 1..].to_string(),
+                    None => name.clone(),
+                };
+                if rel.is_empty() || rel.split('/').any(|p| p == "..") {
+                    continue;
+                }
+                let target = dir.join(&rel);
+                // Unchanged files (the GTK runtime) are left alone.
+                if std::fs::read(&target).is_ok_and(|old| old == *bytes) {
+                    continue;
+                }
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                replace(&target, bytes)?;
+            }
+        } else if data.starts_with(b"MZ") {
+            replace(&exe, &data)?;
+        } else {
+            return Err(anyhow!("the download isn't a program or a zip"));
+        }
+        Ok(exe)
+    })
+    .await?
+}
+
+/// Puts `bytes` at `path`, the old file (maybe running) renamed out of the way first.
+fn replace(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let fresh = path.with_extension("rym-new");
+    std::fs::write(&fresh, bytes)?;
+    if path.exists() {
+        let mut n = 0;
+        loop {
+            let old = std::path::PathBuf::from(format!("{}.old{}", path.display(), if n == 0 { String::new() } else { n.to_string() }));
+            let _ = std::fs::remove_file(&old);
+            match std::fs::rename(path, &old) {
+                Ok(()) => break,
+                Err(_) if n < 9 => n += 1,
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+    std::fs::rename(&fresh, path)?;
+    Ok(())
+}
+
+/// The files an update put aside (`*.old`, `*.old1`...), deleted once nothing runs them.
+pub fn clean_old() {
+    let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) else { return };
+    let mut stack = vec![dir];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Some(tail) = name.rsplit_once(".old").map(|(_, t)| t)
+                && tail.chars().all(|c| c.is_ascii_digit())
+            {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+}
+
+/// The files in a zip (stored or deflated), read from its central directory.
+fn unzip(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+    let u16_at = |i: usize| -> Result<usize> { data.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize).ok_or_else(|| anyhow!("broken zip")) };
+    let u32_at = |i: usize| -> Result<usize> { data.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or_else(|| anyhow!("broken zip")) };
+    let end = (0..data.len().saturating_sub(21)).rev().find(|&i| data[i..].starts_with(b"PK\x05\x06")).ok_or_else(|| anyhow!("not a zip"))?;
+    let count = u16_at(end + 10)?;
+    let mut at = u32_at(end + 16)?;
+    let mut out = Vec::new();
+    for _ in 0..count {
+        if !data.get(at..).is_some_and(|d| d.starts_with(b"PK\x01\x02")) {
+            return Err(anyhow!("broken zip directory"));
+        }
+        let method = u16_at(at + 10)?;
+        let packed_len = u32_at(at + 20)?;
+        let size = u32_at(at + 24)?;
+        let name_len = u16_at(at + 28)?;
+        let extra_len = u16_at(at + 30)?;
+        let comment_len = u16_at(at + 32)?;
+        let local = u32_at(at + 42)?;
+        let name = String::from_utf8_lossy(data.get(at + 46..at + 46 + name_len).ok_or_else(|| anyhow!("broken zip"))?).replace('\\', "/");
+        at += 46 + name_len + extra_len + comment_len;
+        if name.ends_with('/') {
+            continue;
+        }
+        let start = local + 30 + u16_at(local + 26)? + u16_at(local + 28)?;
+        let packed = data.get(start..start + packed_len).ok_or_else(|| anyhow!("broken zip entry"))?;
+        let bytes = match method {
+            0 => packed.to_vec(),
+            8 => {
+                use std::io::Read;
+                let mut v = Vec::with_capacity(size);
+                flate2::read::DeflateDecoder::new(packed).read_to_end(&mut v)?;
+                v
+            }
+            m => return Err(anyhow!("zip method {m} isn't supported")),
+        };
+        out.push((name, bytes));
+    }
+    Ok(out)
+}
+
 /// Opens a link in the default browser (downloads, release pages).
 pub fn open_link(url: &str) -> Result<()> {
     #[cfg(windows)]
@@ -202,5 +340,88 @@ mod tests {
         assert_eq!((beta.version.as_str(), beta.beta), ("6.9", true));
         // Already up to date.
         assert!(pick(&list, true, "6.9").is_none());
+    }
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+
+    /// A zip like Compress-Archive makes: a folder, one stored file, one deflated.
+    fn zip(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
+        use std::io::Write;
+        let (mut body, mut dir) = (Vec::new(), Vec::new());
+        for (name, data, deflate) in files {
+            let packed = if *deflate {
+                let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(data).unwrap();
+                e.finish().unwrap()
+            } else {
+                data.to_vec()
+            };
+            let method: u16 = if *deflate { 8 } else { 0 };
+            let offset = body.len() as u32;
+            body.extend_from_slice(b"PK\x03\x04");
+            body.extend_from_slice(&[20, 0, 0, 0]);
+            body.extend_from_slice(&method.to_le_bytes());
+            body.extend_from_slice(&[0; 8]);
+            body.extend_from_slice(&(packed.len() as u32).to_le_bytes());
+            body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            body.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            body.extend_from_slice(&[0, 0]);
+            body.extend_from_slice(name.as_bytes());
+            body.extend_from_slice(&packed);
+            dir.extend_from_slice(b"PK\x01\x02");
+            dir.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+            dir.extend_from_slice(&method.to_le_bytes());
+            dir.extend_from_slice(&[0; 8]);
+            dir.extend_from_slice(&(packed.len() as u32).to_le_bytes());
+            dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            dir.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            dir.extend_from_slice(&[0; 12]);
+            dir.extend_from_slice(&offset.to_le_bytes());
+            dir.extend_from_slice(name.as_bytes());
+        }
+        let (dir_at, dir_len, n) = (body.len() as u32, dir.len() as u32, files.len() as u16);
+        body.extend_from_slice(&dir);
+        body.extend_from_slice(b"PK\x05\x06");
+        body.extend_from_slice(&[0; 4]);
+        body.extend_from_slice(&n.to_le_bytes());
+        body.extend_from_slice(&n.to_le_bytes());
+        body.extend_from_slice(&dir_len.to_le_bytes());
+        body.extend_from_slice(&dir_at.to_le_bytes());
+        body.extend_from_slice(&[0, 0]);
+        body
+    }
+
+    #[test]
+    fn unzips_and_replaces_a_running_file() {
+        let text = b"hello hello hello hello, the GTK runtime".repeat(20);
+        let files = unzip(&zip(&[("RyM-GTK/RymPlayer-GTK.exe", b"MZ new program", false), ("RyM-GTK/lib/x.dll", &text, true)])).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], ("RyM-GTK/RymPlayer-GTK.exe".to_string(), b"MZ new program".to_vec()));
+        assert_eq!(files[1].1, text);
+        // Replacing: the old file is put aside, the new one takes its place.
+        let dir = std::env::temp_dir().join(format!("rym-install-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app.exe");
+        std::fs::write(&target, b"MZ old").unwrap();
+        replace(&target, b"MZ new").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"MZ new");
+        assert_eq!(std::fs::read(dir.join("app.exe.old")).unwrap(), b"MZ old");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The real GTK zip of the latest release unzips to the same files as on disk:
+    /// `cargo test --lib real_release_zip -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn real_release_zip() {
+        let r = pick(&github().get(format!("https://api.github.com/repos/{REPO}/releases?per_page=5")).send().await.unwrap().json::<Value>().await.unwrap().as_array().unwrap().clone(), false, "0.0").unwrap();
+        let url = r.download_for("RyM-GTK-Windows.zip");
+        let data = reqwest::get(&url).await.unwrap().bytes().await.unwrap();
+        let files = unzip(&data).unwrap();
+        let exe = files.iter().find(|(n, _)| n.ends_with("RymPlayer-GTK.exe")).unwrap();
+        println!("{} files from {}; the program is {} bytes and starts with MZ: {}", files.len(), r.version, exe.1.len(), exe.1.starts_with(b"MZ"));
     }
 }

@@ -24,6 +24,8 @@ fn main() -> iced::Result {
     if std::env::args().any(|a| a == "--login") {
         login::run();
     }
+    // What the last update put aside goes now.
+    rymplayer::updates::clean_old();
     choose_renderer(Config::load().gui_renderer);
     iced::application(Gui::boot, Gui::update, Gui::view)
         .title(Gui::title)
@@ -232,6 +234,9 @@ pub enum Message {
     Sound(rymplayer::config::Setting, i32),
     /// The bar's sleep timer: 15, 30, 45, 60 minutes, the end of the song, off.
     Sleep,
+    /// The update downloads and goes in place here (Windows); then RyM opens again on it.
+    InstallUpdate(String),
+    Installed(Result<PathBuf, String>),
     Ignore,
 }
 
@@ -1094,6 +1099,19 @@ impl Gui {
                 Err(e) if asked => self.status = format!("{}: {e}", tr("Couldn't check for updates")),
                 _ => {}
             },
+            Message::InstallUpdate(url) => {
+                self.dialog = None;
+                self.status = tr("Downloading the update...").into();
+                return Task::perform(async move { s(rymplayer::updates::install(&url, |_| {}).await) }, Message::Installed);
+            }
+            Message::Installed(Ok(exe)) => {
+                self.save_session();
+                if std::process::Command::new(&exe).spawn().is_ok() {
+                    return iced::exit();
+                }
+                self.status = tr("Updated: open RyM again to use the new version").into();
+            }
+            Message::Installed(Err(e)) => self.status = format!("{}: {e}", tr("Couldn't update")),
             Message::OpenLink(url) => {
                 let _ = rymplayer::updates::open_link(&url);
                 self.dialog = None;
