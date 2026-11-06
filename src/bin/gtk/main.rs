@@ -612,6 +612,17 @@ fn since_start() -> u128 {
 
 fn main() {
     STARTED.get_or_init(Instant::now);
+    // The window app has no console: a crash's message and place go to rym-gtk.log.
+    std::panic::set_hook(Box::new(|info| {
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        log(&format!("CRASH at {at}: {msg}"));
+    }));
     configure_gtk_runtime();
     // What the last update put aside goes now.
     rymplayer::updates::clean_old();
@@ -1341,7 +1352,8 @@ fn build(app: &Application) {
         let ui = ui.clone();
         search.connect_activate(move |e| {
             let q = e.text().trim().to_string();
-            ui.borrow().w.suggest.popdown();
+            let pop = ui.borrow().w.suggest.clone();
+            pop.popdown();
             if !q.is_empty() {
                 search_songs(&ui, q);
             }
@@ -1365,14 +1377,18 @@ fn build(app: &Application) {
         let ui2 = ui.clone();
         focus.connect_leave(move |_| {
             let ui = ui2.clone();
-            glib::timeout_add_local_once(Duration::from_millis(250), move || ui.borrow().w.suggest.popdown());
+            glib::timeout_add_local_once(Duration::from_millis(250), move || {
+                let pop = ui.borrow().w.suggest.clone();
+                pop.popdown();
+            });
         });
         search.add_controller(focus);
         let keys = gtk::EventControllerKey::new();
         let ui2 = ui.clone();
         keys.connect_key_pressed(move |_, key, _, _| {
-            if key == gdk::Key::Escape && ui2.borrow().w.suggest.is_visible() {
-                ui2.borrow().w.suggest.popdown();
+            let pop = ui2.borrow().w.suggest.clone();
+            if key == gdk::Key::Escape && pop.is_visible() {
+                pop.popdown();
                 return glib::Propagation::Stop;
             }
             glib::Propagation::Proceed
@@ -1564,11 +1580,16 @@ fn build(app: &Application) {
         let ytm = ui.borrow().w.ytm;
         {
             let ui2 = ui.clone();
+            // The page switches inside calls that hold the app's state (playing a song, going to
+            // a page): reading it here would stop the app. Looked at a moment later instead.
             let built = move || {
-                if ui2.borrow().queue_dirty {
-                    let ui = ui2.clone();
-                    glib::idle_add_local_once(move || render_queue(&ui));
-                }
+                let ui = ui2.clone();
+                glib::idle_add_local_once(move || {
+                    let dirty = ui.borrow().queue_dirty;
+                    if dirty {
+                        render_queue(&ui);
+                    }
+                });
             };
             let again = built.clone();
             ui.borrow().w.stack.connect_visible_child_name_notify(move |_| built());
@@ -3974,7 +3995,8 @@ fn pick_source(ui: &Shared, p: &'static str) {
     let shown = ui.borrow().lyrics.clone();
     let at = shown.as_ref().and_then(|sh| versions.iter().position(|v| rymplayer::lyrics::same(v, sh)));
     let pick = versions[at.map_or(0, |i| (i + 1) % versions.len())].clone();
-    ui.borrow().w.side.set_visible_child_name("lyrics");
+    let side = ui.borrow().w.side.clone();
+    side.set_visible_child_name("lyrics");
     rymplayer::lyrics::choose(&t.video_id, &pick);
     show_lyrics(ui, Some(pick));
 }
@@ -4555,7 +4577,15 @@ fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr
 /// Asks for suggestions for the search box's text after `wait_ms` (each keystroke starts the
 /// wait again, so only the last one asks).
 fn ask_suggestions(ui: &Shared, wait_ms: u64) {
-    if let Some(id) = ui.borrow_mut().suggest_wait.take() {
+    // Called from focus changes, which can happen inside other calls: if the state is in use,
+    // a moment later.
+    if ui.try_borrow_mut().is_err() {
+        let ui = ui.clone();
+        glib::idle_add_local_once(move || ask_suggestions(&ui, wait_ms));
+        return;
+    }
+    let waiting = ui.borrow_mut().suggest_wait.take();
+    if let Some(id) = waiting {
         id.remove();
     }
     let ui2 = ui.clone();
@@ -4984,7 +5014,9 @@ fn poll_events(ui: &Shared) {
                 // The new version opens where this one leaves off.
                 save_session(ui);
                 if std::process::Command::new(&exe).spawn().is_ok() {
-                    ui.borrow().w.window.close();
+                    // Closing runs the close handler, which uses the app's state: not held here.
+                    let window = ui.borrow().w.window.clone();
+                    window.close();
                 } else {
                     toast(ui, tr("Updated: open RyM again to use the new version"));
                 }
