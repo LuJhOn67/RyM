@@ -62,6 +62,9 @@ enum Ev {
     Update(anyhow::Result<Option<rymplayer::updates::Release>>, bool),
     Installed(anyhow::Result<PathBuf>),
     MediaKey(souvlaki::MediaControlEvent),
+    /// The tray icon was clicked (show the window), or one of its menu's items picked.
+    TrayShow,
+    TrayMenu(String),
     /// Every source's lyrics for a song (the source pills).
     Sources(String, Vec<Lyrics>),
     /// Romaji for a song's lyrics (the lyrics' source, the lines).
@@ -176,6 +179,8 @@ struct State {
     /// What the last yt-dlp update and update check said (shown in the settings).
     ytdlp_text: String,
     update_text: String,
+    /// The icon next to the clock (while RyM runs in the background, its window hidden).
+    tray: Option<tray_icon::TrayIcon>,
     /// Likes made on the phone come in every few minutes.
     likes_timer: slint::Timer,
 }
@@ -265,7 +270,15 @@ fn main() {
         let st = st.clone();
         ticker.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || tick(&st));
     }
-    let _ = ui.run();
+    // The X: close, or hide to the tray and keep playing (see `close_requested`).
+    {
+        let st = st.clone();
+        ui.window().on_close_requested(move || close_requested(&st));
+    }
+    let _ = ui.show();
+    start_tray(&st);
+    // Runs on while the window is hidden in the tray; Quit ends it.
+    let _ = slint::run_event_loop_until_quit();
     save_session(&st);
     rymplayer::stats::flush();
 }
@@ -371,6 +384,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         media_sent: None,
         link_seen: None,
         likes_timer: slint::Timer::default(),
+        tray: None,
         float: None,
         float_shown: (String::new(), String::new()),
         share: None,
@@ -445,6 +459,22 @@ fn wire(ui: &AppWindow, st: &Shared) {
         set_toggle(st, "float", on);
     }));
     app.on_share(w(open_share));
+    {
+        let st = st.clone();
+        app.on_close_choice(move |tray, remember| {
+            with_app(&st, |a| a.set_close_ask(false));
+            if remember {
+                let mut s = st.borrow_mut();
+                s.config.close_action = if tray { "tray" } else { "quit" }.into();
+                s.config.save();
+            }
+            if tray {
+                to_tray(&st);
+            } else {
+                quit(&st);
+            }
+        });
+    }
     app.on_next_theme(w(|st| {
         let next = (st.borrow().config.gui_theme.min(2) + 1) % 3;
         set_theme(st, next);
@@ -1063,6 +1093,12 @@ fn fill_settings(st: &Shared) {
         head("yt-dlp"),
         switch("ytdlp-nightly", "Nightly builds", "The newest yt-dlp every day (fixes come sooner)", c.ytdlp_nightly),
         button("ytdlp", "Update yt-dlp", s.ytdlp_text.clone(), "Update"),
+        head("Window"),
+        choice("close", "When closing the window", t(match c.close_action.as_str() {
+            "tray" => "Keep in background",
+            "quit" => "Close RyM",
+            _ => "Ask",
+        })),
         head("Updates"),
         switch("auto-update", "Check for updates", "Every 12 hours", c.auto_update_check),
         switch("beta", "Beta updates", "Pre-releases too", c.beta_updates),
@@ -1162,6 +1198,13 @@ fn choose(st: &Shared, id: &str, step: i32) {
             if s.sleep.is_none() && let Some(a) = &s.audio {
                 a.set_fade(1.0);
             }
+        }
+        "close" => {
+            let names = ["ask", "tray", "quit"];
+            let mut s = st.borrow_mut();
+            let at = names.iter().position(|n| *n == s.config.close_action).unwrap_or(0);
+            s.config.close_action = names[cycle(at, names.len())].to_string();
+            s.config.save();
         }
         "only-kind" => {
             let names: Vec<&str> = std::iter::once("").chain(rymplayer::ram_points::Kind::ALL.iter().map(|k| k.name())).collect();
@@ -1515,6 +1558,19 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         return;
     }
     match action {
+        "more" => {
+            rymplayer::ram_points::recommend_more(&t);
+            toast(st, &format!("{}: {}", tr("More like this"), t.artist));
+        }
+        "less" => {
+            rymplayer::ram_points::dont_recommend(&t);
+            // Out of Up next too, if it's waiting there.
+            if let Some(i) = key.strip_prefix("q:").and_then(|i| i.parse::<usize>().ok()) {
+                st.borrow_mut().q.remove(i);
+                render_queue(st);
+            }
+            toast(st, &format!("{}: {}", tr("Won't be suggested"), t.title));
+        }
         "next" => {
             st.borrow_mut().q.play_next(t.clone());
             render_queue(st);
@@ -2472,6 +2528,92 @@ fn lastfm_start(st: &Shared) {
     });
 }
 
+/// The window's X: close RyM, hide it in the tray (the music goes on), or ask which.
+fn close_requested(st: &Shared) -> slint::CloseRequestResponse {
+    let action = st.borrow().config.close_action.clone();
+    match action.as_str() {
+        "quit" => {
+            quit(st);
+            slint::CloseRequestResponse::HideWindow
+        }
+        "tray" => {
+            to_tray(st);
+            slint::CloseRequestResponse::HideWindow
+        }
+        _ => {
+            with_app(st, |a| a.set_close_ask(true));
+            slint::CloseRequestResponse::KeepWindowShown
+        }
+    }
+}
+
+fn to_tray(st: &Shared) {
+    start_tray(st);
+    if let Some(ui) = st.borrow().ui.upgrade() {
+        let _ = ui.hide();
+    }
+}
+
+fn show_window(st: &Shared) {
+    if let Some(ui) = st.borrow().ui.upgrade() {
+        let _ = ui.show();
+        ui.window().set_minimized(false);
+    }
+}
+
+fn quit(st: &Shared) {
+    save_session(st);
+    rymplayer::stats::flush();
+    let (mini, float) = {
+        let mut s = st.borrow_mut();
+        (s.mini.take(), s.float.take())
+    };
+    if let Some(w) = mini {
+        let _ = w.hide();
+    }
+    if let Some(w) = float {
+        let _ = w.hide();
+    }
+    st.borrow_mut().tray = None;
+    let _ = slint::quit_event_loop();
+}
+
+/// The icon next to the clock: a click brings the window back; its menu shows it, plays or
+/// pauses, skips, or quits.
+fn start_tray(st: &Shared) {
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    if st.borrow().tray.is_some() {
+        return;
+    }
+    let menu = Menu::new();
+    let _ = menu.append(&MenuItem::with_id("show", tr("Show RyM"), true, None));
+    let _ = menu.append(&MenuItem::with_id("play", tr("Play / pause"), true, None));
+    let _ = menu.append(&MenuItem::with_id("next", tr("Next"), true, None));
+    let _ = menu.append(&PredefinedMenuItem::separator());
+    let _ = menu.append(&MenuItem::with_id("quit", tr("Quit RyM"), true, None));
+    let icon = image::load_from_memory(include_bytes!("../../../assets/icons/rym-slint.png"))
+        .ok()
+        .map(|i| i.resize_exact(32, 32, image::imageops::FilterType::Triangle).to_rgba8())
+        .and_then(|i| tray_icon::Icon::from_rgba(i.into_raw(), 32, 32).ok());
+    let mut builder = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("RyM").with_menu_on_left_click(false);
+    if let Some(icon) = icon {
+        builder = builder.with_icon(icon);
+    }
+    match builder.build() {
+        Ok(tray) => {
+            TrayIconEvent::set_event_handler(Some(|e: TrayIconEvent| {
+                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                    send(Ev::TrayShow);
+                }
+            }));
+            MenuEvent::set_event_handler(Some(|e: MenuEvent| send(Ev::TrayMenu(e.id.0.clone()))));
+            st.borrow_mut().tray = Some(tray);
+        }
+        Err(e) => log(&format!("tray icon: {e}")),
+    }
+}
+
 fn check_updates(st: &Shared, asked: bool) {
     let beta = {
         let mut s = st.borrow_mut();
@@ -2870,6 +3012,14 @@ fn handle(st: &Shared, ev: Ev) {
         }
         Ev::Installed(Err(e)) => set_update_text(st, format!("{}: {e}", tr("Update failed"))),
         Ev::MediaKey(k) => media_key(st, k),
+        Ev::TrayShow => show_window(st),
+        Ev::TrayMenu(id) => match id.as_str() {
+            "show" => show_window(st),
+            "play" => toggle_playback(st),
+            "next" => skip(st),
+            "quit" => quit(st),
+            _ => {}
+        },
         Ev::Sources(vid, list) => {
             let (current, shown) = {
                 let s = st.borrow();
@@ -3032,6 +3182,7 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     let shelf_cards = Rc::new(VecModel::from(vec![card("Night Changes", "One Direction", swatch(30, 30, 30)), card("Royalty", "Egzod", swatch(70, 90, 160))]));
     app.set_home(ModelRc::from(Rc::new(VecModel::from(vec![Shelf { title: "For you".into(), cards: ModelRc::from(shelf_cards.clone()) }, Shelf { title: "حسيني لك".into(), cards: ModelRc::from(shelf_cards) }]))));
     app.set_show_lyrics(page == 9);
+    app.set_close_ask(page == 7);
     app.set_line_progress(0.5);
     app.set_sources(ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from("LRCLIB"), SharedString::from("NetEase"), SharedString::from("YouTube Music")]))));
     app.set_source_at(1);

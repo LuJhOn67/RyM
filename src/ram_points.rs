@@ -180,6 +180,36 @@ pub struct Notes {
     /// Artists the user put in a kind by hand ("Not this kind" in a song's menu): it wins.
     #[serde(default)]
     fixed: HashMap<String, Kind>,
+    /// "Recommend more" / "Don't recommend": points added to (or taken from) an artist.
+    #[serde(default)]
+    bias: HashMap<String, i32>,
+    /// Songs never suggested again ("Don't recommend").
+    #[serde(default)]
+    hidden: std::collections::HashSet<String>,
+}
+
+/// "Recommend more" in a song's menu: its artist comes up more in Up next and For you.
+pub fn recommend_more(t: &Track) {
+    let mut notes = Notes::load();
+    notes.hidden.remove(&t.video_id);
+    let artist = first_artist(&t.artist);
+    if !artist.is_empty() {
+        let b = notes.bias.entry(artist).or_default();
+        *b = (*b + 25).min(50);
+    }
+    notes.save();
+}
+
+/// "Don't recommend": the song is never suggested again, and its artist a little less.
+pub fn dont_recommend(t: &Track) {
+    let mut notes = Notes::load();
+    notes.hidden.insert(t.video_id.clone());
+    let artist = first_artist(&t.artist);
+    if !artist.is_empty() {
+        let b = notes.bias.entry(artist).or_default();
+        *b = (*b - 20).max(-60);
+    }
+    notes.save();
 }
 
 /// "Only this kind" (Settings): For you shows only it. None: every kind heard.
@@ -410,7 +440,7 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
     let from_radio = radio.into_iter().enumerate().map(|(i, t)| (t, 30 - 30 * i as i32 / len, false));
     let mut cands = Vec::new();
     for (t, base, is_liked) in from_radio.chain(liked_ones.cloned().map(|t| (t, 0, true))) {
-        if t.link.is_some() || t.video_id.is_empty() || skip.contains(&t.video_id) {
+        if t.link.is_some() || t.video_id.is_empty() || skip.contains(&t.video_id) || notes.hidden.contains(&t.video_id) {
             continue;
         }
         // Only the seed's kind. A song nothing tells about may come with a radio (a little
@@ -426,7 +456,7 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
             continue;
         }
         let artist = first_artist(&t.artist);
-        let mut points = base + fit;
+        let mut points = base + fit + notes.bias.get(&artist).copied().unwrap_or(0);
         if !artist.is_empty() && artist == seed_artist {
             points += 35;
         } else if heard.contains(&artist) {
@@ -507,7 +537,7 @@ pub fn for_you(notes: &Notes, cands: &[Candidate], kind: Kind, n: usize, skip: &
     let mut scored = Vec::new();
     for c in cands {
         let t = &c.track;
-        if t.link.is_some() || t.video_id.is_empty() || skip.contains(&t.video_id) {
+        if t.link.is_some() || t.video_id.is_empty() || skip.contains(&t.video_id) || notes.hidden.contains(&t.video_id) {
             continue;
         }
         let k = notes.kind_of(t).or(c.radio_kind).unwrap_or(Kind::Songs);
@@ -515,7 +545,7 @@ pub fn for_you(notes: &Notes, cands: &[Candidate], kind: Kind, n: usize, skip: &
             continue;
         }
         let artist = first_artist(&t.artist);
-        let mut points = c.base;
+        let mut points = c.base + notes.bias.get(&artist).copied().unwrap_or(0);
         if !feed.known.contains(&t.video_id) {
             points += 18;
         }
@@ -632,6 +662,18 @@ mod tests {
         assert_eq!(ids[0], "b", "{ids:?}");
         assert_ne!(ids[1], "d", "{ids:?}");
         assert_eq!(ids.len(), 4);
+    }
+
+    #[test]
+    fn recommend_more_and_dont_recommend() {
+        let mut notes = Notes::default();
+        notes.bias.insert("b".into(), 50);
+        notes.hidden.insert("gone".into());
+        let seed = t("s", "Seed", "Z");
+        let radio = vec![t("a", "A", "A"), t("gone", "Gone", "C"), t("bb", "B", "B")];
+        let out = rank_up_next(&mut notes, radio, &seed, &[], &HashSet::new(), &HashSet::new(), &quiet(), 7);
+        let ids: Vec<&str> = out.iter().map(|t| t.video_id.as_str()).collect();
+        assert_eq!(ids, ["bb", "a"]);
     }
 
     #[test]

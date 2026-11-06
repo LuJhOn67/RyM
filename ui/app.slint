@@ -161,6 +161,8 @@ export global App {
     in property <[Setting]> settings;
     in property <string> version;
     in property <string> toast;
+    // The X was pressed: close RyM, or keep it playing in the background?
+    in-out property <bool> close-ask;
 
     callback toggle-play();
     callback next();
@@ -195,6 +197,7 @@ export global App {
     callback share();
     callback zoom(float);
     callback next-theme();
+    callback close-choice(bool, bool);
 }
 
 // ---------------------------------------------------------------- small parts
@@ -253,6 +256,8 @@ component SongRow inherits Rectangle {
         Menu {
             MenuItem { title: App.tr("Play next"); activated => { App.menu("next", root.song.key); } }
             MenuItem { title: App.tr("Add to queue"); activated => { App.menu("add", root.song.key); } }
+            MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", root.song.key); } }
+            MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", root.song.key); } }
             MenuItem { title: root.song.liked ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", root.song.key); } }
             MenuItem { title: App.tr("Go to artist"); activated => { App.menu("artist", root.song.key); } }
             Menu {
@@ -349,6 +354,8 @@ component CardItem inherits VerticalLayout {
             Menu {
                 MenuItem { title: App.tr("Play next"); activated => { App.menu("next", root.card.key); } }
                 MenuItem { title: App.tr("Add to queue"); activated => { App.menu("add", root.card.key); } }
+                MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", root.card.key); } }
+                MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", root.card.key); } }
                 MenuItem { title: false ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", root.card.key); } }
                 MenuItem { title: App.tr("Go to artist"); activated => { App.menu("artist", root.card.key); } }
                 Menu {
@@ -733,7 +740,9 @@ component Lyrics inherits Rectangle {
                         font-weight: 700;
                         wrap: word-wrap;
                         horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
-                        color: Theme.text;
+                        // To come: see-through; sung now: white; sung: a little white left.
+                        color: Theme.text.with-alpha(l.state == 1 ? 1 : (l.state == 2 ? 0.55 : 0.3));
+                        animate color { duration: 350ms; easing: ease-out; }
                     }
                     TouchArea {
                         mouse-cursor: pointer;
@@ -745,14 +754,16 @@ component Lyrics inherits Rectangle {
                     font-size: App.lyrics-size * 0.55px * Ui.k;
                     wrap: word-wrap;
                     horizontal-alignment: Ui.start;
-                    color: Theme.text;
+                    color: Theme.text.with-alpha(l.state == 1 ? 0.9 : (l.state == 2 ? 0.45 : 0.25));
+                    animate color { duration: 350ms; easing: ease-out; }
                 }
                 if l.tr != "": Text {
                     text: l.tr;
                     font-size: App.lyrics-size * 0.55px * Ui.k;
                     wrap: word-wrap;
                     horizontal-alignment: Ui.start;
-                    color: Theme.text;
+                    color: Theme.text.with-alpha(l.state == 1 ? 0.9 : (l.state == 2 ? 0.45 : 0.25));
+                    animate color { duration: 350ms; easing: ease-out; }
                 }
             }
         }
@@ -1490,6 +1501,8 @@ component UpNextSide inherits Page {
                 Menu {
                     MenuItem { title: App.tr("Play next"); activated => { App.menu("next", c.key); } }
                     MenuItem { title: App.tr("Add to queue"); activated => { App.menu("add", c.key); } }
+                    MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", c.key); } }
+                    MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", c.key); } }
                     MenuItem { title: false ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", c.key); } }
                     MenuItem { title: App.tr("Go to artist"); activated => { App.menu("artist", c.key); } }
                     Menu {
@@ -1789,6 +1802,38 @@ export component AppWindow inherits Window {
         }
     }
     if Theme.wide: WideLayout { width: 100%; height: 100%; }
+    // The X: close, or keep playing in the background (by the clock), and maybe remember it.
+    if App.close-ask: Rectangle {
+        background: #00000090;
+        TouchArea { }
+        card := Rectangle {
+            width: min(root.width - 40px, 460px);
+            height: ask.preferred-height;
+            border-radius: 18px;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            property <bool> remember;
+            ask := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: App.tr("Close RyM?"); font-size: 22px; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+                Text { text: App.tr("RyM can keep playing in the background, with its icon next to the clock."); font-size: 15px; color: Theme.dim; wrap: word-wrap; horizontal-alignment: Ui.start; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: Ui.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+                    Switch { on <=> card.remember; }
+                    Text { text: App.tr("Remember my choice (Settings can change it)"); font-size: 14px; color: Theme.text; vertical-alignment: center; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: LayoutAlignment.end;
+                    Button { text: App.tr("Close RyM"); clicked => { App.close-choice(false, card.remember); } }
+                    Button { text: App.tr("Keep in background"); strong: true; clicked => { App.close-choice(true, card.remember); } }
+                }
+            }
+        }
+    }
     // A short notice at the bottom.
     if App.toast != "": Rectangle {
         y: root.height - (Theme.wide ? 150px : 90px);
