@@ -4439,7 +4439,7 @@ fn tick(ui: &Shared) {
         if changed && loaded {
             s.discord_sent = Some((t.video_id.clone(), playing, pos, Instant::now()));
             let cover = t.thumb.as_ref().map(|u| rymplayer::api::thumb_sized(u, 512));
-            rymplayer::discord::show(&s.config.discord_app_id, rymplayer::discord::Show::Song { title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
+            rymplayer::discord::show(&s.config.discord_app_id, rymplayer::discord::Show::Song { video_id: t.video_id.clone(), title: t.title.clone(), artist: t.artist.clone(), cover, at: pos, length: dur, paused: !playing });
         }
     }
     // Crossfade: the next song starts that many seconds before this one ends. Smart automix:

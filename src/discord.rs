@@ -2,18 +2,23 @@
 //! Discord profile, through the Discord app running on this computer (its local IPC socket).
 //! Needs an application id from Discord's developer portal (Settings: Discord). A thread of its
 //! own talks to Discord, so a missing or closed Discord never holds up the app.
+//! Two buttons go with it (others see them on the profile): the song on YouTube Music (it opens
+//! in RyM on a phone that has it), and where to get RyM.
 
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Mutex, OnceLock};
 
-use discord_rich_presence::activity::{Activity, ActivityType, Assets, StatusDisplayType, Timestamps};
+use discord_rich_presence::activity::{Activity, ActivityType, Assets, Button, StatusDisplayType, Timestamps};
+
+/// Where the "Get RyM" button goes.
+const GET_RYM: &str = "https://github.com/LuJhOn67/RyM/releases/latest";
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
 /// What Discord should show.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Show {
-    /// A song: title, artist, cover link, seconds played, its length (0 = unknown); paused or not.
-    Song { title: String, artist: String, cover: Option<String>, at: f32, length: f32, paused: bool },
+    /// A song: its id, title, artist, cover link, seconds played, its length (0 = unknown); paused or not.
+    Song { video_id: String, title: String, artist: String, cover: Option<String>, at: f32, length: f32, paused: bool },
     Nothing,
     /// Turned off: the connection is closed.
     Off,
@@ -70,7 +75,7 @@ fn run(app_id: String, rx: std::sync::mpsc::Receiver<Show>) {
         }
         let Some(c) = client.as_mut() else { continue };
         let sent = match &what {
-            Show::Song { title, artist, cover, at, length, paused } => {
+            Show::Song { video_id, title, artist, cover, at, length, paused } => {
                 let now = crate::updates::now() as i64;
                 let mut assets = Assets::new().large_text(title.as_str());
                 if let Some(url) = cover {
@@ -82,6 +87,13 @@ fn run(app_id: String, rx: std::sync::mpsc::Receiver<Show>) {
                     .details(title.as_str())
                     .state(artist.as_str())
                     .assets(assets);
+                let song_link = crate::is_youtube(video_id).then(|| format!("https://music.youtube.com/watch?v={video_id}"));
+                let mut buttons = Vec::new();
+                if let Some(link) = &song_link {
+                    buttons.push(Button::new("Play this song", link.as_str()));
+                }
+                buttons.push(Button::new("Get RyM", GET_RYM));
+                a = a.buttons(buttons);
                 if !paused {
                     let start = now - *at as i64;
                     let mut ts = Timestamps::new().start(start);
