@@ -62,6 +62,8 @@ enum Ev {
     Update(anyhow::Result<Option<rymplayer::updates::Release>>, bool),
     Installed(anyhow::Result<PathBuf>),
     MediaKey(souvlaki::MediaControlEvent),
+    /// Every source's lyrics for a song (the source pills).
+    Sources(String, Vec<Lyrics>),
     /// Romaji for a song's lyrics (the lyrics' source, the lines).
     Romaji(String, String, Vec<String>),
     YtDlp(anyhow::Result<String>),
@@ -157,6 +159,9 @@ struct State {
     share: Option<ShareWindow>,
     /// Sleep timer: when the music stops (or at the end of the song).
     sleep: Option<Sleep>,
+    /// Every source's lyrics for the playing song, once looked up (the source pills).
+    alt_lyrics: Option<(String, Vec<Lyrics>)>,
+    sources_for: String,
     /// Romaji by song.
     romaji: HashMap<String, Vec<String>>,
     /// Last.fm: the song being listened to (id, when it started, seconds played, scrobbled), and
@@ -371,6 +376,8 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         share: None,
         sleep: None,
         romaji: HashMap::new(),
+        alt_lyrics: None,
+        sources_for: String::new(),
         scrobble: None,
         lastfm_token: None,
         link: Default::default(),
@@ -539,6 +546,21 @@ fn wire(ui: &AppWindow, st: &Shared) {
     {
         let st = st.clone();
         app.on_set_toggle(move |id, on| set_toggle(&st, &id, on));
+    }
+    {
+        let st = st.clone();
+        app.on_pick_source(move |i| {
+            let picked = {
+                let s = st.borrow();
+                let vid = s.q.now().map(|t| t.video_id.clone()).unwrap_or_default();
+                s.alt_lyrics.as_ref().filter(|(id, _)| *id == vid).and_then(|(_, list)| list.get(i as usize).cloned()).map(|l| (vid, l))
+            };
+            if let Some((vid, l)) = picked {
+                // Kept for the song, so it comes back next time.
+                rymplayer::lyrics::choose(&vid, &l);
+                show_lyrics(&st, Some(l));
+            }
+        });
     }
     {
         let st = st.clone();
@@ -1590,6 +1612,8 @@ fn play_at(st: &Shared, i: usize) {
             a.stop();
         }
         s.m.lyrics.set_vec(Vec::new());
+        s.alt_lyrics = None;
+        s.sources_for.clear();
         (track, s.request_id, s.api.clone())
     };
     with_app(st, |a| {
@@ -1599,6 +1623,8 @@ fn play_at(st: &Shared, i: usize) {
         a.set_pos_text("0:00".into());
         a.set_lyrics_note(tr("Looking for lyrics…").into());
         a.set_lyric_line(-1);
+        a.set_sources(ModelRc::default());
+        a.set_source_at(-1);
     });
     show_now(st);
     render_queue(st);
@@ -2158,6 +2184,34 @@ fn fill_stats(st: &Shared) {
     });
 }
 
+/// The source pills over the lyrics; every source is looked up once per song.
+fn show_sources(st: &Shared, shown: &Lyrics, vid: &str) {
+    let (alt, asked, api, track) = {
+        let s = st.borrow();
+        (s.alt_lyrics.clone().filter(|(id, _)| id == vid), s.sources_for == vid, s.api.clone(), s.q.now().cloned())
+    };
+    match alt {
+        Some((_, list)) => {
+            let names: Vec<SharedString> = list.iter().map(|l| SharedString::from(l.source.as_str())).collect();
+            let at = list.iter().position(|l| rymplayer::lyrics::same(l, shown)).map_or(-1, |i| i as i32);
+            with_app(st, |a| {
+                a.set_sources(ModelRc::from(Rc::new(VecModel::from(names))));
+                a.set_source_at(at);
+            });
+        }
+        None if !asked => {
+            let Some(t) = track else { return };
+            st.borrow_mut().sources_for = vid.to_string();
+            let shown = shown.clone();
+            post(async move {
+                let vid = t.video_id.clone();
+                Ev::Sources(vid, rymplayer::lyrics::sources(api, t, Some(shown)).await)
+            });
+        }
+        None => {}
+    }
+}
+
 fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
     let translate = st.borrow().config.lyrics_translation;
     let lyrics = lyrics.map(|mut l| {
@@ -2195,7 +2249,7 @@ fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
     let rows: Vec<LyricLine> = lines
         .into_iter()
         .enumerate()
-        .map(|(i, text)| LyricLine { text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 } })
+        .map(|(i, text)| LyricLine { rtl: rymplayer::i18n::is_rtl(&text), text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 } })
         .collect();
     let note = if l.synced.is_empty() { format!("{} · {} {}", tr("These lyrics aren't synced to the song"), tr("Lyrics from"), l.source) } else { format!("{} {}", tr("Lyrics from"), l.source) };
     let wants = translate && l.translation.is_empty() && rymplayer::lyrics::is_japanese(&l);
@@ -2206,6 +2260,7 @@ fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
         s.shown.3 = -2;
     }
     with_app(st, |a| a.set_lyrics_note(note.into()));
+    show_sources(st, &l, &vid);
     let now = st.borrow().q.now().cloned();
     if wants && let Some(t) = now {
         let source = l.source.clone();
@@ -2816,6 +2871,18 @@ fn handle(st: &Shared, ev: Ev) {
         }
         Ev::Installed(Err(e)) => set_update_text(st, format!("{}: {e}", tr("Update failed"))),
         Ev::MediaKey(k) => media_key(st, k),
+        Ev::Sources(vid, list) => {
+            let (current, shown) = {
+                let s = st.borrow();
+                (s.q.now().is_some_and(|t| t.video_id == vid), s.lyrics.clone())
+            };
+            if current {
+                st.borrow_mut().alt_lyrics = Some((vid.clone(), list));
+                if let Some(l) = shown {
+                    show_sources(st, &l, &vid);
+                }
+            }
+        }
         Ev::Romaji(vid, source, lines) => {
             st.borrow_mut().romaji.insert(format!("{vid}|{source}"), lines);
             let current = {
@@ -2962,10 +3029,13 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     app.set_home(ModelRc::from(Rc::new(VecModel::from(vec![Shelf { title: "For you".into(), cards: ModelRc::from(shelf_cards.clone()) }, Shelf { title: "حسيني لك".into(), cards: ModelRc::from(shelf_cards) }]))));
     app.set_show_lyrics(page == 9);
     app.set_line_progress(0.5);
+    app.set_sources(ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from("LRCLIB"), SharedString::from("NetEase"), SharedString::from("YouTube Music")]))));
+    app.set_source_at(1);
     app.set_lyrics(ModelRc::from(Rc::new(VecModel::from(vec![
-        LyricLine { text: "夜に駆ける".into(), tr: "Racing into the night".into(), ro: "Yoru ni kakeru".into(), state: 2 },
-        LyricLine { text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1 },
-        LyricLine { text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0 },
+        LyricLine { rtl: false, text: "夜に駆ける".into(), tr: "Racing into the night".into(), ro: "Yoru ni kakeru".into(), state: 2 },
+        LyricLine { rtl: false, text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1 },
+        LyricLine { rtl: false, text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0 },
+        LyricLine { rtl: true, text: "يا حسين يا مظلوم".into(), tr: "".into(), ro: "".into(), state: 0 },
     ]))));
     ui.show().expect("show");
     window.set_size(slint::PhysicalSize::new(w, h));

@@ -37,6 +37,8 @@ export struct LyricLine {
     text: string,
     tr: string,
     ro: string,
+    // Written right to left (Arabic): it lines up on the right and fills from the right.
+    rtl: bool,
     // 0 to come, 1 sung now, 2 sung
     state: int,
 }
@@ -121,6 +123,9 @@ export global App {
     in property <float> line-progress;
     in property <bool> karaoke: true;
     in-out property <int> lyrics-size: 25;
+    // The lyrics' sources (LRCLIB, NetEase...) and the one shown.
+    in property <[string]> sources;
+    in property <int> source-at: -1;
     in property <string> sleep-text;
 
     // ---- the pages
@@ -177,6 +182,7 @@ export global App {
     callback more();
     callback play-all();
     callback lyric-clicked(int);
+    callback pick-source(int);
     callback set-toggle(string, bool);
     callback choose(string, int);
     callback set-text(string, string);
@@ -665,8 +671,35 @@ component Lyrics inherits Rectangle {
     border-radius: 6px * Ui.k;
     background: Theme.dark ? #00000040 : #ffffff80;
     clip: true;
-    property <length> line-h: App.lyrics-size * 1.9px * Ui.k;
+    property <length> pills-h: App.sources.length > 1 ? 44px * Ui.k : 0;
+    // The sources: one pill each, the shown one in the accent color.
+    if App.sources.length > 1: Flickable {
+        y: 8px * Ui.k;
+        height: 30px * Ui.k;
+        content-width: pills.preferred-width;
+        pills := HorizontalLayout {
+            padding-left: 14px * Ui.k;
+            padding-right: 14px * Ui.k;
+            spacing: 8px * Ui.k;
+            for name[i] in App.sources: Rectangle {
+                width: label.preferred-width + 22px * Ui.k;
+                border-radius: self.height / 2;
+                background: i == App.source-at ? Theme.accent : (pa.has-hover ? Theme.hover : Theme.raised.with-alpha(0.7));
+                label := Text {
+                    text: name;
+                    font-size: 14px * Ui.k;
+                    color: i == App.source-at ? #ffffff : Theme.text;
+                }
+                pa := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { App.pick-source(i); }
+                }
+            }
+        }
+    }
     flick := Flickable {
+        y: root.pills-h;
+        height: root.height - root.pills-h;
         content-height: col.preferred-height;
         col := VerticalLayout {
             padding: 20px * Ui.k;
@@ -678,8 +711,15 @@ component Lyrics inherits Rectangle {
                 wrap: word-wrap;
                 horizontal-alignment: Ui.start;
             }
-            for l[i] in App.lyrics: VerticalLayout {
+            for l[i] in App.lyrics: row := VerticalLayout {
                 spacing: 2px * Ui.k;
+                // The sung line comes to about a third of the way down (by where it really is).
+                property <bool> sung-now: l.state == 1;
+                changed sung-now => {
+                    if (self.sung-now) {
+                        flick.content-y = round(max(flick.height - flick.content-height, min(0px, -self.y + flick.height / 3)) / 1px) * 1px;
+                    }
+                }
                 Rectangle {
                     height: line.preferred-height;
                     line := Text {
@@ -688,21 +728,27 @@ component Lyrics inherits Rectangle {
                         font-size: App.lyrics-size * 1px * Ui.k;
                         font-weight: 700;
                         wrap: word-wrap;
-                        horizontal-alignment: Ui.start;
-                        color: l.state == 1 ? Theme.text.with-alpha(App.karaoke && one-line ? 0.45 : 1) : (l.state == 2 ? Theme.text.with-alpha(0.6) : Theme.text.with-alpha(0.32));
-                        property <bool> one-line: self.preferred-width <= parent.width;
+                        horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                        color: l.state == 1 ? Theme.text.with-alpha(App.karaoke && one-line ? 0.42 : 1) : (l.state == 2 ? Theme.text.with-alpha(0.6) : Theme.text.with-alpha(0.32));
+                        // One row of text (a wrapped line isn't filled: it would fill the wrong row).
+                        property <bool> one-line: self.preferred-height < App.lyrics-size * 1.8px * Ui.k;
                     }
-                    // Karaoke: the sung part of a one-line line in the accent color.
+                    // Karaoke: the sung part in full white, from where the line starts (the right
+                    // for Arabic), easing between the ticks.
                     if l.state == 1 && App.karaoke && line.one-line: Rectangle {
-                        x: Ui.rtl ? parent.width - line.preferred-width + line.preferred-width * (1 - App.line-progress) : 0;
-                        width: line.preferred-width * App.line-progress;
+                        property <length> text-w: min(line.preferred-width, parent.width);
+                        property <length> fill: self.text-w * App.line-progress;
+                        animate fill { duration: 120ms; }
+                        x: l.rtl ? parent.width - self.fill : 0;
+                        width: self.fill;
                         clip: true;
                         Text {
-                            x: Ui.rtl ? -(line.preferred-width * (1 - App.line-progress)) : 0;
-                            width: line.preferred-width;
+                            x: l.rtl ? -(parent.text-w - parent.fill) : 0;
+                            width: parent.text-w;
                             text: l.text;
                             font-size: App.lyrics-size * 1px * Ui.k;
                             font-weight: 700;
+                            horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                             color: Theme.text;
                         }
                     }
@@ -726,14 +772,6 @@ component Lyrics inherits Rectangle {
                     color: Theme.dim.with-alpha(l.state == 1 ? 1 : 0.6);
                 }
             }
-        }
-    }
-    // Keep the sung line about a third of the way down.
-    property <int> line: App.lyric-line;
-    changed line => {
-        if (self.line >= 0) {
-            flick.content-y = round(max(flick.height - flick.content-height,
-                min(0px, -(self.line * (root.line-h + 10px * Ui.k)) + flick.height / 3)) / 1px) * 1px;
         }
     }
 }
