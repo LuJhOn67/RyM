@@ -7,7 +7,6 @@ build = "build.rs"
 
 [dependencies]
 # Software rendering only (tiny-skia): no GPU driver memory, keeps the window app light.
-iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "image", "svg", "tokio", "advanced", "advanced-shaping", "crisp", "x11", "wayland"] }
 anyhow = "1.0.104"
 crossterm = "0.29.0"
 directories = "6.0.0"
@@ -61,10 +60,6 @@ name = "RyM"
 path = "src/main.rs"
 
 [[bin]]
-name = "RyM-Iced-Player"
-path = "src/bin/gui/main.rs"
-
-[[bin]]
 name = "RymPlayer-GTK"
 path = "src/bin/gtk/main.rs"
 required-features = ["gtk-ui"]
@@ -81,4 +76,3 @@ embed-resource = "3"
 slint-build = { version = "1.18.1", optional = true }
 
 [dev-dependencies]
-iced_test = "0.14.0"

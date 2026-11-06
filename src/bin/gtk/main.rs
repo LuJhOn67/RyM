@@ -3157,7 +3157,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
             }
         });
     }
-    page.append(&setting_row(tr("Theme"), tr("Shared with RyM Iced Player"), &theme));
+    page.append(&setting_row(tr("Theme"), "", &theme));
     page.append(&setting_row(
         tr("Suggestions"),
         tr("For you and Up next by points: new songs, the same artist and kind (Husseini brings only Husseini, songs only songs)"),
