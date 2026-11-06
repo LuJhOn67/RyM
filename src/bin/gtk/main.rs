@@ -603,7 +603,15 @@ fn log(line: &str) {
     }
 }
 
+/// When the program started (for the start-up times in rym-gtk.log).
+static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+fn since_start() -> u128 {
+    STARTED.get().map_or(0, |t| t.elapsed().as_millis())
+}
+
 fn main() {
+    STARTED.get_or_init(Instant::now);
     configure_gtk_runtime();
     // What the last update put aside goes now.
     rymplayer::updates::clean_old();
@@ -805,6 +813,7 @@ fn now_playing(ui: &Shared) -> Option<Track> {
 // ---------------------------------------------------------------- window
 
 fn build(app: &Application) {
+    log(&format!("start: GTK ready after {} ms", since_start()));
     let config = Config::load();
     rymplayer::i18n::set_arabic(config.arabic);
     // Arabic: the whole window reads right to left.
@@ -1645,6 +1654,7 @@ fn build(app: &Application) {
             glib::Propagation::Proceed
         });
     }
+    log(&format!("start: window built after {} ms", since_start()));
     render(&ui);
     watch_frames(&ui);
     #[cfg(windows)]
@@ -1667,7 +1677,9 @@ fn watch_frames(ui: &Shared) {
     let window = ui.borrow().w.window.clone();
     let ui = Rc::downgrade(ui);
     window.connect_map(move |w| {
+        log(&format!("start: window shown after {} ms", since_start()));
         let Some(clock) = w.frame_clock() else { return };
+        let first = Rc::new(Cell::new(true));
         let started = Rc::new(Cell::new(None::<Instant>));
         let laid_out = Rc::new(Cell::new(None::<Instant>));
         {
@@ -1681,6 +1693,9 @@ fn watch_frames(ui: &Shared) {
         }
         let (ui, window) = (ui.clone(), w.clone());
         clock.connect_after_paint(move |_| {
+            if first.replace(false) {
+                log(&format!("start: first frame drawn after {} ms", since_start()));
+            }
             let Some(start) = started.take() else { return };
             let total = start.elapsed();
             let layout = laid_out.take().map_or(Duration::ZERO, |t| t.duration_since(start));

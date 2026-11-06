@@ -210,8 +210,13 @@ fn replace(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The files an update put aside (`*.old`, `*.old1`...), deleted once nothing runs them.
+/// The files an update put aside (`*.old`, `*.old1`...), deleted once nothing runs them; on its
+/// own thread, so starting doesn't wait for the walk through the program's folder.
 pub fn clean_old() {
+    let _ = std::thread::Builder::new().name("rym-clean-old".into()).spawn(clean_old_now);
+}
+
+fn clean_old_now() {
     let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) else { return };
     let mut stack = vec![dir];
     while let Some(d) = stack.pop() {
