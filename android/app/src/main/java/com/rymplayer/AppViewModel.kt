@@ -513,24 +513,59 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val likedList = likedSongs.await()
                     likedList?.let(::syncLiked)
                     val history = played.await()
-                    // Fresh: the radios of the last songs played; new: radios of two liked or played songs at random.
-                    val freshSeeds = (recent + history).map { it.videoId }.filter { com.rymplayer.data.isYouTube(it) }.distinct().take(4)
+                    // RaM points. Fresh: the radios of the last songs played; new: radios of two liked or
+                    // played songs at random (of a kind heard lately, when known).
+                    val notes = com.rymplayer.data.RamPoints.load(ctx)
+                    val freshSeedTracks = (recent + history).filter { com.rymplayer.data.isYouTube(it.videoId) }.distinctBy { it.videoId }.take(4)
+                    val freshSeeds = freshSeedTracks.map { it.videoId }
+                    val heardKinds = freshSeedTracks.mapNotNull { notes.kindOf(it) }.toSet()
                     val pool = (likedList.orEmpty().take(80) + history.take(40)).filter { it.videoId !in freshSeeds }
+                        .filter { heardKinds.isEmpty() || (notes.kindOf(it)?.let { k -> k in heardKinds } ?: true) }
                     val newSeeds = FeedMemory.pickSeeds(ctx, pool, 2)
-                    val freshRadios = freshSeeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }
-                    val newRadios = newSeeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }
+                    val newSeedTracks = newSeeds.mapNotNull { id -> pool.firstOrNull { it.videoId == id } }
+                    val freshRadios = freshSeedTracks.map { s -> async { s to runCatching { api.radio(s.videoId) }.getOrDefault(emptyList()) } }
+                    val newRadios = newSeedTracks.map { s -> async { s to runCatching { api.radio(s.videoId) }.getOrDefault(emptyList()) } }
                     val known = (likedList.orEmpty() + history + recent).map { it.videoId }.toSet()
-                    val fresh = FeedMemory.turns(freshRadios.awaitAll())
-                    val new = (FeedMemory.turns(newRadios.awaitAll()) + arranged.filter { it.link == null }).filter { it.videoId !in known }
-                    val familiar = (Recent.favourites(ctx, 40) + likedList.orEmpty().take(150)).shuffled()
+                    val heard = mutableListOf<Pair<com.rymplayer.data.RamPoints.Kind, Float>>()
+                    val cands = mutableListOf<com.rymplayer.data.RamPoints.Candidate>()
+                    freshRadios.awaitAll().forEachIndexed { i, (seed, radio) ->
+                        val kind = notes.seedKind(seed, radio)
+                        notes.learn(kind, seed, radio)
+                        heard += kind to 2f / (1 + i)
+                        cands += com.rymplayer.data.RamPoints.fromRadio(radio, kind, 10)
+                    }
+                    (recent + history).filter { it.videoId !in freshSeeds }.take(12).forEachIndexed { i, t ->
+                        notes.kindOf(t)?.let { heard += it to 0.6f / (1 + i * 0.3f) }
+                    }
+                    val kinds = com.rymplayer.data.RamPoints.pageKinds(heard)
+                    for ((seed, radio) in newRadios.awaitAll()) {
+                        val kind = notes.seedKind(seed, radio)
+                        notes.learn(kind, seed, radio)
+                        cands += com.rymplayer.data.RamPoints.fromRadio(radio, kind, 6)
+                    }
+                    // YouTube's own home-page songs and shelves: only the page's kinds.
+                    val fitting = arranged.filter { t -> notes.kindOf(t)?.let { it in kinds } ?: true }
+                    fitting.filter { it.link == null }.forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 14, null, false) }
+                    (Recent.favourites(ctx, 40) + likedList.orEmpty().take(150)).shuffled().take(60).forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 4, null, true) }
                     val recentRow = recent.take(20).map { it.copy(album = FeedMemory.RECENTLY_PLAYED) }
-                    val skip = recentRow.map { it.videoId }.toSet() + freshSeeds
-                    val forYou = FeedMemory.mix(fresh, new, familiar, skip, 40, FeedMemory.FOR_YOU)
+                    val skip = (recentRow.map { it.videoId } + freshSeeds).toMutableSet()
+                    val topArtists = Recent.favourites(ctx, 40).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
+                    val shown = FeedMemory.shownLookup(ctx)
+                    // The main kind gets the shelf; a second kind, its own shelf (about two in five).
+                    val sizes = if (kinds.size > 1) listOf(24, 16) else listOf(40)
+                    val forYou = mutableListOf<Track>()
+                    kinds.zip(sizes).forEachIndexed { i, (kind, n) ->
+                        val section = if (i == 0) FeedMemory.FOR_YOU else kind.shelf
+                        val picked = com.rymplayer.data.RamPoints.forYou(notes, cands, kind, n, skip, known, topArtists, shown, { Recent.playedAt(ctx, it) })
+                        skip += picked.map { it.videoId }
+                        forYou += picked.map { it.copy(album = section) }
+                    }
+                    com.rymplayer.data.RamPoints.save(ctx, notes)
                     FeedMemory.seen(ctx, forYou)
                     val inMix = forYou.map { it.videoId }.toSet()
-                    val out = recentRow + forYou + arranged.filter { it.link != null || it.videoId !in inMix }
+                    val out = recentRow + forYou + fitting.filter { it.link != null || it.videoId !in inMix }
                     homeCursor = HomeCursor((home.more as? com.rymplayer.data.MusicApi.More.Home)?.token, (freshSeeds + newSeeds).toMutableList(),
-                        out.map(FeedMemory::key).toMutableSet(), likedList.orEmpty(), history)
+                        out.map(FeedMemory::key).toMutableSet(), likedList.orEmpty(), history, kinds.first())
                     out
                 }
             }
@@ -553,6 +588,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val shown: MutableSet<String>,
         val liked: List<Track>,
         val history: List<Track>,
+        /** The page's main kind of song (the later parts keep to it). */
+        val kind: com.rymplayer.data.RamPoints.Kind,
     )
     private var homeCursor: HomeCursor? = null
 
@@ -573,21 +610,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             runCatching {
                 coroutineScope {
                     val recent = Recent.tracks(ctx)
+                    val notes = com.rymplayer.data.RamPoints.load(ctx)
+                    // More of the page's main kind (seeds not known yet: their radio tells).
                     val unused = (recent + c.history + c.liked).filter { com.rymplayer.data.isYouTube(it.videoId) && it.videoId !in c.used }
-                    val seeds = (listOfNotNull(recent.firstOrNull { it in unused }) + unused.take(40).shuffled().take(2)).map { it.videoId }.distinct()
-                    val radios = seeds.map { s -> async { runCatching { api.radio(s) }.getOrDefault(emptyList()) } }
+                        .filter { (notes.kindOf(it) ?: c.kind) == c.kind }
+                    val seedTracks = (listOfNotNull(recent.firstOrNull { it in unused }) + unused.take(40).shuffled().take(2)).distinctBy { it.videoId }
+                    val seeds = seedTracks.map { it.videoId }
+                    val radios = seedTracks.map { s -> async { s to runCatching { api.radio(s.videoId) }.getOrDefault(emptyList()) } }
                     val token = c.token
                     val page = async { token?.let { runCatching { api.more(com.rymplayer.data.MusicApi.More.Home(it)) }.getOrNull() } }
                     val known = (c.liked + c.history + recent).map { it.videoId }.toSet()
-                    val fresh = FeedMemory.turns(radios.awaitAll())
-                    val new = fresh.filter { it.videoId !in known }
-                    val familiar = (Recent.favourites(ctx, 40) + c.liked.take(150)).shuffled()
-                    val mixed = FeedMemory.mix(fresh, new, familiar, c.shown, 30, FeedMemory.MORE_FOR_YOU)
-                    FeedMemory.seen(ctx, mixed)
+                    val cands = mutableListOf<com.rymplayer.data.RamPoints.Candidate>()
+                    for ((seed, radio) in radios.awaitAll()) {
+                        val kind = notes.seedKind(seed, radio)
+                        notes.learn(kind, seed, radio)
+                        cands += com.rymplayer.data.RamPoints.fromRadio(radio, kind, 10)
+                    }
                     val next = page.await()
+                    val pageItems = next?.tracks.orEmpty().filter { t -> (notes.kindOf(t) ?: c.kind) == c.kind }
+                    pageItems.filter { it.link == null }.forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 14, null, false) }
+                    (Recent.favourites(ctx, 40) + c.liked.take(150)).shuffled().take(60).forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 4, null, true) }
+                    val topArtists = Recent.favourites(ctx, 40).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
+                    val mixed = com.rymplayer.data.RamPoints.forYou(notes, cands, c.kind, 30, c.shown, known, topArtists, FeedMemory.shownLookup(ctx), { Recent.playedAt(ctx, it) })
+                        .map { it.copy(album = FeedMemory.MORE_FOR_YOU) }
+                    com.rymplayer.data.RamPoints.save(ctx, notes)
+                    FeedMemory.seen(ctx, mixed)
                     c.token = (next?.more as? com.rymplayer.data.MusicApi.More.Home)?.token
                     val mixedKeys = mixed.map(FeedMemory::key).toSet()
-                    val shelves = next?.tracks.orEmpty().filter { FeedMemory.key(it) !in c.shown && FeedMemory.key(it) !in mixedKeys }
+                    val shelves = pageItems.filter { FeedMemory.key(it) !in c.shown && FeedMemory.key(it) !in mixedKeys }
                     c.used += seeds
                     (mixed + shelves).also { added -> c.shown += added.map(FeedMemory::key) }
                 }

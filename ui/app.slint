@@ -70,6 +70,8 @@ export global Theme {
 // The scale of the 1600 x 1024 layout to the window.
 export global Ui {
     in-out property <float> k: 1;
+    // The size picked in the app (- / + in the corner, Ctrl and - / +, or Settings).
+    in-out property <float> zoom: 0.85;
 }
 
 export global App {
@@ -155,6 +157,7 @@ export global App {
     callback check-updates();
     callback open-artist();
     callback mini();
+    callback zoom(float);
 }
 
 // ---------------------------------------------------------------- small parts
@@ -612,6 +615,9 @@ component NowPlaying inherits Rectangle {
         image-fit: cover;
         opacity: Theme.dark ? 0.16 : 0.3;
     }
+    Rectangle {
+    y: max(0px, (root.height - 1024px * Ui.k) / 2);
+    height: 1024px * Ui.k;
     // RyM
     Text {
         x: 36px * Ui.k;
@@ -800,6 +806,29 @@ component NowPlaying inherits Rectangle {
             clicked => { account.show(); }
         }
     }
+    // Size: smaller / bigger.
+    HorizontalLayout {
+        x: 36px * Ui.k;
+        y: 96px * Ui.k;
+        spacing: 6px;
+        for z in [{ label: "−", step: -0.05 }, { label: "+", step: 0.05 }]: Rectangle {
+            width: 30px;
+            height: 30px;
+            border-radius: 15px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: zt.has-hover ? Theme.hover : transparent;
+            Text {
+                text: z.label;
+                font-size: 18px;
+                color: Theme.dim;
+            }
+            zt := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { App.zoom(Ui.zoom + z.step); }
+            }
+        }
+    }
     account := PopupWindow {
         x: 42px * Ui.k;
         y: 700px * Ui.k;
@@ -837,6 +866,7 @@ component NowPlaying inherits Rectangle {
                 }
             }
         }
+    }
     }
 }
 
@@ -1127,12 +1157,14 @@ component SettingsPage inherits Page {
             }
         }
         for n in [
+            { id: "zoom", title: "App size", unit: "%", low: 50, high: 150 },
             { id: "crossfade", title: "Crossfade", unit: "s", low: 0, high: 12 },
             { id: "lyrics-size", title: "Lyrics size", unit: "px", low: 14, high: 48 },
         ]: HorizontalLayout {
             padding-left: 12px * Ui.k;
             spacing: 14px * Ui.k;
-            property <int> value: n.id == "crossfade" ? App.crossfade : App.lyrics-size;
+            property <int> value: n.id == "zoom" ? round(Ui.zoom * 100) : (n.id == "crossfade" ? App.crossfade : App.lyrics-size);
+            property <int> step: n.id == "zoom" ? 5 : 1;
             Text {
                 text: App.tr(n.title);
                 font-size: 22px * Ui.k;
@@ -1144,7 +1176,7 @@ component SettingsPage inherits Page {
             Icon {
                 size: 36px * Ui.k;
                 source: @image-url("icons/alt-arrow-left-linear.svg");
-                clicked => { App.set-number(n.id, max(n.low, parent.value - 1)); }
+                clicked => { App.set-number(n.id, max(n.low, parent.value - parent.step)); }
             }
             Text {
                 text: parent.value + " " + n.unit;
@@ -1157,7 +1189,7 @@ component SettingsPage inherits Page {
             Icon {
                 size: 36px * Ui.k;
                 source: @image-url("icons/alt-arrow-right-linear.svg");
-                clicked => { App.set-number(n.id, min(n.high, parent.value + 1)); }
+                clicked => { App.set-number(n.id, min(n.high, parent.value + parent.step)); }
             }
         }
         HorizontalLayout {
@@ -1202,7 +1234,7 @@ export component AppWindow inherits Window {
     min-height: 600px;
     background: Theme.bg;
     default-font-family: "Roboto";
-    property <float> scale: max(0.5, min(1.4, min(self.width / 1600px, self.height / 1024px)));
+    property <float> scale: max(0.5, min(1.4, min(self.width / 1600px, self.height / 1024px))) * Ui.zoom;
     changed scale => { Ui.k = self.scale; }
     init => { Ui.k = self.scale; }
     forward-focus: keys;
@@ -1210,6 +1242,18 @@ export component AppWindow inherits Window {
         key-pressed(e) => {
             if (e.text == " " && App.page != 1) {
                 App.toggle-play();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "=" || e.text == "+")) {
+                App.zoom(Ui.zoom + 0.05);
+                return accept;
+            }
+            if (e.modifiers.control && e.text == "-") {
+                App.zoom(Ui.zoom - 0.05);
+                return accept;
+            }
+            if (e.modifiers.control && e.text == "0") {
+                App.zoom(0.85);
                 return accept;
             }
             reject

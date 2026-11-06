@@ -28,6 +28,9 @@ object Recent {
         edit.apply()
     }
 
+    /** When the song last played here (ms since 1970; 0: never). */
+    fun playedAt(ctx: Context, videoId: String): Long = prefs(ctx).getLong("t:$videoId", 0L)
+
     /** The most played songs (played more than once; ties: the more recent first). */
     fun favourites(ctx: Context, n: Int): List<Track> {
         val p = prefs(ctx)

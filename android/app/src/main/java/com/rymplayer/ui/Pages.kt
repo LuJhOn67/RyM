@@ -250,7 +250,7 @@ private fun homeBlocks(home: List<Track>): List<HomeBlock> {
         while (end < home.size && home[end].album == name) end++
         val run = home.subList(i, end)
         out += HomeBlock.Header(name)
-        if (name == com.rymplayer.data.FeedMemory.FOR_YOU || name == com.rymplayer.data.FeedMemory.MORE_FOR_YOU) run.mapTo(out) { HomeBlock.Song(it) }
+        if (name == com.rymplayer.data.FeedMemory.FOR_YOU || name == com.rymplayer.data.FeedMemory.MORE_FOR_YOU || name in com.rymplayer.data.RamPoints.SHELVES) run.mapTo(out) { HomeBlock.Song(it) }
         else out += HomeBlock.Shelf(run)
         i = end
     }

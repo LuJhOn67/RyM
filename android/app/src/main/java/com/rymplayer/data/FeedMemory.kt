@@ -114,6 +114,12 @@ object FeedMemory {
         return out
     }
 
+    /** How often and when a song was last shown on the home page (null: never), for RaM points. */
+    fun shownLookup(ctx: Context): (String) -> Pair<Int, Long>? {
+        val p = prefs(ctx)
+        return { k -> p.getInt("n:$k", 0).takeIf { it > 0 }?.let { it to p.getLong("t:$k", 0L) } }
+    }
+
     /** Songs put in a mix: they wait a while before they're picked again. */
     fun seen(ctx: Context, tracks: List<Track>) {
         val p = prefs(ctx)

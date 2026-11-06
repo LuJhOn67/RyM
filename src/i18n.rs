@@ -199,6 +199,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Nasheeds for you" => "أناشيد لك",
         "Talks for you" => "محاضرات وبودكاست لك",
         "Suggestions" => "الاقتراحات",
+        "App size" => "حجم البرنامج",
         "For you and Up next by points: new songs, the same artist and kind (Husseini brings only Husseini, songs only songs)" => "صفحة لك والتالي بالنقاط: أغاني جديدة، من نفس الفنان والصنف (الحسيني يجيب حسيني بس، والأغاني أغاني بس)",
         "Loading more..." => "جارٍ تحميل المزيد...",
         "Install the Spotify plugin to open Spotify links" => "ثبّت إضافة سبوتيفاي لفتح روابط سبوتيفاي",

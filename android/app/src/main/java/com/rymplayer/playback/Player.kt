@@ -72,7 +72,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     init {
         QueueBridge.next = { next() }
         QueueBridge.prev = { prev() }
-        QueueBridge.hasNext = { index + 1 < queue.size }
+        QueueBridge.hasNext = { index + 1 < queue.size && !repeatOne }
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
         Link.pause = { pause() }
         future.addListener({
@@ -101,7 +101,11 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                         // Once per song, and only for the one playing now (a late "ended" from a
                         // song already skipped by hand must not skip the new one too).
                         val ended = controller?.currentMediaItem?.mediaId
-                        if (ended != null && ended == current?.videoId && endedFor != playCount) {
+                        if (ended != null && ended == current?.videoId && endedFor != playCount && repeatOne) {
+                            // Repeat this song: from the start again.
+                            controller?.seekTo(0L)
+                            controller?.play()
+                        } else if (ended != null && ended == current?.videoId && endedFor != playCount) {
                             endedFor = playCount
                             // Nothing after it yet: the radio is asked again and plays once it's in (see append).
                             if (index + 1 < queue.size) next() else current?.let(::keepGoing)
@@ -441,14 +445,22 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         }
     }
 
-    /** The radio for [seed] without repeats or songs played or queued already, same artist moved up. */
+    /**
+     * Up next for [seed] from its radio by RaM points: only its kind (Husseini brings Husseini,
+     * songs bring songs), its artist and songs like it first, new songs over ones played lately,
+     * nothing played or queued already.
+     */
     fun tidy(radio: List<Track>, seed: Track): List<Track> {
         val heard = queue.take(index + 1).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
         val queued = queue.map { it.videoId }.toSet()
-        val similar = com.rymplayer.data.Radio.tidy(radio, seed, played, queued, heard)
-        // Songs like it, with liked songs mixed in (same artist first).
-        return com.rymplayer.data.Radio.withLiked(similar, seed, likedSongs(), played + queued)
+        val notes = com.rymplayer.data.RamPoints.load(context)
+        val out = com.rymplayer.data.RamPoints.upNext(notes, radio, seed, likedSongs(), played + queued, heard, { com.rymplayer.data.Recent.playedAt(context, it) })
+        com.rymplayer.data.RamPoints.save(context, notes)
+        return out
     }
+
+    /** Repeat this song: when it ends it starts again (no mix into the next one). */
+    var repeatOne by mutableStateOf(false)
 
     /** The liked songs, mixed into Up next (set by the app). */
     var likedSongs: () -> List<Track> = { emptyList() }

@@ -79,6 +79,8 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -248,6 +250,7 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 Text(fmtTime(dur), color = Dim, fontSize = 12.sp)
             }
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.size(48.dp))
                 IconButton(p::prev, Modifier.size(56.dp)) { Icon(Icons.Default.SkipPrevious, tr("Previous"), tint = Color.White, modifier = Modifier.size(36.dp)) }
                 Box(Modifier.size(76.dp).clip(CircleShape).background(Color.White).clickable(onClick = p::toggle), contentAlignment = Alignment.Center) {
                     if (p.loading) {
@@ -257,6 +260,15 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                     }
                 }
                 IconButton(p::next, Modifier.size(56.dp)) { Icon(Icons.Default.SkipNext, tr("Next"), tint = Color.White, modifier = Modifier.size(36.dp)) }
+                // Repeat this song.
+                IconButton({ p.repeatOne = !p.repeatOne }, Modifier.size(48.dp)) {
+                    Icon(
+                        if (p.repeatOne) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                        tr("Repeat this song"),
+                        tint = if (p.repeatOne) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
             }
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 PanelButton(Icons.Default.Lyrics, tr("Lyrics"), panel == Panel.Lyrics) { panel = if (panel == Panel.Lyrics) Panel.Cover else Panel.Lyrics }

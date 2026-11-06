@@ -7,7 +7,8 @@ account, your library, synced lyrics, and a sound engine with DJ-style song chan
 
 | App | What it is |
 |---|---|
-| **RymPlayer-GTK** | The window app (GTK 4) for Windows, and Linux in beta |
+| **RyM Slint** | The window app for Windows (Slint): the playing song beside Up next, similar songs and the artist's songs, dark and light themes |
+| **RymPlayer-GTK** | The window app (GTK 4) for Linux, in beta |
 | **RyM Iced Player** | A second window app (iced), drawn on the graphics card or the processor |
 | **RyM** | The same player in the terminal |
 | **RyM for Android** | The phone app (Kotlin and Jetpack Compose, Android 10 or newer), in `android/` |
@@ -50,7 +51,7 @@ Get the files from [Releases](../../releases/latest):
 
 | File | Run |
 |---|---|
-| `RyM-GTK-Windows.zip` | Unzip it and run `RymPlayer-GTK.exe` |
+| `RyM-Slint.exe` | The window app for Windows: run it (one file) |
 | `RyM-Iced-Player.exe` | The Iced Player: run it |
 | `RyM.exe` | The terminal app: run it in Windows Terminal |
 | `RyM-Android-<version>.apk` | Install it on the phone |
@@ -107,7 +108,8 @@ Settings, sign-in data and the song cache live in `%LOCALAPPDATA%\RymPlayer`.
 
 ```sh
 cargo build --release --bin RyM                                  # terminal
-cargo build --release --bin RymPlayer-GTK --features gtk-ui      # window app (needs GTK 4)
+cargo build --release --bin RyM-Slint --features slint-ui        # window app (Windows)
+cargo build --release --bin RymPlayer-GTK --features gtk-ui      # window app on Linux (needs GTK 4)
 cargo build --release --bin RyM-Iced-Player                      # Iced Player
 cd android && ./gradlew assembleRelease                          # phone
 ```
@@ -131,7 +133,8 @@ On Android: `./gradlew testDebugUnitTest`.
 
 | التطبيق | شنو هو |
 |---|---|
-| **RymPlayer-GTK** | برنامج النوافذ (GTK 4) لويندوز، ولينكس بيتا |
+| **RyM Slint** | برنامج النوافذ لويندوز (Slint): الأغنية اللي تشتغل جنب التالي والأغاني المشابهة وأغاني نفس الفنان، بثيم غامق وثيم فاتح |
+| **RymPlayer-GTK** | برنامج النوافذ (GTK 4) للينكس، بيتا |
 | **RyM Iced Player** | برنامج نوافذ ثاني (iced)، يرسم بكرت الشاشة أو بالمعالج |
 | **RyM** | نفس المشغّل بالتيرمنال |
 | **RyM للموبايل** | تطبيق أندرويد (أندرويد 10 أو أحدث)، بمجلد `android/` |
@@ -168,7 +171,7 @@ On Android: `./gradlew testDebugUnitTest`.
 ### التنزيل والتشغيل
 
 نزّل من [الإصدارات](../../releases/latest):
-- `RyM-GTK-Windows.zip`: فك الضغط وشغّل `RymPlayer-GTK.exe`.
+- `RyM-Slint.exe`: برنامج النوافذ لويندوز، شغّله مباشرة (ملف واحد).
 - `RyM-Iced-Player.exe`: الـ Iced Player، شغّله مباشرة.
 - `RyM.exe`: التيرمنال.
 - `RyM-Android-<النسخة>.apk`: نصّبه بالموبايل.

@@ -256,6 +256,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     app.set_version(rymplayer::VERSION.into());
     app.set_lyrics_size(config.lyrics_font.clamp(14, 48) as i32);
     app.set_crossfade(config.crossfade as i32);
+    ui.global::<Ui>().set_zoom(config.ui_zoom.clamp(0.5, 1.5));
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("")))));
     app.on_tr(|s| tr_any(&s).into());
 
@@ -478,6 +479,10 @@ fn wire(ui: &AppWindow, st: &Shared) {
     {
         let st = st.clone();
         app.on_set_number(move |id, v| set_number(&st, &id, v));
+    }
+    {
+        let st = st.clone();
+        app.on_zoom(move |z| set_zoom(&st, z));
     }
 }
 
@@ -917,7 +922,22 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
     }
 }
 
+/// The app's size (the layout times `z`, 50% to 150%), kept for the next start.
+fn set_zoom(st: &Shared, z: f32) {
+    let z = ((z * 20.0).round() / 20.0).clamp(0.5, 1.5);
+    let mut s = st.borrow_mut();
+    s.config.ui_zoom = z;
+    s.config.save();
+    if let Some(ui) = s.ui.upgrade() {
+        ui.global::<Ui>().set_zoom(z);
+    }
+}
+
 fn set_number(st: &Shared, id: &str, v: i32) {
+    if id == "zoom" {
+        set_zoom(st, v as f32 / 100.0);
+        return;
+    }
     let mut s = st.borrow_mut();
     match id {
         "crossfade" => s.config.crossfade = v.clamp(0, 12) as u8,
