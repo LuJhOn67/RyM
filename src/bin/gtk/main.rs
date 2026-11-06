@@ -570,6 +570,8 @@ struct Ui {
     suggest_wait: Option<glib::SourceId>,
     /// RyM Link: the phone song already taken over or asked about (device, song), so it's once.
     link_seen: Option<(String, String)>,
+    /// Up next changed while it wasn't on screen: it's built when it shows.
+    queue_dirty: bool,
 }
 
 type Shared = Rc<RefCell<Ui>>;
@@ -1310,6 +1312,7 @@ fn build(app: &Application) {
         suggest_for: None,
         suggest_wait: None,
         link_seen: None,
+        queue_dirty: false,
     }));
     if ui.borrow().audio.is_none() {
         toast(&ui, tr("No audio device found"));
@@ -1550,6 +1553,18 @@ fn build(app: &Application) {
         // The button is lit while the panel shows, however it opened (RyM YTM: its arrow turns).
         let b = lyrics_toggle.clone();
         let ytm = ui.borrow().w.ytm;
+        {
+            let ui2 = ui.clone();
+            let built = move || {
+                if ui2.borrow().queue_dirty {
+                    let ui = ui2.clone();
+                    glib::idle_add_local_once(move || render_queue(&ui));
+                }
+            };
+            let again = built.clone();
+            ui.borrow().w.stack.connect_visible_child_name_notify(move |_| built());
+            ui.borrow().w.side.connect_visible_child_name_notify(move |_| again());
+        }
         ui.borrow().w.stack.connect_visible_child_name_notify(move |s| {
             let open = s.visible_child_name().as_deref() == Some("now");
             if ytm {
@@ -3686,21 +3701,40 @@ fn share(ui: &Shared, t: &Track) {
 
 /// The queue in the side panel: played songs dimmed, the playing one marked. A click plays a
 /// song; holding a row for 2 s lifts it, and it can be dragged to another place.
+/// Songs Up next lists after the playing one (a long queue costs hundreds of widgets otherwise).
+const QUEUE_SHOWN: usize = 40;
+
 fn render_queue(ui: &Shared) {
+    // Not on screen (the song's page shut, or the lyrics tab showing): built when it shows.
+    {
+        let mut s = ui.borrow_mut();
+        let visible = side_shown(&s.w) && s.w.side.visible_child_name().as_deref() == Some("queue");
+        if !visible {
+            s.queue_dirty = true;
+            return;
+        }
+        s.queue_dirty = false;
+    }
     let mut wants = Wants::new();
     let (songs, current, qb) = {
         let s = ui.borrow();
         (s.q.songs.clone(), s.q.current, s.w.queue_box.clone())
     };
     clear(&qb);
+    let first = current.unwrap_or(0);
+    let last = (first + QUEUE_SHOWN).min(songs.len().saturating_sub(1));
     if songs.is_empty() {
         qb.append(&note(tr("Nothing playing")));
         return;
     }
     for (i, t) in songs.iter().enumerate() {
-        // Up next starts at the playing song (the ones before it aren't listed).
+        // Up next starts at the playing song (the ones before it aren't listed), 40 after it.
         if current.is_some_and(|c| i < c) {
             continue;
+        }
+        if i > last {
+            qb.append(&note(&format!("+{} {}", songs.len() - i, tr("more songs"))));
+            break;
         }
         let row = gtk::Box::new(Orientation::Horizontal, 10);
         row.add_css_class("qrow");

@@ -103,6 +103,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "more songs" => "أغنية أخرى",
         "Translate Japanese lyrics" => "ترجمة كلمات الأغاني اليابانية",
         "English in small letters under each line: the lyrics site's own translation, else a machine translation" => "الإنكليزية بخط صغير تحت كل سطر: ترجمة موقع الكلمات نفسه، وإلا ترجمة آلية",
         "Music playing on your phone can move to this PC (same Wi-Fi and Google account); off: the phone is ignored" => "الموسيقى التي تشتغل على هاتفك تقدر تنتقل لهذا الكمبيوتر (نفس الواي فاي وحساب Google)؛ عند الإيقاف: يُتجاهل الهاتف",
