@@ -105,7 +105,13 @@ object RamPoints {
 
     /** What RyM has learned about artists: how much each kind was seen with them. */
     /** [fixed]: artists the user put in a kind by hand (a song's menu); it wins. */
-    class Notes(val artists: MutableMap<String, IntArray> = HashMap(), val fixed: MutableMap<String, Kind> = HashMap()) {
+    /** [bias]: points added to (or taken from) an artist ("Recommend more" / "Don't recommend"); [hidden]: songs never suggested again. */
+    class Notes(
+        val artists: MutableMap<String, IntArray> = HashMap(),
+        val fixed: MutableMap<String, Kind> = HashMap(),
+        val bias: MutableMap<String, Int> = HashMap(),
+        val hidden: MutableSet<String> = HashSet(),
+    ) {
         private fun add(artist: String, kind: Kind, weight: Int) {
             if (artist.isEmpty()) return
             val seen = artists.getOrPut(artist) { IntArray(5) }
@@ -166,10 +172,39 @@ object RamPoints {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("ram_points", Context.MODE_PRIVATE)
 
-    fun load(ctx: Context): Notes = Notes.decode(prefs(ctx).getString("artists", "").orEmpty())
+    fun load(ctx: Context): Notes {
+        val p = prefs(ctx)
+        val base = Notes.decode(p.getString("artists", "").orEmpty())
+        val bias = p.getString("bias", "").orEmpty().lineSequence().mapNotNull { line ->
+            val (a, n) = line.split('\t').takeIf { it.size == 2 } ?: return@mapNotNull null
+            n.toIntOrNull()?.let { a to it }
+        }.toMap(HashMap())
+        val hidden = p.getStringSet("hidden", emptySet()).orEmpty().toHashSet()
+        return Notes(base.artists, base.fixed, bias, hidden)
+    }
 
     fun save(ctx: Context, notes: Notes) {
-        prefs(ctx).edit().putString("artists", notes.encode()).apply()
+        prefs(ctx).edit()
+            .putString("artists", notes.encode())
+            .putString("bias", notes.bias.entries.joinToString("\n") { (a, n) -> a.replace('\t', ' ').replace('\n', ' ') + "\t" + n })
+            .putStringSet("hidden", notes.hidden.toSet())
+            .apply()
+    }
+
+    /** "Recommend more": the song's artist comes up more in Up next and For you. */
+    fun recommendMore(ctx: Context, t: Track) {
+        val notes = load(ctx)
+        notes.hidden -= t.videoId
+        firstArtist(t.artist).takeIf { it.isNotEmpty() }?.let { a -> notes.bias[a] = ((notes.bias[a] ?: 0) + 25).coerceAtMost(50) }
+        save(ctx, notes)
+    }
+
+    /** "Don't recommend": the song is never suggested again, and its artist a little less. */
+    fun dontRecommend(ctx: Context, t: Track) {
+        val notes = load(ctx)
+        notes.hidden += t.videoId
+        firstArtist(t.artist).takeIf { it.isNotEmpty() }?.let { a -> notes.bias[a] = ((notes.bias[a] ?: 0) - 20).coerceAtLeast(-60) }
+        save(ctx, notes)
     }
 
     /** The user says the song's artist is of [kind]: kept, and it wins over words and radios. */
@@ -248,7 +283,7 @@ object RamPoints {
         val cands = mutableListOf<Scored>()
         val all = radio.mapIndexed { i, t -> Triple(t, 30 - 30 * i / len, false) } + likedOnes.map { Triple(it, 0, true) }
         for ((t, base, isLiked) in all) {
-            if (t.link != null || t.videoId.isEmpty() || t.videoId in skip) continue
+            if (t.link != null || t.videoId.isEmpty() || t.videoId in skip || t.videoId in notes.hidden) continue
             // Only the seed's kind. A song nothing tells about may come with a radio (a little lower
             // when the seed isn't a song, and only in the seed's writing); a liked one must be known to fit.
             val k = notes.kindOf(t)
@@ -261,7 +296,7 @@ object RamPoints {
             }
             if (!ids.add(t.videoId) || !keys.add(Radio.sameSongKey(t))) continue
             val artist = firstArtist(t.artist)
-            var points = base + fit
+            var points = base + fit + (notes.bias[artist] ?: 0)
             if (artist.isNotEmpty() && artist == seedArtist) points += 35 else if (artist in heard) points += 10
             if (artist in likedArtists) points += 6
             val s = script(t)
@@ -308,11 +343,11 @@ object RamPoints {
         val scored = mutableListOf<Scored>()
         for (c in cands) {
             val t = c.track
-            if (t.link != null || t.videoId.isEmpty() || t.videoId in skip) continue
+            if (t.link != null || t.videoId.isEmpty() || t.videoId in skip || t.videoId in notes.hidden) continue
             val k = notes.kindOf(t) ?: c.radioKind ?: Kind.Songs
             if (k != kind || !ids.add(t.videoId) || !keys.add(Radio.sameSongKey(t))) continue
             val artist = firstArtist(t.artist)
-            var points = c.base
+            var points = c.base + (notes.bias[artist] ?: 0)
             if (t.videoId !in known) points += 18
             val at = playedAt(t.videoId)
             if (at > 0) {

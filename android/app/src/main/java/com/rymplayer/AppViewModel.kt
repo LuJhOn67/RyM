@@ -184,6 +184,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The user says this song's artist is of [kind] (RaM points keeps it). */
+    /** "Recommend more" on a song (RaM points). */
+    fun recommendMore(t: Track) {
+        com.rymplayer.data.RamPoints.recommendMore(getApplication(), t)
+        status = "${tr("More like this")}: ${t.artist}"
+    }
+
+    /** "Don't recommend": never suggested again; out of Up next if it's waiting there. */
+    fun dontRecommend(t: Track) {
+        com.rymplayer.data.RamPoints.dontRecommend(getApplication(), t)
+        val i = player.queue.indexOfFirst { it.videoId == t.videoId }
+        if (i > player.index) player.remove(i)
+        status = "${tr("Won't be suggested")}: ${t.title}"
+    }
+
     fun setArtistKind(t: Track, kind: com.rymplayer.data.RamPoints.Kind) {
         com.rymplayer.data.RamPoints.correct(getApplication(), t, kind)
         status = "${com.rymplayer.data.Radio.firstArtist(t.artist).ifEmpty { t.artist }}: ${tr(kind.title)}"

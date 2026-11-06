@@ -43,6 +43,14 @@ class RamPointsTest {
     }
 
     @Test
+    fun recommendMoreAndDontRecommend() {
+        val notes = RamPoints.Notes(bias = hashMapOf("b" to 50), hidden = hashSetOf("gone"))
+        val ids = RamPoints.upNext(notes, listOf(t("a", "A", "A"), t("gone", "Gone", "C"), t("bb", "B", "B")),
+            t("s", "Seed", "Z"), emptyList(), emptySet(), emptySet(), { 0L }).map { it.videoId }
+        assertEquals(listOf("bb", "a"), ids)
+    }
+
+    @Test
     fun notesSurviveSaving() {
         val notes = RamPoints.Notes()
         repeat(2) { notes.learn(RamPoints.Kind.Husseini, t("s", "لطمية", "رادود"), emptyList()) }

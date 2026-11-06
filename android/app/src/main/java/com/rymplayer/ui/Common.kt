@@ -36,6 +36,8 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -222,6 +224,8 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         item(tr("Start radio"), Icons.Default.Radio) { vm.playRadio(t) }()
         item(tr("Play next"), Icons.Default.SkipNext) { vm.player.playNext(t) }()
         item(tr("Add to queue"), Icons.AutoMirrored.Filled.QueueMusic) { vm.player.addToQueue(t) }()
+        item(tr("Recommend more"), Icons.Default.ThumbUp) { vm.recommendMore(t) }()
+        item(tr("Don't recommend"), Icons.Default.ThumbDown) { vm.dontRecommend(t) }()
         // RaM points: the artist's kind, put right by hand.
         Row(
             Modifier.fillMaxWidth().clickable { kinds = !kinds }.padding(horizontal = 20.dp, vertical = 14.dp),
