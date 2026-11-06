@@ -337,6 +337,25 @@ fn lyrics_css(bg: (u8, u8, u8), ytm: bool) -> String {
     css
 }
 
+thread_local! {
+    static LYRICS_FONT: std::cell::OnceCell<CssProvider> = const { std::cell::OnceCell::new() };
+}
+
+/// The lyrics' size (Settings), on its own style layer so it changes at once.
+fn apply_lyrics_font(px: u8) {
+    LYRICS_FONT.with(|cell| {
+        let provider = cell.get_or_init(|| {
+            let p = CssProvider::new();
+            if let Some(display) = gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(&display, &p, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+            }
+            p
+        });
+        let px = px.clamp(14, 48) as u32;
+        provider.load_from_string(&format!(".lyric {{ font-size: {px}px; }} .lyric-tr {{ font-size: {}px; }}", (px * 3 / 5).max(11)));
+    });
+}
+
 fn apply_theme(provider: &CssProvider, theme: usize) {
     provider.load_from_string(&css(theme));
 }
@@ -410,6 +429,8 @@ enum Ev {
     VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
     /// Every source's lyrics for a song (the source switcher).
     LyricsSources(String, Vec<Lyrics>),
+    /// Up next saved as a playlist: what to say, and the library's playlists after it.
+    Saved(String, anyhow::Result<Vec<Playlist>>),
     /// A media key, or the system's media controls (Windows' volume flyout, MPRIS on Linux).
     MediaKey(souvlaki::MediaControlEvent),
     /// English for the lyrics of a song (Japanese songs), lined up with their lines.
@@ -848,6 +869,7 @@ fn build(app: &Application) {
         gtk::style_context_add_provider_for_display(&display, &lyrics_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
     }
     lyrics_provider.load_from_string(&lyrics_css(rymplayer::colors::PLAIN, ytm_layout(config.gui_theme)));
+    apply_lyrics_font(config.lyrics_font);
 
     let window = ApplicationWindow::builder().application(app).title("RyM").default_width(1240).default_height(800).build();
     window.add_css_class("rym");
@@ -1040,6 +1062,9 @@ fn build(app: &Application) {
     side_head.set_margin_start(10);
     side_head.set_margin_end(10);
     side_head.append(&switcher);
+    let save_queue = icon_button("document-save-symbolic", tr("Save Up next as a playlist"), &["dim"]);
+    save_queue.set_valign(Align::Center);
+    side_head.append(&save_queue);
     let side_box = gtk::Box::new(Orientation::Vertical, 0);
     side_box.set_size_request(440, -1);
     side_box.append(&side_head);
@@ -1526,6 +1551,10 @@ fn build(app: &Application) {
     }
     {
         let ui = ui.clone();
+        save_queue.connect_clicked(move |_| save_queue_dialog(&ui));
+    }
+    {
+        let ui = ui.clone();
         bar_more.connect_clicked(move |b| {
             if let Some(t) = now_playing(&ui) {
                 song_menu(&ui, b.upcast_ref(), b.width() as f64 / 2.0, b.height() as f64 / 2.0, &t);
@@ -1960,6 +1989,7 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
         let w = gtk::Switch::new();
         w.set_active(config.lyrics_translation);
         w.set_valign(Align::Center);
+        let page_ui = ui.clone();
         let ui = ui.clone();
         w.connect_active_notify(move |w| {
             let lyrics = {
@@ -1975,10 +2005,26 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
                 show_lyrics(&ui, l);
             }
         });
+        let size = Scale::with_range(Orientation::Horizontal, 14.0, 48.0, 1.0);
+        size.set_value(config.lyrics_font as f64);
+        size.set_digits(0);
+        size.set_draw_value(true);
+        size.set_size_request(220, -1);
+        {
+            let ui = page_ui.clone();
+            size.connect_value_changed(move |w| {
+                let px = w.value().round() as u8;
+                apply_lyrics_font(px);
+                let mut s = ui.borrow_mut();
+                s.config.lyrics_font = px;
+                s.config.save();
+            });
+        }
+        page.append(&setting_row(tr("Lyrics size"), tr("How big the lyrics are on the song's page"), &size));
         page.append(&setting_row(tr("Translate Japanese lyrics"), tr("English in small letters under each line: the lyrics site's own translation, else a machine translation"), &w));
     }
     page.append(&setting_row(
-        "Music Cross Ears",
+        "Seamless Music",
         tr("Music playing on your phone can move to this PC (same Wi-Fi and Google account); off: the phone is ignored"),
         &switch(config.cross_ears, ui, |c, on| c.cross_ears = on),
     ));
@@ -4517,6 +4563,77 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     account.set_visible(true);
 }
 
+/// "Save Up next as a playlist": a name, then a new playlist in the account with the playing song
+/// and every song after it.
+fn save_queue_dialog(ui: &Shared) {
+    let songs: Vec<Track> = {
+        let s = ui.borrow();
+        let from = s.q.current.unwrap_or(0);
+        s.q.songs.iter().skip(from).filter(|t| t.link.is_none() && rymplayer::is_youtube(&t.video_id)).cloned().collect()
+    };
+    if songs.is_empty() || !signed_in(ui) {
+        toast(ui, tr(if songs.is_empty() { "Nothing to save" } else { "Sign in to save playlists" }));
+        return;
+    }
+    let parent = ui.borrow().w.window.clone();
+    let win = gtk::Window::builder().transient_for(&parent).modal(true).default_width(380).title(tr("Save Up next as a playlist")).build();
+    win.add_css_class("rym");
+    let col = gtk::Box::new(Orientation::Vertical, 10);
+    col.set_margin_top(18);
+    col.set_margin_bottom(18);
+    col.set_margin_start(20);
+    col.set_margin_end(20);
+    col.append(&label(&format!("{} {}", songs.len(), tr("songs")), &["dim"]));
+    let name = gtk::Entry::new();
+    name.add_css_class("search");
+    name.set_text(&format!("RyM · {}", songs[0].title));
+    col.append(&name);
+    let buttons = gtk::Box::new(Orientation::Horizontal, 10);
+    buttons.set_halign(Align::End);
+    let cancel = Button::with_label(tr("Cancel"));
+    cancel.add_css_class("ghost");
+    let save = Button::with_label(tr("Save"));
+    save.add_css_class("pill");
+    {
+        let win = win.clone();
+        cancel.connect_clicked(move |_| win.close());
+    }
+    {
+        let (win, ui, name) = (win.clone(), ui.clone(), name.clone());
+        save.connect_clicked(move |_| {
+            let title = name.text().trim().to_string();
+            if title.is_empty() {
+                return;
+            }
+            win.close();
+            let Some(api) = api_of(&ui) else { return };
+            let songs = songs.clone();
+            toast(&ui, tr("Saving the playlist..."));
+            post(&ui, async move {
+                let made = api.clone().create_playlist(title.clone()).await;
+                let msg = match made {
+                    Ok(p) => {
+                        let mut added = 0;
+                        for t in &songs {
+                            if api.clone().add_to_playlist(p.id.clone(), t.video_id.clone()).await.is_ok() {
+                                added += 1;
+                            }
+                        }
+                        format!("{} \"{title}\" ({added} {})", tr("Saved"), tr("songs"))
+                    }
+                    Err(e) => format!("{}: {e}", tr("Couldn't save the playlist")),
+                };
+                Ev::Saved(msg, api.library_playlists().await)
+            });
+        });
+    }
+    buttons.append(&cancel);
+    buttons.append(&save);
+    col.append(&buttons);
+    win.set_child(Some(&col));
+    win.present();
+}
+
 /// The media keys and the system's media controls (Windows: the volume flyout with the song and
 /// its cover; Linux: MPRIS), started once the window is up.
 fn start_media_controls(ui: &Shared) {
@@ -4631,12 +4748,12 @@ fn media_sync(ui: &Shared) {
     let _ = m.set_playback(if playing { souvlaki::MediaPlayback::Playing { progress } } else { souvlaki::MediaPlayback::Paused { progress } });
 }
 
-/// RyM Link: a phone of the same account plays while this app is idle: the music moves here
+/// Seamless Music (RyM Link): a phone of the same account plays while this app is idle: the music moves here
 /// (or, with "ask" chosen, a question first). Once per song and phone.
 fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
     let (mine, idle, auto) = {
         let s = ui.borrow();
-        // Music Cross Ears off: the phones are ignored.
+        // Seamless Music off: the phones are ignored.
         if !s.config.cross_ears {
             return;
         }
@@ -5152,6 +5269,13 @@ fn poll_events(ui: &Shared) {
             Ev::Installed(Err(e)) => toast(ui, &format!("{}: {e}", tr("Couldn't update"))),
             Ev::Peer(note, ip) => heard_peer(ui, note, ip),
             Ev::MediaKey(key) => media_key(ui, key),
+            Ev::Saved(msg, lists) => {
+                toast(ui, &msg);
+                if let Ok(p) = lists {
+                    ui.borrow_mut().playlists = p;
+                    fill_nav_lists(ui);
+                }
+            }
             Ev::TookOver(device, Ok(state)) => {
                 let current = state.current;
                 let songs: Vec<Track> = state.songs.into_iter().map(Track::from).collect();
