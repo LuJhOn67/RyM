@@ -1749,7 +1749,7 @@ component WideLayout inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: App.has-song ? App.title + " · " + App.artist + " — RyM" : "RyM";
-    icon: @image-url("../assets/icons/rym-gui.png");
+    icon: @image-url("../assets/icons/rym-slint.png");
     preferred-width: 1360px;
     preferred-height: 870px;
     min-width: 900px;
@@ -1826,7 +1826,7 @@ export component AppWindow inherits Window {
 // The mini player: cover, song, previous / play / next, above the other windows.
 export component MiniWindow inherits Window {
     title: "RyM mini player";
-    icon: @image-url("../assets/icons/rym-gui.png");
+    icon: @image-url("../assets/icons/rym-slint.png");
     width: 420px;
     height: 96px;
     no-frame: true;
@@ -1930,7 +1930,7 @@ export component FloatWindow inherits Window {
 // A song as a picture to share: the cover, the song, a line of its lyrics, and RyM.
 export component ShareWindow inherits Window {
     title: "RyM — share";
-    icon: @image-url("../assets/icons/rym-gui.png");
+    icon: @image-url("../assets/icons/rym-slint.png");
     width: 560px;
     height: 720px;
     background: #121218;
