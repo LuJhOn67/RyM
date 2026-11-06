@@ -440,6 +440,12 @@ impl Audio {
         self.player.set_speed(speed);
     }
 
+    /// The last `secs` of the playing song's loudness as played (100 values a second): the
+    /// visualizer.
+    pub fn loudness(&self, secs: f32) -> Vec<f32> {
+        self.meter.played(secs)
+    }
+
     pub fn position(&self) -> f32 {
         self.player.get_pos().as_secs_f32()
     }

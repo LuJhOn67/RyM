@@ -62,6 +62,14 @@ enum Ev {
     Update(anyhow::Result<Option<rymplayer::updates::Release>>, bool),
     Installed(anyhow::Result<PathBuf>),
     MediaKey(souvlaki::MediaControlEvent),
+    /// Romaji for a song's lyrics (the lyrics' source, the lines).
+    Romaji(String, String, Vec<String>),
+    YtDlp(anyhow::Result<String>),
+    LastFmToken(anyhow::Result<(String, String)>),
+    LastFmSession(anyhow::Result<(String, String)>),
+    Batch(stream::Batch),
+    /// A phone took the music (Seamless Music the other way): pause here.
+    LinkPause,
     Peer(rymplayer::link::Announce, std::net::IpAddr),
     TookOver(String, anyhow::Result<rymplayer::link::State>),
     Done,
@@ -82,7 +90,7 @@ struct Models {
     playlists: Rc<VecModel<Card>>,
     suggestions: Rc<VecModel<Suggest>>,
     lyrics: Rc<VecModel<LyricLine>>,
-    toggles: Rc<VecModel<Toggle>>,
+    settings: Rc<VecModel<Setting>>,
 }
 
 struct State {
@@ -143,11 +151,40 @@ struct State {
     media: Option<souvlaki::MediaControls>,
     media_sent: Option<(String, bool)>,
     link_seen: Option<(String, String)>,
+    /// The floating lyrics, and what they show; the share picture's window.
+    float: Option<FloatWindow>,
+    float_shown: (String, String),
+    share: Option<ShareWindow>,
+    /// Sleep timer: when the music stops (or at the end of the song).
+    sleep: Option<Sleep>,
+    /// Romaji by song.
+    romaji: HashMap<String, Vec<String>>,
+    /// Last.fm: the song being listened to (id, when it started, seconds played, scrobbled), and
+    /// the token while connecting.
+    scrobble: Option<(String, u64, f32, bool)>,
+    lastfm_token: Option<String>,
+    /// What this computer plays, for the phones.
+    link: std::sync::Arc<std::sync::Mutex<rymplayer::link::Playing>>,
+    /// The visualizer: its loudest lately, and whether the window shows the moving wave.
+    wave_peak: f32,
+    wave_live: bool,
+    /// What the last yt-dlp update and update check said (shown in the settings).
+    ytdlp_text: String,
+    update_text: String,
     /// Likes made on the phone come in every few minutes.
     likes_timer: slint::Timer,
 }
 
 type Shared = Rc<RefCell<State>>;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Sleep {
+    At(Instant),
+    EndOfSong,
+}
+
+const THEMES: [&str; 3] = ["RyM Dusk", "RyM Mist", "RyM Wide"];
+const SLEEP_CHOICES: [u32; 7] = [0, 15, 30, 45, 60, 90, u32::MAX];
 
 thread_local! {
     static STATE: RefCell<Option<Shared>> = const { RefCell::new(None) };
@@ -198,7 +235,8 @@ fn main() {
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "rym-slint.png".into());
         let dark = args.get(i + 2).is_none_or(|t| t != "light");
         let page = args.get(i + 3).and_then(|p| p.parse().ok()).unwrap_or(0);
-        render_sample(&out, dark, page);
+        let theme = args.get(i + 2).map_or(0, |t| if t == "wide" { 2 } else { 0 });
+        render_sample(&out, dark, page, theme);
         return;
     }
     rymplayer::updates::clean_old();
@@ -235,14 +273,17 @@ fn models() -> Models {
         playlists: Rc::new(VecModel::default()),
         suggestions: Rc::new(VecModel::default()),
         lyrics: Rc::new(VecModel::default()),
-        toggles: Rc::new(VecModel::default()),
+        settings: Rc::new(VecModel::default()),
     }
 }
 
 fn build(ui: &AppWindow, config: Config) -> Shared {
     let m = models();
     let app = ui.global::<App>();
-    ui.global::<Theme>().set_dark(config.gui_theme != 1);
+    ui.global::<Theme>().set_index(config.gui_theme.min(2) as i32);
+    ui.global::<Theme>().set_cover_accent(false);
+    ui.global::<Ui>().set_rtl(config.arabic);
+    app.set_karaoke(config.karaoke);
     app.set_queue(ModelRc::from(m.queue.clone()));
     app.set_similar(ModelRc::from(m.similar.clone()));
     app.set_same_artist(ModelRc::from(m.same.clone()));
@@ -252,10 +293,9 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     app.set_playlists(ModelRc::from(m.playlists.clone()));
     app.set_suggestions(ModelRc::from(m.suggestions.clone()));
     app.set_lyrics(ModelRc::from(m.lyrics.clone()));
-    app.set_toggles(ModelRc::from(m.toggles.clone()));
+    app.set_settings(ModelRc::from(m.settings.clone()));
     app.set_version(rymplayer::VERSION.into());
     app.set_lyrics_size(config.lyrics_font.clamp(14, 48) as i32);
-    app.set_crossfade(config.crossfade as i32);
     ui.global::<Ui>().set_zoom(config.ui_zoom.clamp(0.5, 1.5));
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("")))));
     app.on_tr(|s| tr_any(&s).into());
@@ -322,6 +362,18 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         media_sent: None,
         link_seen: None,
         likes_timer: slint::Timer::default(),
+        float: None,
+        float_shown: (String::new(), String::new()),
+        share: None,
+        sleep: None,
+        romaji: HashMap::new(),
+        scrobble: None,
+        lastfm_token: None,
+        link: Default::default(),
+        wave_peak: 0.05,
+        wave_live: false,
+        ytdlp_text: String::new(),
+        update_text: String::new(),
     }));
     if let Some(saved) = session {
         let mut s = st.borrow_mut();
@@ -331,7 +383,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         }
     }
     wire(ui, &st);
-    fill_toggles(&st);
+    fill_settings(&st);
     st
 }
 
@@ -377,7 +429,15 @@ fn wire(ui: &AppWindow, st: &Shared) {
         });
     }));
     app.on_sign_out(w(sign_out));
-    app.on_check_updates(w(|st| check_updates(st, true)));
+    app.on_float_lyrics(w(|st| {
+        let on = !st.borrow().config.lyrics_overlay;
+        set_toggle(st, "float", on);
+    }));
+    app.on_share(w(open_share));
+    app.on_next_theme(w(|st| {
+        let next = (st.borrow().config.gui_theme.min(2) + 1) % 3;
+        set_theme(st, next);
+    }));
     app.on_open_artist(w(|st| {
         let t = st.borrow().q.now().cloned();
         if let Some(t) = t {
@@ -478,7 +538,30 @@ fn wire(ui: &AppWindow, st: &Shared) {
     }
     {
         let st = st.clone();
-        app.on_set_number(move |id, v| set_number(&st, &id, v));
+        app.on_choose(move |id, step| choose(&st, &id, step));
+    }
+    {
+        let st = st.clone();
+        app.on_set_text(move |id, text| set_text(&st, &id, &text));
+    }
+    {
+        let st = st.clone();
+        app.on_press(move |id| press(&st, &id));
+    }
+    {
+        let st = st.clone();
+        app.on_move_queue(move |key, by| {
+            let Some(from) = key.strip_prefix("q:").and_then(|i| i.parse::<usize>().ok()) else { return };
+            {
+                let mut s = st.borrow_mut();
+                let first = s.q.current.map_or(0, |c| c + 1);
+                let to = (from as i64 + by as i64).clamp(first as i64, s.q.songs.len().saturating_sub(1) as i64) as usize;
+                if to != from {
+                    s.q.move_song(from, to);
+                }
+            }
+            render_queue(&st);
+        });
     }
     {
         let st = st.clone();
@@ -525,6 +608,18 @@ fn start(st: &Shared) {
     show_now(st);
     render_queue(st);
     rymplayer::link::listen(|note, ip| send(Ev::Peer(note, ip)));
+    {
+        let s = st.borrow();
+        if let Ok(mut p) = s.link.lock() {
+            p.enabled = s.config.link_announce;
+        }
+        let device = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into());
+        rymplayer::link::announce(device, s.link.clone(), || send(Ev::LinkPause));
+    }
+    if st.borrow().config.lyrics_overlay {
+        let st2 = st.clone();
+        slint::Timer::single_shot(Duration::from_millis(800), move || show_float(&st2, true));
+    }
     // The window needs to be on screen before Windows' media controls can take its handle.
     let st2 = st.clone();
     slint::Timer::single_shot(Duration::from_millis(1500), move || start_media_controls(&st2));
@@ -551,6 +646,9 @@ fn start(st: &Shared) {
 
 fn go(st: &Shared, page: i32) {
     with_app(st, |a| a.set_page(page));
+    if page == 6 {
+        fill_stats(st);
+    }
     let (empty_home, loading, signed) = {
         let s = st.borrow();
         (s.home.is_empty(), s.home_loading, s.api.as_ref().is_some_and(Api::logged_in))
@@ -744,6 +842,10 @@ fn wave_for(video_id: &str) -> Vec<f32> {
 /// Up next: the songs after the playing one.
 fn render_queue(st: &Shared) {
     let mut s = st.borrow_mut();
+    if let Ok(mut p) = s.link.lock() {
+        p.songs = s.q.songs.clone();
+        p.current = s.q.current.unwrap_or(0);
+    }
     let start = s.q.current.map_or(0, |c| c + 1);
     let rows: Vec<(usize, Track)> = s.q.songs.iter().enumerate().skip(start).take(QUEUE_SHOWN).map(|(i, t)| (i, t.clone())).collect();
     let items: Vec<Song> = rows.iter().map(|(i, t)| song_item(&mut s, format!("q:{i}"), t)).collect();
@@ -875,22 +977,73 @@ fn mark_playing(st: &Shared) {
 
 // ---------------------------------------------------------------- settings
 
-fn fill_toggles(st: &Shared) {
+fn fill_settings(st: &Shared) {
     let s = st.borrow();
     let c = &s.config;
-    let rows = [
-        ("dark", "Dark theme (RyM Dusk)", "Off: the light theme (RyM Mist)", c.gui_theme != 1),
-        ("arabic", "العربية", "Arabic words in the app (after a restart)", c.arabic),
-        ("automix", "Smart Automix", "Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing", c.automix),
-        ("skip-silence", "Skip silence", "Quiet starts and ends are skipped", c.skip_silence),
-        ("normalize", "Even loudness", "Every song about as loud", c.normalize),
-        ("translate", "Translate Japanese lyrics", "English under each Japanese line", c.lyrics_translation),
-        ("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
-        ("auto-update", "Check for updates", "Every 12 hours", c.auto_update_check),
-        ("beta", "Beta updates", "Pre-releases too", c.beta_updates),
+    let t = |x: &str| tr_any(x);
+    let head = |title: &str| Setting { id: SharedString::new(), kind: 4, title: t(title).into(), about: SharedString::new(), on: false, value: SharedString::new() };
+    let switch = |id: &str, title: &str, about: &str, on: bool| Setting { id: id.into(), kind: 0, title: t(title).into(), about: t(about).into(), on, value: SharedString::new() };
+    let choice = |id: &str, title: &str, value: String| Setting { id: id.into(), kind: 1, title: t(title).into(), about: SharedString::new(), on: false, value: value.into() };
+    let field = |id: &str, title: &str, about: &str, value: &str| Setting { id: id.into(), kind: 2, title: t(title).into(), about: t(about).into(), on: false, value: value.into() };
+    let button = |id: &str, title: &str, about: String, label: &str| Setting { id: id.into(), kind: 3, title: t(title).into(), about: about.into(), on: false, value: t(label).into() };
+    let sleep = match s.sleep {
+        None => t("Off"),
+        Some(Sleep::EndOfSong) => t("End of song"),
+        Some(Sleep::At(when)) => format!("{} min", (when.saturating_duration_since(Instant::now()).as_secs() + 59) / 60),
+    };
+    let only = if c.only_kind.is_empty() { t("Every kind heard") } else { t(&c.only_kind) };
+    let lastfm = if !c.lastfm_session.is_empty() {
+        button("lastfm", "Last.fm", format!("{} {}", t("Connected as"), c.lastfm_user), "Disconnect")
+    } else if s.lastfm_token.is_some() {
+        button("lastfm", "Last.fm", t("Allow RyM on the Last.fm page that opened, then press here"), "Finish connecting")
+    } else {
+        button("lastfm", "Last.fm", t("Songs you play go into your Last.fm profile (needs an API key and secret from last.fm/api)"), "Connect")
+    };
+    let rows = vec![
+        head("Look"),
+        choice("theme", "Theme", THEMES[c.gui_theme.min(2)].to_string()),
+        choice("zoom", "App size", format!("{}%", (c.ui_zoom * 100.0).round())),
+        switch("accent", "Accent from the cover", "The playing song's colors on the buttons and the wave", c.accent_from_cover),
+        switch("visualizer", "Moving wave", "The wave under the song moves with the music", c.visualizer),
+        switch("arabic", "العربية", "Arabic words, and the layout turned around (after a restart)", c.arabic),
+        head("Sound"),
+        switch("automix", "Smart Automix", "Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing", c.automix),
+        choice("crossfade", "Crossfade", format!("{} s", c.crossfade)),
+        switch("skip-silence", "Skip silence", "Quiet starts and ends are skipped", c.skip_silence),
+        switch("normalize", "Even loudness", "Every song about as loud", c.normalize),
+        choice("eq", "Equalizer", t(c.eq_name())),
+        choice("mode", "Speed", t(c.mode_name())),
+        choice("sleep", "Sleep timer", sleep),
+        head("Lyrics"),
+        choice("lyrics-size", "Lyrics size", format!("{} px", c.lyrics_font)),
+        switch("karaoke", "Karaoke", "The sung line fills in as it's sung", c.karaoke),
+        switch("translate", "Translate Japanese lyrics", "English under each Japanese line", c.lyrics_translation),
+        switch("romaji", "Romaji", "Japanese lines in Latin letters under them", c.romaji),
+        switch("float", "Floating lyrics", "The sung line in a small window above the others", c.lyrics_overlay),
+        head("Suggestions (RaM points)"),
+        choice("only-kind", "Only this kind", only),
+        head("Alarm"),
+        switch("alarm", "Alarm", "Music starts at this time (RyM has to be open)", c.alarm_on),
+        field("alarm-time", "Time", "Like 07:30", &c.alarm_time),
+        head("Devices"),
+        switch("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
+        switch("announce", "Tell the phone what plays here", "Your phone (same account, same Wi-Fi) takes it when it's idle", c.link_announce),
+        head("Discord"),
+        switch("discord", "Show on Discord", "What you play on your Discord profile; needs an application id from discord.com/developers", c.discord),
+        field("discord-id", "Application id", "", &c.discord_app_id),
+        head("Last.fm"),
+        field("lastfm-key", "API key", "", &c.lastfm_key),
+        field("lastfm-secret", "Shared secret", "", &c.lastfm_secret),
+        lastfm,
+        head("yt-dlp"),
+        switch("ytdlp-nightly", "Nightly builds", "The newest yt-dlp every day (fixes come sooner)", c.ytdlp_nightly),
+        button("ytdlp", "Update yt-dlp", s.ytdlp_text.clone(), "Update"),
+        head("Updates"),
+        switch("auto-update", "Check for updates", "Every 12 hours", c.auto_update_check),
+        switch("beta", "Beta updates", "Pre-releases too", c.beta_updates),
+        button("check", "Check now", s.update_text.clone(), "Check"),
     ];
-    let items: Vec<Toggle> = rows.iter().map(|(id, title, about, on)| Toggle { id: (*id).into(), title: tr_any(title).into(), about: tr_any(about).into(), on: *on }).collect();
-    s.m.toggles.set_vec(items);
+    s.m.settings.set_vec(rows);
 }
 
 fn set_toggle(st: &Shared, id: &str, on: bool) {
@@ -898,28 +1051,196 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
         let mut s = st.borrow_mut();
         let c = &mut s.config;
         match id {
-            "dark" => c.gui_theme = if on { 0 } else { 1 },
+            "accent" => c.accent_from_cover = on,
+            "visualizer" => c.visualizer = on,
             "arabic" => c.arabic = on,
             "automix" => c.automix = on,
             "skip-silence" => c.skip_silence = on,
             "normalize" => c.normalize = on,
+            "karaoke" => c.karaoke = on,
             "translate" => c.lyrics_translation = on,
+            "romaji" => c.romaji = on,
+            "float" => c.lyrics_overlay = on,
+            "alarm" => c.alarm_on = on,
             "seamless" => c.cross_ears = on,
+            "announce" => c.link_announce = on,
+            "discord" => c.discord = on,
+            "ytdlp-nightly" => c.ytdlp_nightly = on,
             "auto-update" => c.auto_update_check = on,
             "beta" => c.beta_updates = on,
             _ => {}
         }
         rymplayer::fx::set(s.config.fx());
         s.config.save();
-        if id == "dark"
-            && let Some(ui) = s.ui.upgrade()
-        {
-            ui.global::<Theme>().set_dark(on);
+        if let Ok(mut p) = s.link.lock() {
+            p.enabled = s.config.link_announce;
+        }
+        if let Some(ui) = s.ui.upgrade() {
+            ui.global::<App>().set_karaoke(s.config.karaoke);
+            if id == "accent" && !on {
+                ui.global::<Theme>().set_cover_accent(false);
+            }
         }
     }
-    if id == "arabic" {
-        toast(st, if on { "أعد تشغيل RyM حتى تتغيّر اللغة" } else { "Restart RyM to change the language" });
+    match id {
+        "arabic" => toast(st, if on { "أعد تشغيل RyM حتى تتغيّر اللغة" } else { "Restart RyM to change the language" }),
+        "float" => show_float(st, on),
+        "accent" if on => {
+            st.borrow_mut().art_for.clear();
+            show_now(st);
+        }
+        "discord" if !on => rymplayer::discord::show("", rymplayer::discord::Show::Off),
+        "romaji" | "translate" => {
+            let l = st.borrow().lyrics.clone();
+            show_lyrics(st, l);
+        }
+        "visualizer" if !on => {
+            st.borrow_mut().wave_live = false;
+            let id = st.borrow().q.now().map(|t| t.video_id.clone()).unwrap_or_default();
+            with_app(st, |a| a.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for(&id))))));
+        }
+        _ => {}
     }
+    fill_settings(st);
+}
+
+/// One of the settings' "< value >" rows moved by `step`.
+fn choose(st: &Shared, id: &str, step: i32) {
+    let cycle = |i: usize, n: usize| (i as i32 + step).rem_euclid(n as i32) as usize;
+    match id {
+        "theme" => {
+            let next = cycle(st.borrow().config.gui_theme.min(2), 3);
+            set_theme(st, next);
+            return;
+        }
+        "zoom" => {
+            let z = st.borrow().config.ui_zoom + step as f32 * 0.05;
+            set_zoom(st, z);
+        }
+        "sleep" => {
+            let s = st.borrow().sleep;
+            let at = match s {
+                None => 0,
+                Some(Sleep::EndOfSong) => SLEEP_CHOICES.len() - 1,
+                Some(Sleep::At(when)) => {
+                    let mins = when.saturating_duration_since(Instant::now()).as_secs() / 60;
+                    SLEEP_CHOICES.iter().position(|m| *m as u64 >= mins).unwrap_or(1)
+                }
+            };
+            let next = cycle(at, SLEEP_CHOICES.len());
+            let mut s = st.borrow_mut();
+            s.sleep = match SLEEP_CHOICES[next] {
+                0 => None,
+                u32::MAX => Some(Sleep::EndOfSong),
+                m => Some(Sleep::At(Instant::now() + Duration::from_secs(m as u64 * 60))),
+            };
+            if s.sleep.is_none() && let Some(a) = &s.audio {
+                a.set_fade(1.0);
+            }
+        }
+        "only-kind" => {
+            let names: Vec<&str> = std::iter::once("").chain(rymplayer::ram_points::Kind::ALL.iter().map(|k| k.name())).collect();
+            let mut s = st.borrow_mut();
+            let at = names.iter().position(|n| *n == s.config.only_kind).unwrap_or(0);
+            s.config.only_kind = names[cycle(at, names.len())].to_string();
+            s.config.save();
+        }
+        _ => {
+            let mut s = st.borrow_mut();
+            let c = &mut s.config;
+            match id {
+                "crossfade" => c.crossfade = (c.crossfade as i32 + step).clamp(0, 12) as u8,
+                "lyrics-size" => c.lyrics_font = (c.lyrics_font as i32 + step).clamp(14, 48) as u8,
+                "eq" => c.eq_preset = cycle(c.eq_preset, rymplayer::fx::PRESETS.len()),
+                "mode" => {
+                    let names: Vec<&str> = rymplayer::fx::MODES.iter().map(|m| m.0).collect();
+                    let at = names.iter().position(|n| *n == c.mode_name()).unwrap_or(0);
+                    c.set_mode(names[cycle(at, names.len())]);
+                }
+                _ => {}
+            }
+            rymplayer::fx::set(s.config.fx());
+            if let Some(a) = &s.audio {
+                a.set_speed(s.config.speed);
+            }
+            s.config.save();
+            let size = s.config.lyrics_font as i32;
+            if let Some(ui) = s.ui.upgrade() {
+                ui.global::<App>().set_lyrics_size(size);
+            }
+        }
+    }
+    fill_settings(st);
+}
+
+fn set_text(st: &Shared, id: &str, text: &str) {
+    let text = text.trim().to_string();
+    let mut s = st.borrow_mut();
+    let c = &mut s.config;
+    match id {
+        "alarm-time" => {
+            // "7:5" or "07:05": kept as HH:MM.
+            let mut parts = text.split(':').map(|p| p.trim().parse::<u32>().ok());
+            if let (Some(Some(h)), Some(Some(m))) = (parts.next(), parts.next())
+                && h < 24
+                && m < 60
+            {
+                c.alarm_time = format!("{h:02}:{m:02}");
+                c.alarm_rang.clear();
+            }
+        }
+        "discord-id" => c.discord_app_id = text,
+        "lastfm-key" => c.lastfm_key = text,
+        "lastfm-secret" => c.lastfm_secret = text,
+        _ => return,
+    }
+    s.config.save();
+}
+
+fn press(st: &Shared, id: &str) {
+    match id {
+        "check" => check_updates(st, true),
+        "ytdlp" => {
+            let nightly = st.borrow().config.ytdlp_nightly;
+            st.borrow_mut().ytdlp_text = tr("Updating…").into();
+            fill_settings(st);
+            post(async move { Ev::YtDlp(rymplayer::ytdlp::update(nightly).await) });
+        }
+        "lastfm" => {
+            let (key, secret, session, token) = {
+                let s = st.borrow();
+                (s.config.lastfm_key.clone(), s.config.lastfm_secret.clone(), s.config.lastfm_session.clone(), s.lastfm_token.clone())
+            };
+            if !session.is_empty() {
+                let mut s = st.borrow_mut();
+                s.config.lastfm_session.clear();
+                s.config.lastfm_user.clear();
+                s.config.save();
+                drop(s);
+                fill_settings(st);
+            } else if key.is_empty() || secret.is_empty() {
+                toast(st, tr("Put your Last.fm API key and secret first (last.fm/api)"));
+            } else if let Some(token) = token {
+                post(async move { Ev::LastFmSession(rymplayer::lastfm::finish(&key, &secret, &token).await) });
+            } else {
+                post(async move { Ev::LastFmToken(rymplayer::lastfm::start(&key, &secret).await) });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn set_theme(st: &Shared, index: usize) {
+    {
+        let mut s = st.borrow_mut();
+        s.config.gui_theme = index.min(2);
+        s.config.save();
+        if let Some(ui) = s.ui.upgrade() {
+            ui.global::<Theme>().set_index(index.min(2) as i32);
+        }
+    }
+    toast(st, THEMES[index.min(2)]);
+    fill_settings(st);
 }
 
 /// The app's size (the layout times `z`, 50% to 150%), kept for the next start.
@@ -933,25 +1254,6 @@ fn set_zoom(st: &Shared, z: f32) {
     }
 }
 
-fn set_number(st: &Shared, id: &str, v: i32) {
-    if id == "zoom" {
-        set_zoom(st, v as f32 / 100.0);
-        return;
-    }
-    let mut s = st.borrow_mut();
-    match id {
-        "crossfade" => s.config.crossfade = v.clamp(0, 12) as u8,
-        "lyrics-size" => s.config.lyrics_font = v.clamp(14, 48) as u8,
-        _ => return,
-    }
-    s.config.save();
-    let (fade, size) = (s.config.crossfade as i32, s.config.lyrics_font as i32);
-    if let Some(ui) = s.ui.upgrade() {
-        let a = ui.global::<App>();
-        a.set_crossfade(fade);
-        a.set_lyrics_size(size);
-    }
-}
 
 // ---------------------------------------------------------------- account, home, search
 
@@ -1166,7 +1468,27 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         open_list(st, tr("Similar songs").into(), async move { Ok(songs) });
         return;
     }
+    if action == "download-all" {
+        let songs: Vec<Track> = st.borrow().list.iter().filter(|t| t.link.is_none()).cloned().collect();
+        if songs.is_empty() {
+            return;
+        }
+        toast(st, &format!("{} {} {}…", tr("Downloading"), songs.len(), tr("songs")));
+        post(async move {
+            let done = stream::download_many(songs, |b| send(Ev::Batch(b))).await;
+            Ev::Batch(done)
+        });
+        return;
+    }
     let Some(t) = track_of(st, key) else { return };
+    if let Some(name) = action.strip_prefix("kind:")
+        && let Some(kind) = rymplayer::ram_points::Kind::from_name(name)
+    {
+        rymplayer::ram_points::correct(&t, kind);
+        let artist = t.artist.split([',', '&']).next().unwrap_or_default().trim().to_string();
+        toast(st, &format!("{artist}: {}", tr_any(name)));
+        return;
+    }
     match action {
         "next" => {
             st.borrow_mut().q.play_next(t.clone());
@@ -1427,6 +1749,7 @@ fn save_session(st: &Shared) {
 fn tick(st: &Shared) {
     media_sync(st);
     mini_sync(st);
+    extras(st);
     let mut s = st.borrow_mut();
     let Some((pos, dur, loaded, playing, finished)) = s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_loaded(), a.is_playing(), a.finished())) else { return };
     if let Some(a) = &mut s.audio {
@@ -1523,6 +1846,314 @@ fn tick(st: &Shared) {
     }
 }
 
+/// Each tick: the sleep timer, the alarm, the moving wave, the karaoke, the floating lyrics,
+/// Last.fm, and what the phones are told.
+fn extras(st: &Shared) {
+    let Ok(mut s) = st.try_borrow_mut() else { return };
+    let Some((pos, dur, playing, loaded)) = s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_playing(), a.is_loaded())) else { return };
+    let ui = s.ui.upgrade();
+    // Sleep timer: the last 10 seconds fade out, then the music stops.
+    if let Some(sleep) = s.sleep {
+        let left = match sleep {
+            Sleep::At(when) => when.saturating_duration_since(Instant::now()).as_secs_f32(),
+            Sleep::EndOfSong if dur > 0.0 => dur - pos,
+            Sleep::EndOfSong => f32::MAX,
+        };
+        if playing && left < 10.0
+            && let Some(a) = &s.audio
+        {
+            a.set_fade((left / 10.0).clamp(0.0, 1.0));
+            if left <= 0.25 {
+                a.pause();
+                a.set_fade(1.0);
+                s.sleep = None;
+            }
+        }
+        let text = match s.sleep {
+            None => String::new(),
+            Some(Sleep::EndOfSong) => tr("Stops at the end of this song").into(),
+            Some(Sleep::At(_)) => format!("{} {}", tr("Stops in"), fmt_time(left)),
+        };
+        if let Some(ui) = &ui {
+            ui.global::<App>().set_sleep_text(text.into());
+        }
+    } else if let Some(ui) = &ui
+        && !ui.global::<App>().get_sleep_text().is_empty()
+    {
+        ui.global::<App>().set_sleep_text(SharedString::new());
+    }
+    // The alarm: once a day at its time.
+    if s.config.alarm_on {
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        if now.format("%H:%M").to_string() == s.config.alarm_time && s.config.alarm_rang != today {
+            s.config.alarm_rang = today;
+            s.config.save();
+            drop(s);
+            ring_alarm(st);
+            return;
+        }
+    }
+    // The moving wave: the last second's loudness, one bar per 20 ms.
+    let id = s.q.now().map(|t| t.video_id.clone()).unwrap_or_default();
+    if s.config.visualizer && playing {
+        let loud = s.audio.as_ref().map(|a| a.loudness(1.02)).unwrap_or_default();
+        if loud.len() >= 102 {
+            let bars: Vec<f32> = loud.chunks(2).map(|c| (c[0] + c.get(1).copied().unwrap_or(c[0])) / 2.0).collect();
+            let top = bars.iter().copied().fold(0.0f32, f32::max);
+            s.wave_peak = (s.wave_peak * 0.97).max(top).max(0.02);
+            let peak = s.wave_peak;
+            let wave: Vec<f32> = bars.iter().take(51).map(|b| (b / peak).sqrt().clamp(0.08, 1.0)).collect();
+            if let Some(ui) = &ui {
+                ui.global::<App>().set_wave(ModelRc::from(Rc::new(VecModel::from(wave))));
+            }
+            s.wave_live = true;
+        }
+    } else if s.wave_live {
+        s.wave_live = false;
+        if let Some(ui) = &ui {
+            ui.global::<App>().set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for(&id)))));
+        }
+    }
+    // The karaoke and the floating lyrics: the sung line, how far into it, and the next one.
+    if let Some(l) = s.lyrics.as_ref().filter(|l| !l.synced.is_empty()) {
+        let line = rymplayer::lyrics::current_line(&l.synced, pos);
+        if let (Some(i), Some(ui)) = (line, &ui) {
+            let start = l.synced[i].0;
+            let end = l.synced.get(i + 1).map_or(start + 5.0, |n| n.0);
+            ui.global::<App>().set_line_progress(((pos - start) / (end - start).max(0.3)).clamp(0.0, 1.0));
+        }
+        let now_line = line.and_then(|i| l.synced.get(i)).map_or("♪".to_string(), |x| if x.1.is_empty() { "♪".into() } else { x.1.clone() });
+        let next_line = l.synced.get(line.map_or(0, |i| i + 1)).map(|x| x.1.clone()).unwrap_or_default();
+        let shown = (now_line, next_line);
+        if s.float_shown != shown {
+            if let Some(f) = &s.float {
+                f.set_now(shown.0.clone().into());
+                f.set_next(shown.1.clone().into());
+            }
+            s.float_shown = shown;
+        }
+    }
+    // Last.fm: once half the song (or 4 minutes) played.
+    if playing && let Some((sid, started, played, done)) = s.scrobble.clone() {
+        let played = played + 0.1;
+        let counts = !done && sid == id && rymplayer::lastfm::counts(played, dur);
+        s.scrobble = Some((sid, started, played, done || counts));
+        if counts && let Some(t) = s.q.now().cloned() {
+            let (key, secret, session) = (s.config.lastfm_key.clone(), s.config.lastfm_secret.clone(), s.config.lastfm_session.clone());
+            let sc = rymplayer::lastfm::Scrobble { artist: t.artist, title: t.title, album: t.album, duration: dur as u32, started };
+            post(async move {
+                if let Err(e) = rymplayer::lastfm::scrobble(sc, key, secret, session).await {
+                    log(&format!("last.fm: {e}"));
+                }
+                Ev::Done
+            });
+        }
+    }
+    // What the phones are told.
+    if let Ok(mut p) = s.link.lock() {
+        p.playing = playing && loaded;
+        p.position = pos;
+        p.since = Some(Instant::now());
+    }
+}
+
+/// The alarm rings: what was playing goes on, else the liked songs (shuffled), else home's songs.
+fn ring_alarm(st: &Shared) {
+    toast(st, tr("Alarm"));
+    let (loaded, playing, current) = {
+        let s = st.borrow();
+        (s.audio.as_ref().is_some_and(Audio::is_loaded), s.audio.as_ref().is_some_and(Audio::is_playing), s.q.current)
+    };
+    if playing {
+        return;
+    }
+    if loaded || current.is_some() {
+        toggle_playback(st);
+        return;
+    }
+    let mut songs: Vec<Track> = st.borrow().liked_tracks.clone();
+    if songs.is_empty() {
+        songs = st.borrow().home.iter().filter(|t| t.link.is_none()).cloned().collect();
+    }
+    let n = songs.len();
+    for i in (1..n).rev() {
+        let j = (rymplayer::updates::now() as usize).wrapping_mul(2_654_435_761).wrapping_add(i * 40503) % (i + 1);
+        songs.swap(i, j);
+    }
+    play_list(st, songs, 0);
+}
+
+/// The floating lyrics window, on or off.
+fn show_float(st: &Shared, on: bool) {
+    if !on {
+        let old = st.borrow_mut().float.take();
+        if let Some(w) = old {
+            let _ = w.hide();
+        }
+        return;
+    }
+    if st.borrow().float.is_some() {
+        return;
+    }
+    let Ok(w) = FloatWindow::new() else { return };
+    {
+        let st = st.clone();
+        w.on_hide_float(move || {
+            let st = st.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || set_toggle(&st, "float", false));
+        });
+    }
+    {
+        let weak = w.as_weak();
+        w.on_drag(move |dx, dy| {
+            if let Some(w) = weak.upgrade() {
+                let p = w.window().position();
+                let scale = w.window().scale_factor();
+                w.window().set_position(slint::PhysicalPosition::new(p.x + (dx * scale) as i32, p.y + (dy * scale) as i32));
+            }
+        });
+    }
+    let accent = st.borrow().ui.upgrade().map(|ui| ui.global::<Theme>().get_accent());
+    if let Some(c) = accent {
+        w.set_accent(c);
+    }
+    w.set_now("♪".into());
+    let _ = w.show();
+    let mut s = st.borrow_mut();
+    s.float_shown = (String::new(), String::new());
+    s.float = Some(w);
+}
+
+/// The song as a picture to save or copy.
+fn open_share(st: &Shared) {
+    let Some(ui) = st.borrow().ui.upgrade() else { return };
+    let app = ui.global::<App>();
+    if !app.get_has_song() {
+        return;
+    }
+    let Ok(w) = ShareWindow::new() else { return };
+    w.global::<App>().on_tr(|s| tr_any(&s).into());
+    w.set_cover(app.get_cover());
+    w.set_backdrop(app.get_backdrop());
+    w.set_song(app.get_title());
+    w.set_artist(app.get_artist());
+    w.set_accent(ui.global::<Theme>().get_accent());
+    let line = {
+        let s = st.borrow();
+        let pos = s.audio.as_ref().map_or(0.0, |a| a.position());
+        s.lyrics.as_ref().and_then(|l| {
+            let at = rymplayer::lyrics::current_line(&l.synced, pos)?;
+            l.synced.get(at).map(|x| x.1.clone())
+        })
+    };
+    w.set_line(line.unwrap_or_default().into());
+    let title = app.get_title().to_string();
+    for copy in [false, true] {
+        let weak = w.as_weak();
+        let st2 = st.clone();
+        let title = title.clone();
+        let take = move || {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_capturing(true);
+            let weak = w.as_weak();
+            let st3 = st2.clone();
+            let title = title.clone();
+            slint::Timer::single_shot(Duration::from_millis(150), move || {
+                let Some(w) = weak.upgrade() else { return };
+                let shot = w.window().take_snapshot();
+                w.set_capturing(false);
+                match shot {
+                    Ok(px) => {
+                        let (wd, ht) = (px.width(), px.height());
+                        let bytes: Vec<u8> = px.as_bytes().to_vec();
+                        if copy {
+                            let ok = arboard::Clipboard::new().and_then(|mut c| c.set_image(arboard::ImageData { width: wd as usize, height: ht as usize, bytes: bytes.into() })).is_ok();
+                            toast(&st3, if ok { tr("Picture copied") } else { tr("Couldn't copy the picture") });
+                        } else {
+                            let dir = directories::UserDirs::new().and_then(|d| d.picture_dir().map(PathBuf::from)).unwrap_or_else(|| PathBuf::from(".")).join("RyM");
+                            let _ = std::fs::create_dir_all(&dir);
+                            let name: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '_' }).collect();
+                            let path = dir.join(format!("{}.png", name.trim()));
+                            match image::RgbaImage::from_raw(wd, ht, bytes).map(|img| img.save(&path)) {
+                                Some(Ok(())) => toast(&st3, &format!("{} {}", tr("Saved to"), path.display())),
+                                _ => toast(&st3, tr("Couldn't save the picture")),
+                            }
+                        }
+                    }
+                    Err(e) => toast(&st3, &format!("{}: {e}", tr("Couldn't save the picture"))),
+                }
+            });
+        };
+        if copy {
+            w.on_copy(take);
+        } else {
+            w.on_save(take);
+        }
+    }
+    let _ = w.show();
+    st.borrow_mut().share = Some(w);
+}
+
+/// The most colorful strong color of a cover (its accent).
+fn cover_color(px: &Pixels) -> Option<slint::Color> {
+    let (_, _, data) = px;
+    let mut bins = [(0f32, 0f32, 0f32, 0f32); 12];
+    for p in data.chunks_exact(4).step_by(11) {
+        let (r, g, b) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let sat = if max > 0.0 { (max - min) / max } else { 0.0 };
+        if sat < 0.25 || max < 0.25 {
+            continue;
+        }
+        let hue = if max == r { ((g - b) / (max - min)).rem_euclid(6.0) } else if max == g { (b - r) / (max - min) + 2.0 } else { (r - g) / (max - min) + 4.0 };
+        let bin = ((hue / 6.0 * 12.0) as usize).min(11);
+        let w = sat * max;
+        bins[bin].0 += w;
+        bins[bin].1 += r * w;
+        bins[bin].2 += g * w;
+        bins[bin].3 += b * w;
+    }
+    let best = bins.iter().max_by(|a, b| a.0.total_cmp(&b.0))?;
+    if best.0 <= 0.0 {
+        return None;
+    }
+    let (mut r, mut g, mut b) = (best.1 / best.0, best.2 / best.0, best.3 / best.0);
+    // Bright enough to read on the dark themes.
+    let max = r.max(g).max(b);
+    if max < 0.75 {
+        let k = 0.75 / max.max(0.01);
+        r = (r * k).min(1.0);
+        g = (g * k).min(1.0);
+        b = (b * k).min(1.0);
+    }
+    Some(slint::Color::from_rgb_u8((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8))
+}
+
+/// The stats page: hours, the kinds heard (RaM points), top artists and songs.
+fn fill_stats(st: &Shared) {
+    let recap = rymplayer::stats::recap();
+    let kinds = rymplayer::ram_points::kind_counts(&rymplayer::recent::tracks());
+    let total: usize = kinds.iter().sum();
+    let kind_bars: Vec<Bar> = rymplayer::ram_points::Kind::ALL
+        .iter()
+        .zip(kinds)
+        .filter(|(_, n)| *n > 0)
+        .map(|(k, n)| Bar { label: tr_any(k.name()).into(), value: n as f32 / total.max(1) as f32, text: format!("{}%", n * 100 / total.max(1)).into() })
+        .collect();
+    let top_hours = recap.top_artists.first().map_or(1.0, |a| a.1).max(0.01);
+    let artists: Vec<Bar> = recap.top_artists.iter().map(|(a, h)| Bar { label: a.clone().into(), value: h / top_hours, text: format!("{:.1} h", h).into() }).collect();
+    let top_plays = recap.top_songs.first().map_or(1, |s| s.1).max(1) as f32;
+    let songs: Vec<Bar> = recap.top_songs.iter().map(|(t, n)| Bar { label: format!("{} — {}", t.title, t.artist).into(), value: *n as f32 / top_plays, text: format!("{n}\u{00d7}").into() }).collect();
+    let text = format!("{:.1} {} · {:.1} {}", recap.hours_month, tr("hours this month"), recap.hours_total, tr("hours in all"));
+    with_app(st, |a| {
+        a.set_kinds(ModelRc::from(Rc::new(VecModel::from(kind_bars))));
+        a.set_top_artists(ModelRc::from(Rc::new(VecModel::from(artists))));
+        a.set_top_songs(ModelRc::from(Rc::new(VecModel::from(songs))));
+        a.set_stats_text(text.into());
+    });
+}
+
 fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
     let translate = st.borrow().config.lyrics_translation;
     let lyrics = lyrics.map(|mut l| {
@@ -1541,10 +2172,26 @@ fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
         return;
     };
     let lines: Vec<String> = if l.synced.is_empty() { l.plain.clone() } else { l.synced.iter().map(|(_, x)| if x.is_empty() { "♪".to_string() } else { x.clone() }).collect() };
+    // Romaji under Japanese lines: looked up once per song (kana by table meanwhile).
+    let (romaji_on, vid) = {
+        let s = st.borrow();
+        (s.config.romaji, s.q.now().map(|t| t.video_id.clone()).unwrap_or_default())
+    };
+    let japanese = rymplayer::lyrics::is_japanese(&l);
+    let known = st.borrow().romaji.get(&format!("{vid}|{}", l.source)).cloned();
+    let ro: Vec<String> = match (romaji_on && japanese, known) {
+        (false, _) => Vec::new(),
+        (true, Some(r)) => r,
+        (true, None) => {
+            let (lines2, source, vid2) = (lines.clone(), l.source.clone(), vid.clone());
+            post(async move { Ev::Romaji(vid2, source, rymplayer::romaji::romanize(&lines2).await) });
+            lines.iter().map(|x| if rymplayer::romaji::has_kana(x) { rymplayer::romaji::kana(x) } else { String::new() }).collect()
+        }
+    };
     let rows: Vec<LyricLine> = lines
         .into_iter()
         .enumerate()
-        .map(|(i, text)| LyricLine { text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 } })
+        .map(|(i, text)| LyricLine { text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 } })
         .collect();
     let note = if l.synced.is_empty() { format!("{} · {} {}", tr("These lyrics aren't synced to the song"), tr("Lyrics from"), l.source) } else { format!("{} {}", tr("Lyrics from"), l.source) };
     let wants = translate && l.translation.is_empty() && rymplayer::lyrics::is_japanese(&l);
@@ -1737,10 +2384,34 @@ fn mini_sync(st: &Shared) {
     if to.get_playing() != from.get_playing() {
         to.set_playing(from.get_playing());
     }
-    let dark = ui.global::<Theme>().get_dark();
-    if mini.global::<Theme>().get_dark() != dark {
-        mini.global::<Theme>().set_dark(dark);
+    let theme = ui.global::<Theme>().get_index();
+    if mini.global::<Theme>().get_index() != theme {
+        mini.global::<Theme>().set_index(theme);
     }
+}
+
+fn set_update_text(st: &Shared, text: impl Into<String>) {
+    st.borrow_mut().update_text = text.into();
+    fill_settings(st);
+}
+
+/// Last.fm: the song is "now playing", and its listening starts counting.
+fn lastfm_start(st: &Shared) {
+    let mut s = st.borrow_mut();
+    if s.config.lastfm_session.is_empty() {
+        s.scrobble = None;
+        return;
+    }
+    let Some(t) = s.q.now().cloned() else { return };
+    let started = rymplayer::updates::now();
+    s.scrobble = Some((t.video_id.clone(), started, 0.0, false));
+    let (key, secret, session) = (s.config.lastfm_key.clone(), s.config.lastfm_secret.clone(), s.config.lastfm_session.clone());
+    let dur = s.audio.as_ref().and_then(|a| a.duration()).unwrap_or(0.0) as u32;
+    let sc = rymplayer::lastfm::Scrobble { artist: t.artist, title: t.title, album: t.album, duration: dur, started };
+    post(async move {
+        let _ = rymplayer::lastfm::now_playing(sc, key, secret, session).await;
+        Ev::Done
+    });
 }
 
 fn check_updates(st: &Shared, asked: bool) {
@@ -1751,7 +2422,8 @@ fn check_updates(st: &Shared, asked: bool) {
         s.config.beta_updates
     };
     if asked {
-        with_app(st, |a| a.set_update_text(tr("Checking…").into()));
+        st.borrow_mut().update_text = tr("Checking…").into();
+        fill_settings(st);
     }
     post(async move { Ev::Update(rymplayer::updates::check(beta).await, asked) });
 }
@@ -1824,7 +2496,13 @@ fn handle(st: &Shared, ev: Ev) {
             if let Some(url) = a.photo.clone() {
                 post(async move { Ev::Avatar(fetch(&url).await) });
             }
-            st.borrow_mut().account = Some(a);
+            {
+                let mut s = st.borrow_mut();
+                if let Ok(mut p) = s.link.lock() {
+                    p.account = Some(rymplayer::link::account_key(&a.name, &a.handle));
+                }
+                s.account = Some(a);
+            }
         }
         Ev::Account(Err(e)) => {
             log(&format!("account: {e}"));
@@ -1979,11 +2657,19 @@ fn handle(st: &Shared, ev: Ev) {
         Ev::Art(vid, art) => {
             let current = st.borrow().q.now().is_some_and(|t| t.video_id == vid);
             if current && let Some((big, soft)) = art {
+                let accent = st.borrow().config.accent_from_cover.then(|| cover_color(&big)).flatten();
                 let (big, soft) = (to_image(big), to_image(soft));
                 with_app(st, |a| {
                     a.set_cover(big);
                     a.set_backdrop(soft);
                 });
+                if let Some(ui) = st.borrow().ui.upgrade() {
+                    let theme = ui.global::<Theme>();
+                    theme.set_cover_accent(accent.is_some());
+                    if let Some(c) = accent {
+                        theme.set_cover_color(c);
+                    }
+                }
             }
         }
         Ev::Fetched(id, result) => {
@@ -2012,7 +2698,10 @@ fn handle(st: &Shared, ev: Ev) {
             drop(s);
             with_app(st, |a| a.set_loading(false));
             match started {
-                Ok(()) => prefetch_next(st),
+                Ok(()) => {
+                    prefetch_next(st);
+                    lastfm_start(st);
+                }
                 Err(e) => {
                     log(&format!("can't play {}: {e}", t.video_id));
                     toast(st, &format!("{} \"{}\": {e}", tr("Can't play"), t.title));
@@ -2102,7 +2791,7 @@ fn handle(st: &Shared, ev: Ev) {
         Ev::Update(result, asked) => match result {
             Ok(Some(r)) => {
                 let url = r.download_for("RyM-Slint.exe");
-                with_app(st, |a| a.set_update_text(format!("RyM {} — {}", r.version, tr("downloading…")).into()));
+                set_update_text(st, format!("RyM {} — {}", r.version, tr("downloading…")));
                 toast(st, &format!("RyM {} — {}", r.version, tr("downloading…")));
                 if url.ends_with(".exe") {
                     post(async move { Ev::Installed(rymplayer::updates::install(&url, |_| {}).await) });
@@ -2110,19 +2799,69 @@ fn handle(st: &Shared, ev: Ev) {
                     let _ = rymplayer::updates::open_link(&url);
                 }
             }
-            Ok(None) if asked => with_app(st, |a| a.set_update_text(tr("You have the latest version").into())),
-            Err(e) if asked => with_app(st, |a| a.set_update_text(format!("{}: {e}", tr("Couldn't check for updates")).into())),
+            Ok(None) if asked => set_update_text(st, tr("You have the latest version")),
+            Err(e) if asked => set_update_text(st, format!("{}: {e}", tr("Couldn't check for updates"))),
             _ => {}
         },
         Ev::Installed(Ok(path)) => {
-            with_app(st, |a| a.set_update_text(tr("Updated: RyM opens again").into()));
+            set_update_text(st, tr("Updated: RyM opens again"));
             save_session(st);
             if std::process::Command::new(&path).spawn().is_ok() {
                 let _ = slint::quit_event_loop();
             }
         }
-        Ev::Installed(Err(e)) => with_app(st, |a| a.set_update_text(format!("{}: {e}", tr("Update failed")).into())),
+        Ev::Installed(Err(e)) => set_update_text(st, format!("{}: {e}", tr("Update failed"))),
         Ev::MediaKey(k) => media_key(st, k),
+        Ev::Romaji(vid, source, lines) => {
+            st.borrow_mut().romaji.insert(format!("{vid}|{source}"), lines);
+            let current = {
+                let s = st.borrow();
+                s.lyrics.clone().filter(|l| l.source == source && s.q.now().is_some_and(|t| t.video_id == vid))
+            };
+            if current.is_some() {
+                show_lyrics(st, current);
+            }
+        }
+        Ev::YtDlp(result) => {
+            let text = match result {
+                Ok(t) => t,
+                Err(e) => e.to_string(),
+            };
+            toast(st, &format!("yt-dlp: {text}"));
+            st.borrow_mut().ytdlp_text = text;
+            fill_settings(st);
+        }
+        Ev::LastFmToken(Ok((token, page))) => {
+            st.borrow_mut().lastfm_token = Some(token);
+            let _ = rymplayer::updates::open_link(&page);
+            fill_settings(st);
+        }
+        Ev::LastFmSession(Ok((session, user))) => {
+            {
+                let mut s = st.borrow_mut();
+                s.lastfm_token = None;
+                s.config.lastfm_session = session;
+                s.config.lastfm_user = user.clone();
+                s.config.save();
+            }
+            toast(st, &format!("Last.fm: {user}"));
+            fill_settings(st);
+        }
+        Ev::LastFmToken(Err(e)) | Ev::LastFmSession(Err(e)) => toast(st, &e.to_string()),
+        Ev::Batch(b) => {
+            if b.finished() {
+                toast(st, &format!("{}: {} · {}: {} · {}: {}", tr("Saved"), b.saved, tr("Already there"), b.skipped, tr("Failed"), b.failed));
+            } else if b.done > 0 {
+                toast(st, &format!("{} {}/{}", tr("Downloading"), b.done, b.total));
+            }
+        }
+        Ev::LinkPause => {
+            let playing = st.borrow().audio.as_ref().is_some_and(Audio::is_playing);
+            if playing {
+                toggle_playback(st);
+                toast(st, tr("Your phone took the music"));
+            }
+        }
         Ev::Peer(note, ip) => heard_peer(st, note, ip),
         Ev::TookOver(device, Ok(state)) => {
             let current = state.current;
@@ -2144,7 +2883,7 @@ fn handle(st: &Shared, ev: Ev) {
 // ---------------------------------------------------------------- the layout's check
 
 /// Draws the window with sample songs into a PNG with the software renderer (no window).
-fn render_sample(out: &str, dark: bool, page: i32) {
+fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     use slint::platform::software_renderer::{MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType};
     struct Headless(Rc<MinimalSoftwareWindow>);
     impl slint::platform::Platform for Headless {
@@ -2157,7 +2896,7 @@ fn render_sample(out: &str, dark: bool, page: i32) {
     let _ = slint::platform::set_platform(Box::new(Headless(window.clone())));
     let ui = AppWindow::new().expect("window");
     let app = ui.global::<App>();
-    ui.global::<Theme>().set_dark(dark);
+    ui.global::<Theme>().set_index(if theme_index > 0 { theme_index } else if dark { 0 } else { 1 });
     app.on_tr(|s| tr_any(&s).into());
     let swatch = |r: u8, g: u8, b: u8| {
         let px: Vec<u8> = (0..64 * 64)
@@ -2199,9 +2938,16 @@ fn render_sample(out: &str, dark: bool, page: i32) {
     app.set_similar(ModelRc::from(Rc::new(VecModel::from(cards.clone()))));
     app.set_same_artist(ModelRc::from(Rc::new(VecModel::from(cards))));
     app.set_page(page);
-    app.set_toggles(ModelRc::from(Rc::new(VecModel::from(vec![
-        Toggle { id: "dark".into(), title: "Dark theme (RyM Dusk)".into(), about: "Off: the light theme (RyM Mist)".into(), on: dark },
-        Toggle { id: "automix".into(), title: "Smart Automix".into(), about: "Songs blend like a DJ mix".into(), on: true },
+    app.set_settings(ModelRc::from(Rc::new(VecModel::from(vec![
+        Setting { id: "".into(), kind: 4, title: "Look".into(), about: "".into(), on: false, value: "".into() },
+        Setting { id: "theme".into(), kind: 1, title: "Theme".into(), about: "".into(), on: false, value: "RyM Dusk".into() },
+        Setting { id: "automix".into(), kind: 0, title: "Smart Automix".into(), about: "Songs blend like a DJ mix".into(), on: true, value: "".into() },
+        Setting { id: "alarm-time".into(), kind: 2, title: "Time".into(), about: "Like 07:30".into(), on: false, value: "07:30".into() },
+        Setting { id: "ytdlp".into(), kind: 3, title: "Update yt-dlp".into(), about: "".into(), on: false, value: "Update".into() },
+    ]))));
+    app.set_kinds(ModelRc::from(Rc::new(VecModel::from(vec![
+        Bar { label: "Songs".into(), value: 0.7, text: "70%".into() },
+        Bar { label: "Husseini".into(), value: 0.3, text: "30%".into() },
     ]))));
     app.set_suggestions(ModelRc::from(Rc::new(VecModel::from(vec![
         Suggest { text: "tame impala".into(), history: true },
@@ -2211,10 +2957,11 @@ fn render_sample(out: &str, dark: bool, page: i32) {
     let shelf_cards = Rc::new(VecModel::from(vec![card("Night Changes", "One Direction", swatch(30, 30, 30)), card("Royalty", "Egzod", swatch(70, 90, 160))]));
     app.set_home(ModelRc::from(Rc::new(VecModel::from(vec![Shelf { title: "For you".into(), cards: ModelRc::from(shelf_cards.clone()) }, Shelf { title: "حسيني لك".into(), cards: ModelRc::from(shelf_cards) }]))));
     app.set_show_lyrics(page == 9);
+    app.set_line_progress(0.5);
     app.set_lyrics(ModelRc::from(Rc::new(VecModel::from(vec![
-        LyricLine { text: "夜に駆ける".into(), tr: "Racing into the night".into(), state: 2 },
-        LyricLine { text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), state: 1 },
-        LyricLine { text: "二人だけの空が広がる夜に".into(), tr: "".into(), state: 0 },
+        LyricLine { text: "夜に駆ける".into(), tr: "Racing into the night".into(), ro: "Yoru ni kakeru".into(), state: 2 },
+        LyricLine { text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1 },
+        LyricLine { text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0 },
     ]))));
     ui.show().expect("show");
     window.set_size(slint::PhysicalSize::new(w, h));

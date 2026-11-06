@@ -30,7 +30,22 @@ pub enum Kind {
 }
 
 impl Kind {
-    const ALL: [Kind; 5] = [Kind::Songs, Kind::Husseini, Kind::Quran, Kind::Nasheed, Kind::Talk];
+    pub const ALL: [Kind; 5] = [Kind::Songs, Kind::Husseini, Kind::Quran, Kind::Nasheed, Kind::Talk];
+
+    /// Its name in the settings ("Husseini"...), and back.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Songs => "Songs",
+            Kind::Husseini => "Husseini",
+            Kind::Quran => "Quran",
+            Kind::Nasheed => "Nasheeds",
+            Kind::Talk => "Talks",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Kind> {
+        Kind::ALL.into_iter().find(|k| k.name() == name)
+    }
 
     /// The home page's own shelf for this kind, when it isn't the page's main one.
     pub fn shelf(self) -> &'static str {
@@ -162,6 +177,43 @@ fn script_of(text: &str) -> Script {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Notes {
     artists: HashMap<String, [u32; 5]>,
+    /// Artists the user put in a kind by hand ("Not this kind" in a song's menu): it wins.
+    #[serde(default)]
+    fixed: HashMap<String, Kind>,
+}
+
+/// "Only this kind" (Settings): For you shows only it. None: every kind heard.
+pub fn only_kind() -> Option<Kind> {
+    Kind::from_name(&crate::config::Config::load().only_kind)
+}
+
+/// The kind of a song by its artist and words, with what's learned (for the menus).
+pub fn kind_of_track(t: &Track) -> Kind {
+    Notes::load().kind_of(t).unwrap_or(Kind::Songs)
+}
+
+/// The user says the song's artist is of `kind`: kept, and it wins over words and radios.
+pub fn correct(t: &Track, kind: Kind) {
+    let mut notes = Notes::load();
+    let artist = first_artist(&t.artist);
+    if artist.is_empty() {
+        return;
+    }
+    notes.fixed.insert(artist.clone(), kind);
+    let mut seen = [0u32; 5];
+    seen[kind as usize] = 12;
+    notes.artists.insert(artist, seen);
+    notes.save();
+}
+
+/// How much of each kind is in `tracks` (the songs played lately, for the stats page).
+pub fn kind_counts(tracks: &[Track]) -> [usize; 5] {
+    let notes = Notes::load();
+    let mut out = [0usize; 5];
+    for t in tracks {
+        out[notes.kind_of(t).unwrap_or(Kind::Songs) as usize] += 1;
+    }
+    out
 }
 
 /// Artists kept, at most (the least seen go first).
@@ -209,9 +261,11 @@ impl Notes {
         (total >= 3 && n * 10 >= total * 7).then_some(Kind::ALL[best])
     }
 
-    /// The song's kind: its words, else its artist's; `None` when nothing tells.
+    /// The song's kind: the user's word for its artist, else its words, else its artist's;
+    /// `None` when nothing tells.
     pub fn kind_of(&self, t: &Track) -> Option<Kind> {
-        word_kind(t).or_else(|| self.artist_kind(&first_artist(&t.artist)))
+        let artist = first_artist(&t.artist);
+        self.fixed.get(&artist).copied().or_else(|| word_kind(t)).or_else(|| self.artist_kind(&artist))
     }
 
     /// The kind of a radio's song: its own, else the kind known for most of its radio (a few
@@ -237,6 +291,9 @@ impl Notes {
         let seed_script = script(seed);
         for t in std::iter::once(seed).chain(radio) {
             let artist = first_artist(&t.artist);
+            if self.fixed.contains_key(&artist) {
+                continue;
+            }
             match word_kind(t) {
                 Some(k) => self.add(&artist, k, 3),
                 None if self.artist_kind(&artist).is_none_or(|k| k == kind) && (kind == Kind::Songs || script(t) == seed_script) => {
