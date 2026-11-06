@@ -1,13 +1,13 @@
 # RyM
 
-An ad-free YouTube Music player, written in Rust, for Windows and Android (Linux coming soon). Your own
+An ad-free YouTube Music player, written in Rust, for Windows, Android and Linux (beta). Your own
 account, your library, synced lyrics, and a sound engine with DJ-style song changes.
 
 [العربية](#بالعربي) · [Download](../../releases/latest)
 
 | App | What it is |
 |---|---|
-| **RymPlayer-GTK** | The window app (GTK 4) for Windows; Linux coming soon |
+| **RymPlayer-GTK** | The window app (GTK 4) for Windows, and Linux in beta |
 | **RyM Iced Player** | A second window app (iced), drawn on the graphics card or the processor |
 | **RyM** | The same player in the terminal |
 | **RyM for Android** | The phone app (Kotlin and Jetpack Compose, Android 10 or newer), in `android/` |
@@ -54,6 +54,13 @@ Get the files from [Releases](../../releases/latest):
 | `RyM-Iced-Player.exe` | The Iced Player: run it |
 | `RyM.exe` | The terminal app: run it in Windows Terminal |
 | `RyM-Android-<version>.apk` | Install it on the phone |
+| `RyM-x86_64.AppImage` | **Linux beta:** `chmod +x RyM-x86_64.AppImage` then run it |
+| `RyM-linux-x86_64.tar.gz` | **Linux beta:** the same apps unpacked, on the system's GTK 4 (see its README.txt) |
+
+**Linux beta:** the AppImage carries GTK 4. It needs FUSE 2 (`libfuse2`; without it run it with
+`--appimage-extract-and-run`), ALSA (`alsa-lib`, with `pipewire-alsa` or `pulseaudio-alsa`), and
+WebKitGTK 4.1 for the Google sign-in window (`webkit2gtk-4.1` on Arch, `webkit2gtk4.1` on
+Fedora/Nobara, `libwebkit2gtk-4.1-0` on Ubuntu/PikaOS). Media keys go through MPRIS.
 
 Sign in from the app (Settings, or `g` in the terminal), or browse without an account.
 
@@ -105,6 +112,9 @@ cargo build --release --bin RyM-Iced-Player                      # Iced Player
 cd android && ./gradlew assembleRelease                          # phone
 ```
 
+On Linux the window app builds with `--no-default-features --features gtk-ui`; `packaging/` has the
+scripts that build it on Ubuntu (WSL works) and pack the tar.gz and the AppImage.
+
 On Windows, building needs the Visual Studio C++ build tools. CMake compiles libopus; the path in
 `.cargo/config.toml` points at the copy that ships with the Build Tools, so change it if yours is
 elsewhere.
@@ -116,12 +126,12 @@ On Android: `./gradlew testDebugUnitTest`.
 
 ## بالعربي
 
-**RyM** مشغّل YouTube Music بلا إعلانات، مكتوب بـ Rust، لويندوز وأندرويد (ولينكس قريباً): حسابك، مكتبتك،
+**RyM** مشغّل YouTube Music بلا إعلانات، مكتوب بـ Rust، لويندوز وأندرويد ولينكس (بيتا): حسابك، مكتبتك،
 كلمات متزامنة، ومحرك صوت يدمج الأغاني مثل الـ DJ.
 
 | التطبيق | شنو هو |
 |---|---|
-| **RymPlayer-GTK** | برنامج النوافذ (GTK 4) لويندوز، ولينكس قريباً |
+| **RymPlayer-GTK** | برنامج النوافذ (GTK 4) لويندوز، ولينكس بيتا |
 | **RyM Iced Player** | برنامج نوافذ ثاني (iced)، يرسم بكرت الشاشة أو بالمعالج |
 | **RyM** | نفس المشغّل بالتيرمنال |
 | **RyM للموبايل** | تطبيق أندرويد (أندرويد 10 أو أحدث)، بمجلد `android/` |
@@ -162,6 +172,13 @@ On Android: `./gradlew testDebugUnitTest`.
 - `RyM-Iced-Player.exe`: الـ Iced Player، شغّله مباشرة.
 - `RyM.exe`: التيرمنال.
 - `RyM-Android-<النسخة>.apk`: نصّبه بالموبايل.
+- `RyM-x86_64.AppImage`: **لينكس بيتا**، `chmod +x RyM-x86_64.AppImage` وبعدين شغّله.
+- `RyM-linux-x86_64.tar.gz`: **لينكس بيتا**، نفس البرامج بدون تغليف، على GTK 4 مال النظام (اقرا README.txt اللي بداخله).
+
+**لينكس بيتا:** الـ AppImage بداخله GTK 4. يحتاج FUSE 2 (`libfuse2`، وإذا ما موجود شغّله بـ
+`--appimage-extract-and-run`)، وALSA (`alsa-lib` ويا `pipewire-alsa` أو `pulseaudio-alsa`)، وWebKitGTK 4.1
+لنافذة تسجيل الدخول بـ Google (`webkit2gtk-4.1` بـ Arch، `webkit2gtk4.1` بـ Fedora/Nobara،
+`libwebkit2gtk-4.1-0` بـ Ubuntu/PikaOS). أزرار الميديا تشتغل عبر MPRIS.
 
 **اختياري:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install -U yt-dlp` ويا Node.js) لأعلى جودة
 تحميل، ولإضافتي SoundCloud والفيديو، وكاحتياط إذا يوتيوب رفض الأغنية.
