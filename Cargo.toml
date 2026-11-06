@@ -36,11 +36,13 @@ ar-reshaper = "1.5.0"
 unicode-bidi = "0.3.18"
 arboard = { version = "3", default-features = false }
 discord-rich-presence = "1.1"
+slint = { version = "1.18.1", optional = true, features = ["renderer-software", "software-renderer-systemfonts"] }
 
 [features]
 default = ["webview"]
 webview = ["dep:wry", "dep:tao"]
 gtk-ui = ["dep:gtk", "dep:souvlaki"]
+slint-ui = ["dep:slint", "dep:slint-build", "dep:souvlaki"]
 
 [profile.release]
 # Smallest files: optimize for size, whole-program LTO, no unwinding tables, no symbols.
@@ -67,9 +69,16 @@ name = "RymPlayer-GTK"
 path = "src/bin/gtk/main.rs"
 required-features = ["gtk-ui"]
 
+[[bin]]
+name = "RyM-Slint"
+path = "src/bin/slint/main.rs"
+required-features = ["slint-ui"]
+
 [build-dependencies]
 # Puts each program's icon inside its .exe (Windows).
 embed-resource = "3"
+# Compiles the Slint app's window (ui/app.slint).
+slint-build = { version = "1.18.1", optional = true }
 
 [dev-dependencies]
 iced_test = "0.14.0"

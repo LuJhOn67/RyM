@@ -1,0 +1,4 @@
+Icons: Solar icon set by 480 Design (https://www.figma.com/community/file/1166831539721848736),
+licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+Fonts: Roboto (Apache License 2.0, LICENSE-roboto.txt) and Chathura (SIL Open Font License,
+OFL-chathura.txt), in ../fonts.

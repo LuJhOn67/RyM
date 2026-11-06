@@ -1,4 +1,5 @@
-//! Windows: each program gets its own icon inside its .exe (RyM the doll, RyM-Iced-Player and RymPlayer-GTK the pear).
+//! Windows: each program gets its own icon inside its .exe (RyM the doll, the window apps the pear).
+//! The Slint app's window (ui/app.slint) is compiled here when it's built.
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/terminal.rc");
@@ -6,11 +7,13 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/icons");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         embed_resource::compile_for("assets/terminal.rc", ["RyM"], embed_resource::NONE).manifest_optional().unwrap();
-        embed_resource::compile_for("assets/gui.rc", ["RyM-Iced-Player", "RymPlayer-GTK"], embed_resource::NONE).manifest_optional().unwrap();
+        embed_resource::compile_for("assets/gui.rc", ["RyM-Iced-Player", "RymPlayer-GTK", "RyM-Slint"], embed_resource::NONE).manifest_optional().unwrap();
         // The GTK app asks hybrid laptops' drivers for the fast graphics card (see its main.rs).
         if std::env::var_os("CARGO_FEATURE_GTK_UI").is_some() && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
             println!("cargo:rustc-link-arg-bin=RymPlayer-GTK=/EXPORT:NvOptimusEnablement");
             println!("cargo:rustc-link-arg-bin=RymPlayer-GTK=/EXPORT:AmdPowerXpressRequestHighPerformance");
         }
     }
+    #[cfg(feature = "slint-ui")]
+    slint_build::compile("ui/app.slint").expect("ui/app.slint");
 }

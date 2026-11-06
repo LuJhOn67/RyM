@@ -18,6 +18,11 @@ pub fn tr(en: &'static str) -> &'static str {
     if is_arabic() { arabic(en).unwrap_or(en) } else { en }
 }
 
+/// [`tr`] for text that isn't `'static` (the Slint app asks with the strings its window holds).
+pub fn tr_any(en: &str) -> String {
+    if is_arabic() { arabic(en).unwrap_or(en).to_string() } else { en.to_string() }
+}
+
 /// Every Arabic text, by its English.
 fn arabic(en: &str) -> Option<&'static str> {
     Some(match en {
