@@ -904,12 +904,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lookingForSources = false
         wantedSource = null
         lyrics = null
+        translateJob?.cancel()
+        lyricsTranslation = emptyList()
         if (t == null) return
         lyricsStatus = tr("Looking for lyrics...")
         lyricsJob = viewModelScope.launch {
             val found = findLyrics(t)
             lyrics = found
             lyricsStatus = if (found == null) tr("No lyrics for this song") else ""
+            translateShown()
             // Every source is asked right away, so the source buttons switch at once.
             loadLyricsSources()
             // The next song's lyrics are ready before it starts.
@@ -990,6 +993,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lyrics = l
         lyricsStatus = ""
         LyricsCache.put(getApplication(), t.videoId, l)
+        translateShown()
+    }
+
+    /** English under the lines shown (Japanese songs), or nothing. */
+    var lyricsTranslation by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** Japanese lyrics with English under each line (the setting). */
+    var translateLyrics by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("lyrics_translation", true))
+        private set
+
+    fun toggleTranslateLyrics() {
+        translateLyrics = !translateLyrics
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lyrics_translation", translateLyrics).apply()
+        translateShown()
+    }
+
+    private var translateJob: Job? = null
+
+    /** The lyrics shown get their English: saved with them, or looked for (the site's own, else a machine translation). */
+    private fun translateShown() {
+        translateJob?.cancel()
+        val l = lyrics
+        val t = player.current
+        lyricsTranslation = if (translateLyrics) l?.translation.orEmpty() else emptyList()
+        if (!translateLyrics || l == null || t == null || l.translation.isNotEmpty() || !com.rymplayer.data.Translate.isJapanese(l)) return
+        translateJob = viewModelScope.launch {
+            val tr = com.rymplayer.data.Translate.translate(t, l)
+            if (tr.isNotEmpty() && lyrics === l) {
+                l.translation = tr
+                lyricsTranslation = tr
+                LyricsCache.put(getApplication(), t.videoId, l)
+            }
+        }
     }
 
     override fun onCleared() {

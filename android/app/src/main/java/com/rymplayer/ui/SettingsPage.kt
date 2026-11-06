@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -172,6 +173,9 @@ fun SettingsPage(vm: AppViewModel) {
                     Divider()
                     SwitchRow(Icons.Default.PlayArrow, tr("Play songs in VLC"), tr("Each song opens in VLC instead of the built-in player"), vm.playInVlc) { vm.togglePlayInVlc() }
                 }
+            }
+            Section(tr("Lyrics")) {
+                SwitchRow(Icons.Default.Translate, tr("Translate Japanese lyrics"), tr("English in small letters under each line: the lyrics site's own translation, else a machine translation"), vm.translateLyrics) { vm.toggleTranslateLyrics() }
             }
             Section(tr("Devices")) {
                 SwitchRow(Icons.Default.Devices, "Music Cross Ears", tr("The music playing here can move to RyM on your PC (same Wi-Fi and Google account)"), vm.crossEars) { vm.toggleCrossEars() }

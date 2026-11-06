@@ -111,9 +111,13 @@ object LyricSources {
         val songs = get(search.toString(), "https://music.163.com/").at("result/songs").arr
         val id = songs.firstOrNull { s -> sameSong(t, s.at("name").str.orEmpty(), num(s.at("duration"))?.let { (it / 1000).toFloat() }) }
             ?.at("id")?.let { (it as? JsonPrimitive)?.content } ?: return@withContext null
-        val lrc = get("https://music.163.com/api/song/lyric?id=$id&lv=1&kv=1&tv=-1", "https://music.163.com/").at("lrc/lyric").str.orEmpty()
-        val synced = Lrclib.parseLrc(lrc)
-        usable(clean(Lyrics(synced, synced.map { it.second }, NETEASE), t))
+        val answer = get("https://music.163.com/api/song/lyric?id=$id&lv=1&kv=1&tv=-1", "https://music.163.com/")
+        val synced = Lrclib.parseLrc(answer.at("lrc/lyric").str.orEmpty())
+        val l = clean(Lyrics(synced, synced.map { it.second }, NETEASE), t)
+        // Its own translation (often Chinese): kept when it's English, line by line by time.
+        val tr = Lrclib.parseLrc(answer.at("tlyric/lyric").str.orEmpty())
+        if (Translate.isEnglish(tr.map { it.second })) l.translation = Translate.byTime(l.synced, tr)
+        usable(l)
     }
 
     /** KuGou's synced lyrics. */

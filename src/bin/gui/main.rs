@@ -1790,6 +1790,7 @@ mod shots {
             ),
             plain: Vec::new(),
             source: "LRCLIB".into(),
+            translation: Vec::new(),
         });
         gui.lyric_changed = long_ago();
         gui.now_playing_open = true;
@@ -1843,6 +1844,7 @@ mod shots {
             ),
             plain: Vec::new(),
             source: "LRCLIB".into(),
+            translation: Vec::new(),
         });
 
         gui.refresh_tint();

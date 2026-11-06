@@ -246,6 +246,7 @@ button.play:hover { background: @accent@; }
 .bar { background: @bar@; border-top: 1px solid @divider@; padding: 8px 14px; }
 .lyrics { border-radius: 14px; margin: 10px; padding: 26px 28px; }
 .lyric { font-size: 25px; font-weight: 800; padding: 7px 0; transition: color 300ms ease; }
+.lyric-tr { font-size: 15px; font-weight: 600; opacity: 0.8; }
 .qrow { border-radius: 10px; padding: 6px 8px; transition: background-color 180ms ease, box-shadow 200ms ease, padding 200ms ease; }
 .qrow:hover { background: @hover@; }
 .qrow.now { background: @selected@; }
@@ -409,6 +410,8 @@ enum Ev {
     VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
     /// Every source's lyrics for a song (the source switcher).
     LyricsSources(String, Vec<Lyrics>),
+    /// English for the lyrics of a song (Japanese songs), lined up with their lines.
+    Translated(String, String, Vec<String>),
     /// Search suggestions for what was typed (the account's search history first).
     Suggestions(String, anyhow::Result<Vec<rymplayer::api::Suggestion>>),
     /// The update downloaded and put in place: the program to start again.
@@ -1887,6 +1890,28 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     }
     page.append(&setting_row(tr("Crossfade"), tr("Seconds the end of a song and the start of the next play together (0 = off)"), &fade));
     page.append(&setting_row(tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), &switch(config.automix, ui, |c, on| c.automix = on)));
+    {
+        // Japanese lyrics: English under each line, or not (the lyrics shown again either way).
+        let w = gtk::Switch::new();
+        w.set_active(config.lyrics_translation);
+        w.set_valign(Align::Center);
+        let ui = ui.clone();
+        w.connect_active_notify(move |w| {
+            let lyrics = {
+                let mut s = ui.borrow_mut();
+                s.config.lyrics_translation = w.is_active();
+                s.config.save();
+                s.lyrics.clone()
+            };
+            if lyrics.is_some() {
+                let shown = lyrics.and_then(|l| now_playing(&ui).map(|t| (t, l)));
+                // Turned on: the saved lyrics may already hold the English.
+                let l = shown.map(|(t, l)| rymplayer::lyrics::cached(&t.video_id).flatten().filter(|c| c.source == l.source).unwrap_or(l));
+                show_lyrics(&ui, l);
+            }
+        });
+        page.append(&setting_row(tr("Translate Japanese lyrics"), tr("English in small letters under each line: the lyrics site's own translation, else a machine translation"), &w));
+    }
     page.append(&setting_row(
         "Music Cross Ears",
         tr("Music playing on your phone can move to this PC (same Wi-Fi and Google account); off: the phone is ignored"),
@@ -4096,6 +4121,14 @@ fn continue_with_radio(ui: &Shared) {
 
 fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     let mut s = ui.borrow_mut();
+    // Translations off: none shown, none looked for.
+    let translate = s.config.lyrics_translation;
+    let lyrics = lyrics.map(|mut l| {
+        if !translate {
+            l.translation.clear();
+        }
+        l
+    });
     clear(&s.w.lyrics_box);
     s.lyric_line = None;
     let Some(lyrics) = lyrics else {
@@ -4116,12 +4149,26 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
         s.w.lyrics_box.append(&note);
     }
     for (i, line) in lines.into_iter().enumerate() {
-        let l = Label::new(Some(&line));
+        let text = Label::new(Some(&line));
+        text.set_xalign(0.0);
+        text.set_wrap(true);
+        // A Japanese song's English, small under the line (one widget a line: the sung line is
+        // found by its place).
+        let l: gtk::Widget = match lyrics.translation.get(i).filter(|t| !t.is_empty()) {
+            Some(tr) => {
+                let b = gtk::Box::new(Orientation::Vertical, 2);
+                b.append(&text);
+                let small = label(tr, &["lyric-tr"]);
+                small.set_wrap(true);
+                small.set_ellipsize(gtk::pango::EllipsizeMode::None);
+                b.append(&small);
+                b.upcast()
+            }
+            None => text.upcast(),
+        };
         if lyrics.synced.is_empty() {
             l.add_css_class("now");
         }
-        l.set_xalign(0.0);
-        l.set_wrap(true);
         l.add_css_class("lyric");
         // Synced lines seek there when clicked.
         if let Some(&(at, _)) = lyrics.synced.get(i) {
@@ -4141,9 +4188,18 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     let src = label(&format!("{} {}", tr("Lyrics from"), lyrics.source), &["lyrics-note", "small"]);
     src.set_margin_top(18);
     s.w.lyrics_box.append(&src);
-    s.lyrics = Some(lyrics);
+    // Japanese without English yet: it's looked for, and added when it comes.
+    let wants = translate && lyrics.translation.is_empty() && rymplayer::lyrics::is_japanese(&lyrics);
+    let source = lyrics.source.clone();
+    s.lyrics = Some(lyrics.clone());
     drop(s);
     fill_pills(ui);
+    if wants && let Some(t) = now_playing(ui) {
+        post(ui, async move {
+            let tr = rymplayer::lyrics::translate(&t, &lyrics).await;
+            Ev::Translated(t.video_id, source, tr)
+        });
+    }
 }
 
 /// Scrolls to `target` over a third of a second, easing out, in step with the screen's frames.
@@ -4864,6 +4920,17 @@ fn poll_events(ui: &Shared) {
                 }
             }
             Ev::Suggestions(..) => {}
+            Ev::Translated(vid, source, tr) => {
+                let current = ui.borrow().lyrics.clone().filter(|l| l.source == source && now_playing(ui).is_some_and(|t| t.video_id == vid));
+                if let Some(mut l) = current.filter(|_| !tr.is_empty()) {
+                    l.translation = tr;
+                    rymplayer::lyrics::remember(&vid, &l);
+                    let line = ui.borrow().lyric_line;
+                    show_lyrics(ui, Some(l));
+                    // The sung line is marked again on the next tick.
+                    ui.borrow_mut().lyric_line = line.map(|_| usize::MAX);
+                }
+            }
             Ev::Installed(Ok(exe)) => {
                 // The new version opens where this one leaves off.
                 save_session(ui);

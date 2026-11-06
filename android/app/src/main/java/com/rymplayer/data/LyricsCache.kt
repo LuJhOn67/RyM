@@ -36,7 +36,7 @@ object LyricsCache {
                 o["synced"]!!.jsonArray.map { it.jsonArray[0].jsonPrimitive.float to it.jsonArray[1].jsonPrimitive.content },
                 o["plain"]!!.jsonArray.map { it.jsonPrimitive.content },
                 o["source"]!!.jsonPrimitive.content,
-            )
+            ).also { l -> l.translation = o["translation"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty() }
         )
     }.getOrNull()
 
@@ -45,6 +45,7 @@ object LyricsCache {
             put("synced", buildJsonArray { lyrics.synced.forEach { (t, l) -> add(buildJsonArray { add(t); add(l) }) } })
             put("plain", buildJsonArray { lyrics.plain.forEach { add(it) } })
             put("source", lyrics.source)
+            if (lyrics.translation.isNotEmpty()) put("translation", buildJsonArray { lyrics.translation.forEach { add(it) } })
         }
         runCatching { file(ctx, videoId).writeText(json.toString()) }
     }

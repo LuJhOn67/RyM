@@ -19,6 +19,9 @@ pub struct Lyrics {
     pub synced: Vec<(f32, String)>,
     pub plain: Vec<String>,
     pub source: String,
+    /// English under each line (Japanese songs), the same count as the lines shown; empty: none.
+    #[serde(default)]
+    pub translation: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -33,7 +36,7 @@ impl LrcLibEntry {
     fn into_lyrics(self) -> Lyrics {
         let synced = self.synced_lyrics.as_deref().map(parse_lrc).unwrap_or_default();
         let plain = self.plain_lyrics.unwrap_or_default().lines().map(String::from).collect();
-        Lyrics { synced, plain, source: "LRCLIB".into() }
+        Lyrics { synced, plain, source: "LRCLIB".into(), translation: Vec::new() }
     }
 }
 
@@ -180,7 +183,7 @@ fn cache_path(video_id: &str) -> PathBuf {
 }
 
 /// `Some(Some)`: saved lyrics; `Some(None)`: looked up lately and there were none; `None`: not known.
-fn cached(video_id: &str) -> Option<Option<Lyrics>> {
+pub fn cached(video_id: &str) -> Option<Option<Lyrics>> {
     let path = cache_path(video_id);
     let text = std::fs::read_to_string(&path).ok()?;
     let saved: Option<Lyrics> = serde_json::from_str(&text).ok()?;
@@ -295,6 +298,84 @@ fn key(l: &Lyrics) -> String {
     format!("{timing}|{words}")
 }
 
+/// The lines shown: the synced ones, or the plain ones.
+pub fn shown_lines(l: &Lyrics) -> Vec<String> {
+    if l.synced.is_empty() { l.plain.clone() } else { l.synced.iter().map(|(_, s)| s.clone()).collect() }
+}
+
+/// Japanese lyrics: kana (hiragana or katakana) in a fifth of the lines or more.
+pub fn is_japanese(l: &Lyrics) -> bool {
+    let lines = shown_lines(l);
+    let kana = lines.iter().filter(|s| s.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c))).count();
+    !lines.is_empty() && kana * 5 >= lines.len()
+}
+
+/// Mostly Latin letters (a translation in English, not Chinese).
+pub fn is_english<'a>(lines: impl Iterator<Item = &'a str>) -> bool {
+    let (mut latin, mut other) = (0usize, 0usize);
+    for c in lines.flat_map(str::chars).filter(|c| c.is_alphabetic()) {
+        if c.is_ascii_alphabetic() { latin += 1 } else { other += 1 }
+    }
+    latin > 20 && latin > other * 4
+}
+
+/// A timed translation lined up with timed lines: each line gets the one starting within half a
+/// second of it (else nothing).
+pub fn by_time(lines: &[(f32, String)], tr: &[(f32, String)]) -> Vec<String> {
+    let out: Vec<String> = lines.iter().map(|(at, _)| tr.iter().find(|(t, _)| (t - at).abs() < 0.5).map(|(_, s)| s.clone()).unwrap_or_default()).collect();
+    if out.iter().filter(|s| !s.is_empty()).count() * 2 >= out.len() { out } else { Vec::new() }
+}
+
+/// English under Japanese lyrics: NetEase's own English translation when it lines up with these
+/// lines, else a machine translation of every line at once (Google Translate). Empty: none.
+pub async fn translate(t: &Track, l: &Lyrics) -> Vec<String> {
+    if !l.translation.is_empty() || !is_japanese(l) {
+        return l.translation.clone();
+    }
+    if !l.synced.is_empty()
+        && let Ok(Some(n)) = crate::lyric_sources::netease(t.clone()).await
+        && !n.translation.is_empty()
+    {
+        let timed: Vec<(f32, String)> = n.synced.iter().map(|(at, _)| *at).zip(n.translation.iter().cloned()).collect();
+        let lined = by_time(&l.synced, &timed);
+        if !lined.is_empty() {
+            return lined;
+        }
+    }
+    machine_translation(&shown_lines(l)).await.unwrap_or_default()
+}
+
+/// Every line translated from Japanese to English in one request (Google Translate's free
+/// endpoint); lines stay lines. None when it fails or the lines don't come back one for one.
+pub async fn machine_translation(lines: &[String]) -> Option<Vec<String>> {
+    let text = lines.iter().map(|l| if l.trim().is_empty() || l.trim() == "♪" { "-".to_string() } else { l.replace('\n', " ") }).collect::<Vec<_>>().join("\n");
+    let resp: serde_json::Value = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?
+        .post("https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t")
+        .header("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
+        .body({
+            let mut u = reqwest::Url::parse("http://x/").ok()?;
+            u.query_pairs_mut().append_pair("q", &text);
+            u.query().unwrap_or_default().to_string()
+        })
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let joined: String = resp.get(0)?.as_array()?.iter().filter_map(|seg| seg.get(0)?.as_str()).collect();
+    let out: Vec<String> = joined.split('\n').map(|s| s.trim().to_string()).collect();
+    (out.len() == lines.len()).then(|| out.into_iter().zip(lines).map(|(tr, orig)| if orig.trim().is_empty() || orig.trim() == "♪" || tr == "-" { String::new() } else { tr }).collect())
+}
+
+/// Keeps lyrics found later (a translation added) in place of the saved ones.
+pub fn remember(video_id: &str, l: &Lyrics) {
+    keep(video_id, &Some(l.clone()));
+}
+
 pub fn same(a: &Lyrics, b: &Lyrics) -> bool {
     key(a) == key(b)
 }
@@ -384,7 +465,7 @@ fn best_hit(hits: Vec<LrcLibEntry>, duration: Option<f32>) -> Option<Lyrics> {
 pub fn from_youtube_music(text: &str, source: &str) -> Option<Lyrics> {
     let plain: Vec<String> = text.lines().map(String::from).collect();
     let source = if source.is_empty() { "YouTube Music".to_string() } else { source.replace("Source: ", "") };
-    let l = Lyrics { synced: Vec::new(), plain, source };
+    let l = Lyrics { synced: Vec::new(), plain, source, translation: Vec::new() };
     l.is_usable().then_some(l)
 }
 
@@ -446,8 +527,8 @@ mod distinct_tests {
     #[test]
     fn other_timings_stay_and_lrclib_is_numbered() {
         let words: Vec<String> = ["one", "two", "three", "four"].map(String::from).to_vec();
-        let timed = |shift: f32| Lyrics { synced: words.iter().enumerate().map(|(i, w)| (i as f32 * 2.0 + shift, w.clone())).collect(), plain: words.clone(), source: "LRCLIB".into() };
-        let plain = Lyrics { synced: Vec::new(), plain: words.clone(), source: "lyrics.ovh".into() };
+        let timed = |shift: f32| Lyrics { synced: words.iter().enumerate().map(|(i, w)| (i as f32 * 2.0 + shift, w.clone())).collect(), plain: words.clone(), source: "LRCLIB".into(), translation: Vec::new() };
+        let plain = Lyrics { synced: Vec::new(), plain: words.clone(), source: "lyrics.ovh".into(), translation: Vec::new() };
         let ytm = Lyrics { source: "YouTube Music".into(), ..plain.clone() };
         let out = distinct([timed(0.0), timed(0.0), timed(1.5), plain, ytm]);
         assert_eq!(out.iter().map(|l| l.source.as_str()).collect::<Vec<_>>(), ["LRCLIB", "LRCLIB 2", "lyrics.ovh"]);
@@ -475,5 +556,33 @@ mod sources_probe {
         for l in super::sources(None, t, None).await {
             println!("{}: {} synced, {} plain", l.source, l.synced.len(), l.plain.len());
         }
+    }
+}
+
+#[cfg(test)]
+mod translation_tests {
+    use super::*;
+
+    #[test]
+    fn japanese_english_and_timing() {
+        let jp = Lyrics { synced: vec![(1.0, "君の名前を".into()), (5.0, "呼んでいる".into()), (9.0, "Oh yeah".into())], ..Default::default() };
+        assert!(is_japanese(&jp));
+        assert!(!is_japanese(&Lyrics { synced: vec![(1.0, "我爱你中国".into()), (2.0, "hello".into())], ..Default::default() }), "Chinese has no kana");
+        assert!(is_english(["I am calling your name", "Calling out to you"].into_iter()));
+        assert!(!is_english(["我在呼唤你的名字", "呼唤你"].into_iter()));
+        let tr = vec![(1.1, "Your name".to_string()), (5.0, "I'm calling".to_string())];
+        assert_eq!(by_time(&jp.synced, &tr), vec!["Your name".to_string(), "I'm calling".to_string(), String::new()]);
+        assert!(by_time(&jp.synced, &[(30.0, "far".to_string())]).is_empty(), "not lined up: none");
+    }
+
+    /// `cargo test --lib live_machine_translation -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_machine_translation() {
+        let lines: Vec<String> = ["君の名前を呼んでいる", "", "夜明けまで歌おう"].iter().map(|s| s.to_string()).collect();
+        let out = machine_translation(&lines).await.expect("translated");
+        println!("{out:?}");
+        assert_eq!(out.len(), 3);
+        assert!(out[1].is_empty() && !out[0].is_empty() && !out[2].is_empty());
     }
 }

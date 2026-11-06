@@ -5777,7 +5777,7 @@ dependencies = [
 
 [[package]]
 name = "rymplayer"
-version = "6.8.4"
+version = "6.9.0"
 dependencies = [
  "anyhow",
  "ar-reshaper",

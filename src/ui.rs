@@ -698,6 +698,7 @@ mod tests {
             synced: lyrics::parse_lrc("[00:00.00]first line\n[00:05.00]second line\n[00:10.00]third line"),
             plain: vec![],
             source: "LRCLIB".into(),
+            translation: vec![],
         });
         a.pos = 6.0;
         a

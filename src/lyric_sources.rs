@@ -140,7 +140,13 @@ pub async fn netease(t: Track) -> Result<Option<Lyrics>> {
     let lrc = json(url, Some("https://music.163.com/")).await?;
     let synced = parse_lrc(lrc["lrc"]["lyric"].as_str().unwrap_or_default());
     let plain = synced.iter().map(|(_, s)| s.clone()).collect();
-    Ok(usable(clean(Lyrics { synced, plain, source: NETEASE.into() }, &t)))
+    let mut l = clean(Lyrics { synced, plain, source: NETEASE.into(), translation: Vec::new() }, &t);
+    // Its own translation (often Chinese): kept when it's English, line by line by time.
+    let tr = parse_lrc(lrc["tlyric"]["lyric"].as_str().unwrap_or_default());
+    if crate::lyrics::is_english(tr.iter().map(|(_, s)| s.as_str())) {
+        l.translation = crate::lyrics::by_time(&l.synced, &tr);
+    }
+    Ok(usable(l))
 }
 
 /// KuGou's synced lyrics.
@@ -184,7 +190,7 @@ pub async fn kugou(t: Track) -> Result<Option<Lyrics>> {
     let text = String::from_utf8_lossy(&base64(file["content"].as_str().unwrap_or_default()).ok_or_else(|| anyhow!("KuGou: bad lyrics file"))?).into_owned();
     let synced = parse_lrc(&text);
     let plain = synced.iter().map(|(_, s)| s.clone()).collect();
-    Ok(usable(clean(Lyrics { synced, plain, source: KUGOU.into() }, &t)))
+    Ok(usable(clean(Lyrics { synced, plain, source: KUGOU.into(), translation: Vec::new() }, &t)))
 }
 
 /// Genius's lyrics (plain: Genius has no timing), from the song's page.
@@ -203,7 +209,7 @@ pub async fn genius(t: Track) -> Result<Option<Lyrics>> {
     let Some(page) = hit else { return Ok(None) };
     let html = client().get(page).send().await?.error_for_status()?.text().await?;
     let plain = genius_lines(&html);
-    Ok(usable(clean(Lyrics { synced: Vec::new(), plain, source: GENIUS.into() }, &t)))
+    Ok(usable(clean(Lyrics { synced: Vec::new(), plain, source: GENIUS.into(), translation: Vec::new() }, &t)))
 }
 
 /// The text of the page's lyrics containers, line by line (their nested headers left out).
@@ -349,7 +355,7 @@ mod tests {
     fn credits_and_header_lines_go() {
         let song = t("The Less I Know The Better", "Tame Impala", "3:38");
         let lrc = "[00:00.00] 作词 : Kevin Parker\n[00:01.00]作曲：Kevin\n[00:02.00]The Less I Know The Better - Tame Impala\n[00:12.47]Written by：Kevin Parke\n[00:25.05]Someone said they left together\n[00:29.18]I ran out the door to get her";
-        let l = clean(Lyrics { synced: parse_lrc(lrc), plain: Vec::new(), source: NETEASE.into() }, &song);
+        let l = clean(Lyrics { synced: parse_lrc(lrc), plain: Vec::new(), source: NETEASE.into(), translation: Vec::new() }, &song);
         assert_eq!(l.synced.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>(), ["Someone said they left together", "I ran out the door to get her"]);
         assert!(same_song(&song, "The Less I Know The Better (Explicit)", Some(218.9)));
         assert!(!same_song(&song, "The Less I Know The Better", Some(370.0)));

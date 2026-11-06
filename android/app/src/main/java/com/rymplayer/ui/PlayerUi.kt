@@ -313,7 +313,12 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
     if (l.synced.isEmpty()) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp)) {
             item { Text(tr("These lyrics aren't synced to the song"), color = sung, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp)) }
-            itemsIndexed(l.plain) { _, s -> Text(s, color = Color.White, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp)) }
+            itemsIndexed(l.plain) { i, s ->
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    Text(s, color = Color.White, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold)
+                    vm.lyricsTranslation.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { Text(it, color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold) }
+                }
+            }
             item { Text("${tr("Lyrics from")} ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp)) }
         }
         return
@@ -336,14 +341,13 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
                 else -> next
             }
             val color by animateColorAsState(target, tween(350), label = "line")
-            Text(
-                line.ifEmpty { "♪" },
-                color = color,
-                fontSize = 26.sp,
-                lineHeight = 32.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.fillMaxWidth().clickable { vm.player.seekTo(time) },
-            )
+            Column(Modifier.fillMaxWidth().clickable { vm.player.seekTo(time) }) {
+                Text(line.ifEmpty { "♪" }, color = color, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
+                // A Japanese song's English, small under the line.
+                vm.lyricsTranslation.getOrNull(i)?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, color = color.copy(alpha = 0.8f), fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
         }
         item { Text("${tr("Lyrics from")} ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
     }

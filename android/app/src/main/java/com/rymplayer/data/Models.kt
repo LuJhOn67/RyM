@@ -29,7 +29,10 @@ data class Lyrics(
     val synced: List<Pair<Float, String>>,
     val plain: List<String>,
     val source: String,
-)
+) {
+    /** English under each line (Japanese songs), as many as the lines shown. Not part of equality: the same lyrics, translated or not. */
+    var translation: List<String> = emptyList()
+}
 
 const val LIKED_ID = "LM"
 
