@@ -733,29 +733,7 @@ component Lyrics inherits Rectangle {
                         font-weight: 700;
                         wrap: word-wrap;
                         horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
-                        color: l.state == 1 ? Theme.text.with-alpha(App.karaoke && one-line ? 0.42 : 1) : (l.state == 2 ? Theme.text.with-alpha(0.6) : Theme.text.with-alpha(0.32));
-                        animate color { duration: 380ms; easing: ease-out; }
-                        // One row of text (a wrapped line isn't filled: it would fill the wrong row).
-                        property <bool> one-line: self.preferred-height < self.font-size * 1.8;
-                    }
-                    // Karaoke: the sung part in full white, from where the line starts (the right
-                    // for Arabic), easing between the ticks.
-                    if l.state == 1 && App.karaoke && line.one-line: Rectangle {
-                        property <length> text-w: min(line.preferred-width, parent.width);
-                        property <length> fill: self.text-w * App.line-progress;
-                        animate fill { duration: 120ms; }
-                        x: l.rtl ? parent.width - self.fill : 0;
-                        width: self.fill;
-                        clip: true;
-                        Text {
-                            x: l.rtl ? -(parent.text-w - parent.fill) : 0;
-                            width: parent.text-w;
-                            text: l.text;
-                            font-size: line.font-size;
-                            font-weight: 700;
-                            horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
-                            color: Theme.text;
-                        }
+                        color: Theme.text;
                     }
                     TouchArea {
                         mouse-cursor: pointer;
@@ -767,16 +745,14 @@ component Lyrics inherits Rectangle {
                     font-size: App.lyrics-size * 0.55px * Ui.k;
                     wrap: word-wrap;
                     horizontal-alignment: Ui.start;
-                    color: Theme.accent.with-alpha(l.state == 1 ? 1 : 0.6);
-                    animate color { duration: 380ms; }
+                    color: Theme.text;
                 }
                 if l.tr != "": Text {
                     text: l.tr;
                     font-size: App.lyrics-size * 0.55px * Ui.k;
                     wrap: word-wrap;
                     horizontal-alignment: Ui.start;
-                    color: Theme.dim.with-alpha(l.state == 1 ? 1 : 0.6);
-                    animate color { duration: 380ms; }
+                    color: Theme.text;
                 }
             }
         }

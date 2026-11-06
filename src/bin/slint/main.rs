@@ -1042,7 +1042,6 @@ fn fill_settings(st: &Shared) {
         choice("sleep", "Sleep timer", sleep),
         head("Lyrics"),
         choice("lyrics-size", "Lyrics size", format!("{} px", c.lyrics_font)),
-        switch("karaoke", "Karaoke", "The sung line fills in as it's sung", c.karaoke),
         switch("translate", "Translate Japanese lyrics", "English under each Japanese line", c.lyrics_translation),
         switch("romaji", "Romaji", "Japanese lines in Latin letters under them", c.romaji),
         switch("float", "Floating lyrics", "The sung line in a small window above the others", c.lyrics_overlay),
@@ -2956,10 +2955,15 @@ fn handle(st: &Shared, ev: Ev) {
 /// Draws the window with sample songs into a PNG with the software renderer (no window).
 fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     use slint::platform::software_renderer::{MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType};
+    // A clock of its own, so animations can be stepped through (a second between frames).
+    static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     struct Headless(Rc<MinimalSoftwareWindow>);
     impl slint::platform::Platform for Headless {
         fn create_window_adapter(&self) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
             Ok(self.0.clone())
+        }
+        fn duration_since_start(&self) -> Duration {
+            Duration::from_millis(CLOCK.load(std::sync::atomic::Ordering::Relaxed))
         }
     }
     let (w, h) = (1600u32, 1024u32);
@@ -3041,7 +3045,8 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     window.set_size(slint::PhysicalSize::new(w, h));
     let mut buf = vec![PremultipliedRgbaColor::default(); (w * h) as usize];
     // Twice: the first frame lays out, the second has the scale in place.
-    for _ in 0..2 {
+    for _ in 0..3 {
+        CLOCK.fetch_add(1000, std::sync::atomic::Ordering::Relaxed);
         slint::platform::update_timers_and_animations();
         window.request_redraw();
         window.draw_if_needed(|r| {
