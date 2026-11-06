@@ -247,6 +247,10 @@ fn main() {
     stream::download_best(config.download_best);
     stream::download_parallel(config.download_connections, config.download_piece_mb);
 
+    // Skia draws text sharper than the default renderer; the default stays if Skia can't start.
+    if let Err(e) = slint::BackendSelector::new().renderer_name("skia".into()).select() {
+        log(&format!("skia renderer not available: {e}"));
+    }
     let ui = AppWindow::new().expect("window");
     let st = build(&ui, config);
     STATE.with(|s| *s.borrow_mut() = Some(st.clone()));

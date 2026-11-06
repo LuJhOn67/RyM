@@ -732,8 +732,8 @@ component Lyrics inherits Rectangle {
     property <int> line: App.lyric-line;
     changed line => {
         if (self.line >= 0) {
-            flick.content-y = max(flick.height - flick.content-height,
-                min(0px, -(self.line * (root.line-h + 10px * Ui.k)) + flick.height / 3));
+            flick.content-y = round(max(flick.height - flick.content-height,
+                min(0px, -(self.line * (root.line-h + 10px * Ui.k)) + flick.height / 3)) / 1px) * 1px;
         }
     }
 }
@@ -1616,7 +1616,7 @@ component WatchPage inherits Rectangle {
 
 // The player along the bottom (RyM Wide, away from the watch page).
 component BottomBar inherits Rectangle {
-    height: 76px * Ui.k;
+    height: 80px * Ui.k;
     background: Theme.raised;
     // The progress along its top: click to seek.
     Rectangle {
@@ -1635,43 +1635,54 @@ component BottomBar inherits Rectangle {
             clicked => { App.seek(max(0, min(1, (Ui.rtl ? root.width - self.mouse-x : self.mouse-x) / root.width)) * App.duration); }
         }
     }
+    // Everything in the middle of the bar's height (under the progress line).
     HorizontalLayout {
-        padding-left: 16px * Ui.k;
-        padding-right: 16px * Ui.k;
-        spacing: 14px * Ui.k;
+        y: 3px * Ui.k;
+        height: parent.height - 3px * Ui.k;
+        padding-left: 18px * Ui.k;
+        padding-right: 18px * Ui.k;
+        spacing: 16px * Ui.k;
+        // Previous / play / next, and the time.
         HorizontalLayout {
             alignment: start;
-            spacing: 6px * Ui.k;
-            Icon { size: 44px * Ui.k; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } }
-            Icon { size: 54px * Ui.k; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg"); clicked => { App.toggle-play(); } }
-            Icon { size: 44px * Ui.k; source: @image-url("icons/next.svg"); clicked => { App.next(); } }
-            Text { text: App.pos-text + " / " + App.len-text; font-size: 14px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+            spacing: 10px * Ui.k;
+            VerticalLayout { alignment: center; Icon { size: 42px * Ui.k; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } } }
+            VerticalLayout { alignment: center; Icon { size: 52px * Ui.k; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg"); clicked => { App.toggle-play(); } } }
+            VerticalLayout { alignment: center; Icon { size: 42px * Ui.k; source: @image-url("icons/next.svg"); clicked => { App.next(); } } }
+            VerticalLayout {
+                alignment: center;
+                padding-left: 6px * Ui.k;
+                Text { text: App.pos-text + " / " + App.len-text; font-size: 15px * Ui.k; color: Theme.dim; }
+            }
         }
+        // The song: its cover, names and heart, in the middle; a click opens it.
         Rectangle {
             horizontal-stretch: 1;
             HorizontalLayout {
-                spacing: 12px * Ui.k;
                 alignment: center;
-                Cover { width: 52px * Ui.k; height: 52px * Ui.k; source: App.cover; }
+                spacing: 14px * Ui.k;
+                VerticalLayout { alignment: center; Cover { width: 54px * Ui.k; height: 54px * Ui.k; source: App.cover; } }
                 VerticalLayout {
                     alignment: center;
+                    spacing: 4px * Ui.k;
                     max-width: 420px * Ui.k;
                     Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 17px * Ui.k; font-weight: 700; color: Theme.text; overflow: elide; }
                     Text { text: App.artist; font-size: 14px * Ui.k; color: Theme.dim; overflow: elide; }
                 }
-                Icon { size: 40px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: Theme.accent; clicked => { App.like-now(); } }
+                VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: Theme.accent; clicked => { App.like-now(); } } }
             }
             TouchArea {
-                width: parent.width * 0.6;
-                x: parent.width * 0.2;
+                width: parent.width * 0.5;
+                x: parent.width * 0.25;
                 mouse-cursor: pointer;
                 clicked => { App.go(0); }
             }
         }
+        // Repeat and the volume.
         HorizontalLayout {
             alignment: end;
-            spacing: 6px * Ui.k;
-            Icon { size: 40px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one ? Theme.accent : Theme.icon; clicked => { App.repeat(); } }
+            spacing: 10px * Ui.k;
+            VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one ? Theme.accent : Theme.icon; clicked => { App.repeat(); } } }
             VerticalLayout { alignment: center; FlatVolume { width: 120px * Ui.k; } }
         }
     }
@@ -1683,13 +1694,13 @@ component WideLayout inherits Rectangle {
     WideSide {
         x: Ui.rtl ? parent.width - self.width : 0;
         y: 64px * Ui.k;
-        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 76px * Ui.k);
+        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k);
     }
     Rectangle {
         x: Ui.rtl ? 0 : 250px * Ui.k;
         y: 64px * Ui.k;
         width: parent.width - 250px * Ui.k;
-        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 76px * Ui.k);
+        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k);
         if App.page == 0: WatchPage { width: 100%; height: 100%; }
         if App.page != 0: Pages { width: 100%; height: 100%; }
     }
