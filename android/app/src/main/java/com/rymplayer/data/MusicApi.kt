@@ -241,6 +241,37 @@ class MusicApi(private val cookie: String?) {
     suspend fun search(q: String): List<Track> =
         songRows(post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }))
 
+    /**
+     * Tells YouTube Music the song was played, so it shows in the account's history on every
+     * device (the PC apps report theirs the same way). Signed in only.
+     */
+    suspend fun reportPlay(videoId: String) {
+        if (!signedIn) return
+        // YouTube wants the day the player code is from; yesterday's date works, as for the PC apps.
+        val day = (System.currentTimeMillis() / 86_400_000L - 1).toInt()
+        val player = post("player", buildJsonObject {
+            put("videoId", videoId)
+            putJsonObject("playbackContext") { putJsonObject("contentPlaybackContext") { put("signatureTimestamp", day) } }
+        })
+        val base = player.at("playbackTracking/videostatsPlaybackUrl/baseUrl").str ?: return
+        val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        val cpn = (1..16).map { chars.random() }.joinToString("")
+        val url = okhttp3.HttpUrl.Companion.run { base.toHttpUrl() }.newBuilder()
+            .addQueryParameter("ver", "2").addQueryParameter("c", "WEB_REMIX").addQueryParameter("cpn", cpn).build()
+        withContext(Dispatchers.IO) {
+            val req = Request.Builder().url(url)
+                .header("User-Agent", UA)
+                .header("Origin", ORIGIN)
+                .header("X-Goog-AuthUser", "0")
+                .apply {
+                    cookie?.let { header("Cookie", it) }
+                    authHeader()?.let { header("Authorization", it) }
+                }
+                .build()
+            http.newCall(req).execute().close()
+        }
+    }
+
     /** The signed-in account's name and "@handle" (for RyM Link: devices of one account find each other). */
     suspend fun account(): Pair<String, String>? {
         val h = post("account/account_menu", buildJsonObject {}).findAll("activeAccountHeaderRenderer").firstOrNull() ?: return null

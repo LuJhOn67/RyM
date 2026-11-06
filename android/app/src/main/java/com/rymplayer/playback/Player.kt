@@ -343,6 +343,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             if (from != null) c.setMediaItem(item, from) else c.setMediaItem(item)
             c.prepare()
             c.play()
+            // In the account's history, so the PC shows it too.
+            reportPlay(t)
             // The next song's link is looked up while this one plays.
             Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
             // Last song of the queue: a radio of similar songs follows it.
@@ -387,7 +389,15 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         onTrackChanged(t)
         Streams.prefetchLinks(queue.drop(i + 1).take(2).map { it.videoId })
         keepGoing(t)
+        reportPlay(t)
         return mediaItem(t, url)
+    }
+
+    private fun reportPlay(t: Track) {
+        if (!::api.isInitialized || !com.rymplayer.data.isYouTube(t.videoId)) return
+        scope.launch {
+            runCatching { api.reportPlay(t.videoId) }.onFailure { android.util.Log.w("RyM", "history: not reported (${it.message})") }
+        }
     }
 
     fun pause() {

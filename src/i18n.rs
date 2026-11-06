@@ -103,6 +103,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "Mini player" => "المشغّل الصغير",
         "How big the lyrics are on the song's page" => "حجم الكلمات في صفحة الأغنية",
         "Save Up next as a playlist" => "حفظ التالي كقائمة تشغيل",
         "Nothing to save" => "لا شيء للحفظ",

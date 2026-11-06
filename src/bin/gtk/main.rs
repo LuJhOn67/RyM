@@ -202,6 +202,7 @@ window, .rym { background: @bg@; color: @text@; }
 window.csd, window.csd:backdrop, window.solid-csd { box-shadow: none; margin: 0; border-radius: 0; outline: none; }
 .avatar { border-radius: 999px; }
 window.overlay-win, .overlay-win { background: rgba(14,14,18,0.72); border-radius: 16px; }
+window.mini-win { border-radius: 14px; border: 1px solid @divider@; }
 .overlay-now { color: #ffffff; font-size: 22px; font-weight: 800; }
 .overlay-next { color: rgba(255,255,255,0.6); font-size: 15px; font-weight: 600; }
 button.src { background: @input@; color: @dim@; border: none; box-shadow: none; border-radius: 14px; padding: 2px 12px; min-height: 0; font-size: 12px; font-weight: 700; }
@@ -595,6 +596,9 @@ struct Ui {
     link_seen: Option<(String, String)>,
     /// Up next changed while it wasn't on screen: it's built when it shows.
     queue_dirty: bool,
+    /// The mini player: its window, cover, names and play button; and the song it shows.
+    mini: Option<(gtk::Window, gtk::Picture, Label, Label, Button)>,
+    mini_for: Option<(String, bool)>,
     /// The system's media controls, and what they were last told (song, playing).
     media: Option<souvlaki::MediaControls>,
     media_sent: Option<(String, bool)>,
@@ -1153,6 +1157,7 @@ fn build(app: &Application) {
     sleep_button.set_tooltip_text(Some(tr("Sleep timer")));
     sleep_button.add_css_class("flat");
     let overlay_toggle = icon_button("view-pin-symbolic", tr("Floating lyrics"), &["dim"]);
+    let mini_toggle = icon_button("view-restore-symbolic", tr("Mini player"), &["dim"]);
     let vol_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.set_draw_value(false);
@@ -1197,6 +1202,7 @@ fn build(app: &Application) {
         right.append(&speed_button);
         right.append(&sleep_button);
         right.append(&overlay_toggle);
+        right.append(&mini_toggle);
         right.append(&lyrics_toggle);
         bar.set_margin_start(16);
         bar.set_margin_end(16);
@@ -1230,6 +1236,7 @@ fn build(app: &Application) {
         right.append(&speed_button);
         right.append(&sleep_button);
         right.append(&overlay_toggle);
+        right.append(&mini_toggle);
         right.append(&lyrics_toggle);
         right.append(&vol_icon);
         right.append(&volume);
@@ -1365,6 +1372,8 @@ fn build(app: &Application) {
         queue_dirty: false,
         media: None,
         media_sent: None,
+        mini: None,
+        mini_for: None,
     }));
     if ui.borrow().audio.is_none() {
         toast(&ui, tr("No audio device found"));
@@ -1555,6 +1564,13 @@ fn build(app: &Application) {
     }
     {
         let ui = ui.clone();
+        mini_toggle.connect_clicked(move |_| {
+            let open = ui.borrow().mini.is_some();
+            show_mini(&ui, !open);
+        });
+    }
+    {
+        let ui = ui.clone();
         bar_more.connect_clicked(move |b| {
             if let Some(t) = now_playing(&ui) {
                 song_menu(&ui, b.upcast_ref(), b.width() as f64 / 2.0, b.height() as f64 / 2.0, &t);
@@ -1704,7 +1720,14 @@ fn build(app: &Application) {
         let ui = ui.clone();
         window.connect_close_request(move |_| {
             rymplayer::stats::flush();
-            if let Some((w, ..)) = ui.borrow_mut().overlay.take() {
+            let (overlay, mini) = {
+                let mut s = ui.borrow_mut();
+                (s.overlay.take(), s.mini.take())
+            };
+            if let Some((w, ..)) = overlay {
+                w.destroy();
+            }
+            if let Some((w, ..)) = mini {
                 w.destroy();
             }
             save_session(&ui);
@@ -2364,6 +2387,12 @@ const OVERLAY_TITLE: &str = "RyM floating lyrics";
 /// Windows: the floating lyrics window above every other (and clicks through it, when asked).
 #[cfg(windows)]
 fn overlay_on_top(click_through: bool) {
+    window_on_top(OVERLAY_TITLE, click_through);
+}
+
+/// Windows: one of our small windows (by its title) above every other, out of the taskbar.
+#[cfg(windows)]
+fn window_on_top(window_title: &str, click_through: bool) {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn FindWindowW(class: *const u16, title: *const u16) -> isize;
@@ -2371,7 +2400,7 @@ fn overlay_on_top(click_through: bool) {
         fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
         fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
     }
-    let title: Vec<u16> = OVERLAY_TITLE.encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = window_title.encode_utf16().chain(Some(0)).collect();
     // SAFETY: plain Win32 calls with a NUL-terminated title; a missing window gives 0 and is skipped.
     unsafe {
         let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
@@ -4563,6 +4592,125 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     account.set_visible(true);
 }
 
+const MINI_TITLE: &str = "RyM mini player";
+
+/// The mini player: a small window above the others with the cover, the song, and
+/// previous / play / next (dragged by the cover or the names).
+fn show_mini(ui: &Shared, on: bool) {
+    if !on {
+        let old = ui.borrow_mut().mini.take();
+        if let Some((w, ..)) = old {
+            w.destroy();
+        }
+        return;
+    }
+    if ui.borrow().mini.is_some() {
+        return;
+    }
+    let win = gtk::Window::new();
+    win.set_title(Some(MINI_TITLE));
+    win.set_decorated(false);
+    win.set_default_size(380, 76);
+    win.set_resizable(false);
+    win.add_css_class("rym");
+    win.add_css_class("mini-win");
+    let row = gtk::Box::new(Orientation::Horizontal, 10);
+    row.set_margin_top(8);
+    row.set_margin_bottom(8);
+    row.set_margin_start(8);
+    row.set_margin_end(6);
+    let art = picture(60, "cover");
+    let names = gtk::Box::new(Orientation::Vertical, 2);
+    names.set_hexpand(true);
+    names.set_valign(Align::Center);
+    let title = label(tr("Nothing playing"), &["title"]);
+    let artist = label("", &["dim", "small"]);
+    names.append(&title);
+    names.append(&artist);
+    let prev = icon_button("media-skip-backward-symbolic", tr("Previous"), &[]);
+    let play = icon_button("media-playback-start-symbolic", tr("Play / pause"), &[]);
+    let next = icon_button("media-skip-forward-symbolic", tr("Next"), &[]);
+    let close = icon_button("window-close-symbolic", tr("Close"), &["dim"]);
+    for b in [&prev, &play, &next, &close] {
+        b.set_valign(Align::Center);
+    }
+    row.append(&art);
+    row.append(&names);
+    row.append(&prev);
+    row.append(&play);
+    row.append(&next);
+    row.append(&close);
+    win.set_child(Some(&row));
+    // Dragged by the cover or the names (the buttons keep their clicks).
+    for handle in [art.upcast_ref::<gtk::Widget>(), names.upcast_ref::<gtk::Widget>()] {
+        let press = gtk::GestureClick::new();
+        let w = win.clone();
+        press.connect_pressed(move |g, _, x, y| {
+            if let (Some(surface), Some(device)) = (w.surface(), g.device())
+                && let Ok(top) = surface.downcast::<gdk::Toplevel>()
+            {
+                top.begin_move(&device, g.current_button() as i32, x, y, g.current_event_time());
+            }
+        });
+        handle.add_controller(press);
+    }
+    {
+        let ui = ui.clone();
+        prev.connect_clicked(move |_| previous(&ui));
+    }
+    {
+        let ui = ui.clone();
+        play.connect_clicked(move |_| toggle_playback(&ui));
+    }
+    {
+        let ui = ui.clone();
+        next.connect_clicked(move |_| skip(&ui));
+    }
+    {
+        let ui = ui.clone();
+        close.connect_clicked(move |_| show_mini(&ui, false));
+    }
+    win.present();
+    #[cfg(windows)]
+    glib::timeout_add_local_once(Duration::from_millis(200), || window_on_top(MINI_TITLE, false));
+    let mut s = ui.borrow_mut();
+    s.mini = Some((win, art, title, artist, play));
+    s.mini_for = None;
+}
+
+/// The mini player follows the song and play / pause (touched only when they change).
+fn mini_sync(ui: &Shared) {
+    let mut wants = Wants::new();
+    {
+        let Ok(mut s) = ui.try_borrow_mut() else { return };
+        let Some((_, art, title, artist, play)) = s.mini.clone() else { return };
+        let Some(t) = s.q.now().cloned() else { return };
+        let playing = s.audio.as_ref().is_some_and(|a| a.is_playing());
+        let key = (t.video_id.clone(), playing);
+        if s.mini_for.as_ref() == Some(&key) {
+            return;
+        }
+        let new_song = s.mini_for.as_ref().is_none_or(|(id, _)| *id != t.video_id);
+        s.mini_for = Some(key);
+        play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
+        if new_song {
+            title.set_text(&t.title);
+            artist.set_text(&t.artist);
+            let pic = cover(&s, t.thumb.as_ref(), ROW_PX, 60, "cover", &mut wants);
+            match pic.paintable() {
+                Some(p) => art.set_paintable(Some(&p)),
+                None => {
+                    art.set_paintable(gdk::Paintable::NONE);
+                    if let Some((url, px, _)) = wants.pop() {
+                        wants.push((url, px, art.clone()));
+                    }
+                }
+            }
+        }
+    }
+    want_covers(ui, wants);
+}
+
 /// "Save Up next as a playlist": a name, then a new playlist in the account with the playing song
 /// and every song after it.
 fn save_queue_dialog(ui: &Shared) {
@@ -5423,6 +5571,7 @@ fn poll_events(ui: &Shared) {
     }
     tick(ui);
     media_sync(ui);
+    mini_sync(ui);
 }
 
 #[cfg(test)]

@@ -94,7 +94,17 @@ pub async fn refresh(api: Api) -> Result<Refreshed> {
     new.retain(|t| !known.contains(&t.video_id));
     let familiar = familiar(&liked_list, &mut memory);
 
-    let recent_row: Vec<Track> = recent.into_iter().take(RECENT_ROW).map(|t| Track { album: RECENTLY_PLAYED.into(), ..t }).collect();
+    // Played here or on the phone: the account's history first (every device of the account
+    // reports its plays there), then songs known only on this device.
+    let mut seen_row = HashSet::new();
+    let recent_row: Vec<Track> = history
+        .iter()
+        .cloned()
+        .chain(recent)
+        .filter(|t| t.link.is_none() && seen_row.insert(t.video_id.clone()))
+        .take(RECENT_ROW)
+        .map(|t| Track { album: RECENTLY_PLAYED.into(), ..t })
+        .collect();
     let mut skip: HashSet<String> = recent_row.iter().map(|t| t.video_id.clone()).collect();
     skip.extend(fresh_seeds.iter().cloned());
     let for_you = mix(fresh, new, familiar, &skip, FIRST_MIX, FOR_YOU);
@@ -514,3 +524,18 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod history_check {
+    /// Read only: the account history's newest songs (a phone's plays show here too):
+    /// `cargo test --lib live_history_top -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_history_top() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).expect("signed in");
+        let api = crate::api::Api::with_cookie(cookie).await.unwrap();
+        for t in api.history().await.unwrap().iter().take(3) {
+            println!("history: {} - {} ({})", t.title, t.artist, t.album);
+        }
+    }
+}
