@@ -2724,7 +2724,8 @@ fn shelf_name(name: &str) -> &str {
         feed::RECENTLY_PLAYED => tr("Recently played"),
         feed::FOR_YOU => tr("For you"),
         feed::MORE_FOR_YOU => tr("More for you"),
-        other => other,
+        // A second kind's own shelf ("Husseini for you"...).
+        other => rymplayer::ram_points::SHELVES.iter().find(|s| **s == other).map_or(other, |s| tr(s)),
     }
 }
 
@@ -3157,6 +3158,11 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Theme"), tr("Shared with RyM Iced Player"), &theme));
+    page.append(&setting_row(
+        tr("Suggestions"),
+        tr("For you and Up next by points: new songs, the same artist and kind (Husseini brings only Husseini, songs only songs)"),
+        &label(rymplayer::ram_points::NAME, &["title"]),
+    ));
 
     let source = gtk::DropDown::from_strings(&[tr("Auto"), "yt-dlp", "InnerTube"]);
     source.set_selected(match config.source {
@@ -4276,7 +4282,7 @@ fn continue_with_radio(ui: &Shared) {
         }
         s.radio_pending = true;
     }
-    post(ui, async move { Ev::Radio(rymplayer::radio::for_track(api, t).await) });
+    post(ui, async move { Ev::Radio(rymplayer::radio::with_artist(api, t).await) });
 }
 
 fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
@@ -5471,15 +5477,14 @@ fn poll_events(ui: &Shared) {
                 ui.borrow_mut().radio_pending = false;
                 if let Ok(tracks) = result {
                     let mut s = ui.borrow_mut();
-                    // No repeats, nothing played or queued already, same artist moved up.
+                    // RaM points: only the playing song's kind, its artist and songs like it first,
+                    // nothing played or queued already, no repeats.
                     let fresh: Vec<Track> = match s.q.now().cloned() {
                         Some(seed) => {
                             let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
                             let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
-                            let similar = rymplayer::radio::tidy(tracks, &seed, &s.played, &queued, &heard);
-                            // Songs like it, with liked songs mixed in (same artist first).
                             let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
-                            rymplayer::radio::with_liked(similar, &seed, &s.liked_tracks, &skip, rymplayer::updates::now() | 1)
+                            rymplayer::ram_points::up_next(tracks, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
                         }
                         None => tracks,
                     };

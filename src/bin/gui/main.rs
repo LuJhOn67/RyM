@@ -1014,12 +1014,13 @@ impl Gui {
             Message::Radio(result) => {
                 self.radio_pending = false;
                 if let Ok(tracks) = result {
-                    // Songs like it, with liked songs mixed in (same artist first).
+                    // RaM points: only the playing song's kind, its artist and songs like it first.
                     let tracks = match self.now_playing().cloned() {
-                        Some(seed) if !self.liked_tracks.is_empty() => {
+                        Some(seed) => {
                             let skip: HashSet<String> = self.queue.iter().map(|t| t.video_id.clone()).collect();
+                            let heard = rymplayer::radio::artists_of(self.queue.iter());
                             let seed_random = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64);
-                            rymplayer::radio::with_liked(tracks, &seed, &self.liked_tracks, &skip, seed_random)
+                            rymplayer::ram_points::up_next(tracks, &seed, &self.liked_tracks, &skip, &heard, seed_random)
                         }
                         _ => tracks,
                     };

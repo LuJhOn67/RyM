@@ -409,10 +409,9 @@ impl App {
                             Some(seed) => {
                                 let queued: std::collections::HashSet<String> = self.q.songs.iter().map(|t| t.video_id.clone()).collect();
                                 let heard = rymplayer::radio::artists_of(self.q.songs.iter().take(self.q.current.map_or(0, |c| c + 1)));
-                                let similar = rymplayer::radio::tidy(tracks, &seed, &self.played, &queued, &heard);
-                                // Songs like it, with liked songs mixed in (same artist first).
+                                // RaM points: only the playing song's kind, its artist first.
                                 let skip: std::collections::HashSet<String> = self.played.union(&queued).cloned().collect();
-                                rymplayer::radio::with_liked(similar, &seed, &self.liked_tracks, &skip, rymplayer::updates::now() | 1)
+                                rymplayer::ram_points::up_next(tracks, &seed, &self.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
                             }
                             None => tracks,
                         };
@@ -1153,7 +1152,7 @@ impl App {
         }
         self.radio_pending = true;
         self.status = tr("Queue finished, continuing with radio...").into();
-        self.spawn(async move { Event::Radio(s(rymplayer::radio::for_track(api, t).await)) });
+        self.spawn(async move { Event::Radio(s(rymplayer::radio::with_artist(api, t).await)) });
     }
 
     // ------------------------------------------------------------ settings and playlists

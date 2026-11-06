@@ -23,6 +23,7 @@ pub mod page_cache;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
+pub mod ram_points;
 pub mod recent;
 pub mod session;
 pub mod soundcloud;

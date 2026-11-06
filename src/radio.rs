@@ -1,58 +1,10 @@
-//! "Up next" from YouTube Music's radio for a song (`/next` with `RDAMVM<id>`), tidied: no
-//! repeats of the same song (also under another upload), nothing already played or queued this
-//! session, long videos kept (whole albums and mixes are fine), and songs by the same artist as
-//! the one playing (or ones heard this session) moved up a little, so the mood holds.
+//! YouTube Music's radio for a song (`/next` with `RDAMVM<id>`), the songs Up next is made of,
+//! and how songs are told apart (the same song under another upload, an artist's first name).
+//! Up next itself is ranked by RaM points ([`crate::ram_points::up_next`]).
 
 use std::collections::HashSet;
 
 use crate::api::Track;
-
-/// Up next for the playing song: its radio (songs like it) with the user's liked songs mixed in,
-/// one in every three places. Liked songs by the same artist come first, then ones by artists the
-/// radio has (the same mood), then others; none already played or queued, no song twice.
-pub fn with_liked(radio: Vec<Track>, seed: &Track, liked: &[Track], skip: &HashSet<String>, mut random: u64) -> Vec<Track> {
-    let mut next = |below: usize| {
-        random ^= random << 13;
-        random ^= random >> 7;
-        random ^= random << 17;
-        (random % below.max(1) as u64) as usize
-    };
-    let seed_artist = first_artist(&seed.artist);
-    let radio_artists: HashSet<String> = radio.iter().map(|t| first_artist(&t.artist)).collect();
-    let in_radio: HashSet<&str> = radio.iter().map(|t| t.video_id.as_str()).collect();
-    let free: Vec<&Track> = liked
-        .iter()
-        .filter(|t| t.link.is_none() && t.video_id != seed.video_id && !skip.contains(&t.video_id) && !in_radio.contains(t.video_id.as_str()))
-        .collect();
-    let artist_of = |t: &&Track| first_artist(&t.artist);
-    let same: Vec<&Track> = free.iter().copied().filter(|t| !seed_artist.is_empty() && artist_of(t) == seed_artist).collect();
-    let near: Vec<&Track> = free.iter().copied().filter(|t| artist_of(t) != seed_artist && radio_artists.contains(&artist_of(t))).collect();
-    let rest: Vec<&Track> = free.iter().copied().filter(|t| artist_of(t) != seed_artist && !radio_artists.contains(&artist_of(t))).collect();
-    let mut picks: Vec<&Track> = Vec::new();
-    for mut group in [same, near, rest] {
-        for i in (1..group.len()).rev() {
-            let j = next(i + 1);
-            group.swap(i, j);
-        }
-        picks.extend(group);
-    }
-    let wanted = radio.len() / 2;
-    let mut liked_iter = picks.into_iter().take(wanted).peekable();
-    let mut out = Vec::new();
-    let mut seen_keys: HashSet<String> = HashSet::new();
-    for (i, t) in radio.into_iter().enumerate() {
-        if seen_keys.insert(same_song_key(&t)) {
-            out.push(t);
-        }
-        if i % 2 == 1
-            && let Some(l) = liked_iter.next()
-            && seen_keys.insert(same_song_key(l))
-        {
-            out.push(l.clone());
-        }
-    }
-    out
-}
 
 /// YouTube Music's radio for a song. A SoundCloud song or a file on this device has none: the
 /// radio of the same song found on YouTube Music by its name stands in.
@@ -66,9 +18,20 @@ pub async fn for_track(api: crate::api::Api, t: Track) -> anyhow::Result<Vec<Tra
     api.radio(seed.video_id).await
 }
 
-/// How many places a song by the playing artist moves up; one heard this session, one place.
-const SAME_ARTIST_LIFT: usize = 3;
-const SESSION_ARTIST_LIFT: usize = 1;
+/// The song's radio; when it has fewer than three songs by the song's artist, the artist's top
+/// songs join it (at the end: RaM points moves them up).
+pub async fn with_artist(api: crate::api::Api, t: Track) -> anyhow::Result<Vec<Track>> {
+    let mut radio = for_track(api.clone(), t.clone()).await?;
+    let artist = first_artist(&t.artist);
+    let same = radio.iter().filter(|r| first_artist(&r.artist) == artist).count();
+    if same < 3
+        && let Some(id) = t.artist_id.clone()
+        && let Ok(songs) = api.artist_songs(id).await
+    {
+        radio.extend(songs.into_iter().take(6));
+    }
+    Ok(radio)
+}
 
 /// "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload.
 pub fn same_song_key(t: &Track) -> String {
@@ -85,36 +48,6 @@ pub fn same_song_key(t: &Track) -> String {
 
 pub fn first_artist(artist: &str) -> String {
     artist.split([',', '&']).next().unwrap_or_default().trim().to_lowercase()
-}
-
-/// The radio for `seed`, tidied (see the module notes). `played` and `queued` are video ids;
-/// `session_artists` are first artists heard this session (lower case).
-pub fn tidy(radio: Vec<Track>, seed: &Track, played: &HashSet<String>, queued: &HashSet<String>, session_artists: &HashSet<String>) -> Vec<Track> {
-    let mut seen_keys: HashSet<String> = HashSet::from([same_song_key(seed)]);
-    let mut seen_ids: HashSet<String> = HashSet::from([seed.video_id.clone()]);
-    let seed_artist = first_artist(&seed.artist);
-    let mut kept: Vec<(usize, Track)> = Vec::new();
-    for t in radio {
-        if t.video_id.is_empty() || played.contains(&t.video_id) || queued.contains(&t.video_id) {
-            continue;
-        }
-        if !seen_ids.insert(t.video_id.clone()) || !seen_keys.insert(same_song_key(&t)) {
-            continue;
-        }
-        let artist = first_artist(&t.artist);
-        let lift = if !seed_artist.is_empty() && artist == seed_artist {
-            SAME_ARTIST_LIFT
-        } else if session_artists.contains(&artist) {
-            SESSION_ARTIST_LIFT
-        } else {
-            0
-        };
-        // Ranked by YouTube's order, lifted a few places; earlier stays first on a tie.
-        let place = kept.len();
-        kept.push((place.saturating_sub(lift) * 2 + usize::from(lift == 0), t));
-    }
-    kept.sort_by_key(|(rank, _)| *rank);
-    kept.into_iter().map(|(_, t)| t).collect()
 }
 
 /// First artists of `tracks` (lower case), for `session_artists`.
@@ -141,38 +74,8 @@ mod tests {
     }
 
     #[test]
-    fn repeats_and_played_songs_go_same_artist_moves_up() {
-        let seed = t("s", "Seed", "Band");
-        let radio = vec![
-            t("s", "Seed", "Band"),
-            t("a", "Alpha", "Other"),
-            t("b", "Beta (Official Video)", "Other"),
-            t("b2", "Beta [HD]", "Other"),
-            t("c", "Gamma", "Someone"),
-            t("d", "Delta", "Band"),
-            t("p", "Played", "X"),
-            t("q", "Queued", "Y"),
-        ];
-        let played = HashSet::from(["p".to_string()]);
-        let queued = HashSet::from(["q".to_string()]);
-        let out = tidy(radio, &seed, &played, &queued, &HashSet::new());
-        let ids: Vec<&str> = out.iter().map(|t| t.video_id.as_str()).collect();
-        // b2 is the same song as b; d (same artist as the seed) moved up three places.
-        assert_eq!(ids, ["d", "a", "b", "c"]);
-        // Long videos (an hour-long mix) stay.
-        assert!(out.iter().all(|t| t.duration == "1:02:03"));
-    }
-
-    #[test]
-    fn liked_songs_join_the_radio_same_artist_first() {
-        let t = |id: &str, artist: &str| t(id, id, artist);
-        let seed = t("blue", "TV Girl");
-        let radio: Vec<Track> = (0..6).map(|i| t(&format!("r{i}"), if i % 2 == 0 { "Mac DeMarco" } else { "Other" })).collect();
-        let liked = vec![t("x", "Far Away"), t("tv1", "TV Girl"), t("mac", "Mac DeMarco"), t("blue", "TV Girl"), t("played", "TV Girl")];
-        let skip: HashSet<String> = ["played".to_string()].into();
-        let out = with_liked(radio, &seed, &liked, &skip, 0x9E37_79B9_7F4A_7C15);
-        let ids: Vec<&str> = out.iter().map(|t| t.video_id.as_str()).collect();
-        // One in three places, the same artist first, then an artist from the radio.
-        assert_eq!(ids, ["r0", "r1", "tv1", "r2", "r3", "mac", "r4", "r5", "x"]);
+    fn same_song_under_another_upload() {
+        assert_eq!(same_song_key(&t("a", "Beta (Official Video)", "Other, B")), same_song_key(&t("b", "Beta [HD]", "Other")));
+        assert_ne!(same_song_key(&t("a", "Beta", "Other")), same_song_key(&t("b", "Beta", "Someone")));
     }
 }
