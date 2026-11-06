@@ -29,6 +29,8 @@ music_api = { package = "ytmapi-rs", version = "0.3.3", features = ["reqwest"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # The GTK 4 window app (needs GTK 4 to build): `cargo build --release --features gtk-ui --bin RymPlayer-GTK`.
 gtk = { package = "gtk4", version = "0.11.5", optional = true, features = ["v4_12"] }
+# Media keys and the system's media controls (Windows: the volume flyout; Linux: MPRIS).
+souvlaki = { version = "0.9", optional = true, default-features = false, features = ["use_zbus"] }
 lofty = "0.25.5"
 ar-reshaper = "1.5.0"
 unicode-bidi = "0.3.18"
@@ -38,7 +40,7 @@ discord-rich-presence = "1.1"
 [features]
 default = ["webview"]
 webview = ["dep:wry", "dep:tao"]
-gtk-ui = ["dep:gtk"]
+gtk-ui = ["dep:gtk", "dep:souvlaki"]
 
 [profile.release]
 # Smallest files: optimize for size, whole-program LTO, no unwinding tables, no symbols.

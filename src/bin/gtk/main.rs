@@ -410,6 +410,8 @@ enum Ev {
     VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
     /// Every source's lyrics for a song (the source switcher).
     LyricsSources(String, Vec<Lyrics>),
+    /// A media key, or the system's media controls (Windows' volume flyout, MPRIS on Linux).
+    MediaKey(souvlaki::MediaControlEvent),
     /// English for the lyrics of a song (Japanese songs), lined up with their lines.
     Translated(String, String, Vec<String>),
     /// Search suggestions for what was typed (the account's search history first).
@@ -572,6 +574,9 @@ struct Ui {
     link_seen: Option<(String, String)>,
     /// Up next changed while it wasn't on screen: it's built when it shows.
     queue_dirty: bool,
+    /// The system's media controls, and what they were last told (song, playing).
+    media: Option<souvlaki::MediaControls>,
+    media_sent: Option<(String, bool)>,
 }
 
 type Shared = Rc<RefCell<Ui>>;
@@ -1333,6 +1338,8 @@ fn build(app: &Application) {
         suggest_wait: None,
         link_seen: None,
         queue_dirty: false,
+        media: None,
+        media_sent: None,
     }));
     if ui.borrow().audio.is_none() {
         toast(&ui, tr("No audio device found"));
@@ -1678,6 +1685,13 @@ fn build(app: &Application) {
     log(&format!("start: window built after {} ms", since_start()));
     render(&ui);
     watch_frames(&ui);
+    {
+        let ui2 = ui.clone();
+        window.connect_map(move |_| {
+            let ui = ui2.clone();
+            glib::idle_add_local_once(move || start_media_controls(&ui));
+        });
+    }
     #[cfg(windows)]
     redraw_after_display_changes(&ui.borrow().w.window);
     window.present();
@@ -4503,6 +4517,120 @@ fn show_account(ui: &Shared, who: Option<&rymplayer::api::Account>, photo: Optio
     account.set_visible(true);
 }
 
+/// The media keys and the system's media controls (Windows: the volume flyout with the song and
+/// its cover; Linux: MPRIS), started once the window is up.
+fn start_media_controls(ui: &Shared) {
+    if ui.borrow().media.is_some() {
+        return;
+    }
+    #[cfg(windows)]
+    let hwnd = main_window_handle();
+    #[cfg(not(windows))]
+    let hwnd = None;
+    if cfg!(windows) && hwnd.is_none() {
+        return;
+    }
+    let config = souvlaki::PlatformConfig { display_name: "RyM", dbus_name: "rym_player", hwnd };
+    let Ok(mut controls) = souvlaki::MediaControls::new(config) else {
+        log("media controls: not available");
+        return;
+    };
+    let tx = ui.borrow().tx.clone();
+    if controls.attach(move |e| {
+        let _ = tx.send(Ev::MediaKey(e));
+    }).is_err() {
+        log("media controls: couldn't attach");
+        return;
+    }
+    let mut s = ui.borrow_mut();
+    s.media = Some(controls);
+    s.media_sent = None;
+}
+
+/// This app's main window (Windows): its visible top window that isn't the floating lyrics.
+#[cfg(windows)]
+fn main_window_handle() -> Option<*mut std::ffi::c_void> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn EnumWindows(each: unsafe extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn GetWindowTextW(hwnd: isize, text: *mut u16, max: i32) -> i32;
+    }
+    unsafe extern "system" fn each(hwnd: isize, found: isize) -> i32 {
+        let mut pid = 0u32;
+        // SAFETY: plain Win32 calls on a window handle Windows just gave; `found` is our isize.
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid != std::process::id() || IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+            let mut buf = [0u16; 256];
+            let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256).max(0) as usize;
+            let title = String::from_utf16_lossy(&buf[..n]);
+            if title.is_empty() || title == OVERLAY_TITLE {
+                return 1;
+            }
+            *(found as *mut isize) = hwnd;
+        }
+        0
+    }
+    let mut found: isize = 0;
+    // SAFETY: the callback writes only to `found`, which outlives the call.
+    unsafe { EnumWindows(each, &mut found as *mut isize as isize) };
+    (found != 0).then_some(found as *mut std::ffi::c_void)
+}
+
+/// A media key pressed (or the system's controls used).
+fn media_key(ui: &Shared, key: souvlaki::MediaControlEvent) {
+    use souvlaki::MediaControlEvent as K;
+    let playing = ui.borrow().audio.as_ref().is_some_and(|a| a.is_playing());
+    match key {
+        K::Toggle => toggle_playback(ui),
+        K::Play if !playing => toggle_playback(ui),
+        K::Pause | K::Stop if playing => toggle_playback(ui),
+        K::Next => skip(ui),
+        K::Previous => previous(ui),
+        K::SetPosition(souvlaki::MediaPosition(at)) => {
+            if let Some(a) = &ui.borrow().audio {
+                a.seek(at.as_secs_f32());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The system's media controls follow the song and play/pause (told only when those change).
+fn media_sync(ui: &Shared) {
+    let Ok(mut s) = ui.try_borrow_mut() else { return };
+    if s.media.is_none() {
+        return;
+    }
+    let Some(t) = s.q.now().cloned() else { return };
+    let playing = s.audio.as_ref().is_some_and(|a| a.is_playing());
+    let key = (t.video_id.clone(), playing);
+    if s.media_sent.as_ref() == Some(&key) {
+        return;
+    }
+    let pos = s.audio.as_ref().map_or(0.0, |a| a.position());
+    let dur = s.audio.as_ref().and_then(|a| a.duration()).or_else(|| parse_duration(&t.duration));
+    let new_song = s.media_sent.as_ref().is_none_or(|(id, _)| *id != t.video_id);
+    s.media_sent = Some(key);
+    let cover = t.thumb.as_ref().map(|u| rymplayer::api::thumb_sized(u, 544));
+    let Some(m) = s.media.as_mut() else { return };
+    if new_song {
+        let _ = m.set_metadata(souvlaki::MediaMetadata {
+            title: Some(&t.title),
+            artist: Some(&t.artist),
+            album: (!t.album.is_empty()).then_some(t.album.as_str()),
+            cover_url: cover.as_deref(),
+            duration: dur.map(Duration::from_secs_f32),
+        });
+    }
+    let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f32(pos.max(0.0))));
+    let _ = m.set_playback(if playing { souvlaki::MediaPlayback::Playing { progress } } else { souvlaki::MediaPlayback::Paused { progress } });
+}
+
 /// RyM Link: a phone of the same account plays while this app is idle: the music moves here
 /// (or, with "ask" chosen, a question first). Once per song and phone.
 fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
@@ -5023,6 +5151,7 @@ fn poll_events(ui: &Shared) {
             }
             Ev::Installed(Err(e)) => toast(ui, &format!("{}: {e}", tr("Couldn't update"))),
             Ev::Peer(note, ip) => heard_peer(ui, note, ip),
+            Ev::MediaKey(key) => media_key(ui, key),
             Ev::TookOver(device, Ok(state)) => {
                 let current = state.current;
                 let songs: Vec<Track> = state.songs.into_iter().map(Track::from).collect();
@@ -5169,6 +5298,7 @@ fn poll_events(ui: &Shared) {
         sync_likes(ui);
     }
     tick(ui);
+    media_sync(ui);
 }
 
 #[cfg(test)]
