@@ -173,6 +173,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lyrics_pill", lyricsPill).apply()
     }
 
+    /** RaM points: For you keeps to this kind (null: every kind heard). */
+    var onlyKind by mutableStateOf(com.rymplayer.data.RamPoints.onlyKind(app))
+        private set
+
+    fun cycleOnlyKind() {
+        val all = listOf<com.rymplayer.data.RamPoints.Kind?>(null) + com.rymplayer.data.RamPoints.Kind.entries
+        onlyKind = all[(all.indexOf(onlyKind) + 1) % all.size]
+        com.rymplayer.data.RamPoints.setOnlyKind(getApplication(), onlyKind)
+    }
+
+    /** The user says this song's artist is of [kind] (RaM points keeps it). */
+    fun setArtistKind(t: Track, kind: com.rymplayer.data.RamPoints.Kind) {
+        com.rymplayer.data.RamPoints.correct(getApplication(), t, kind)
+        status = "${com.rymplayer.data.Radio.firstArtist(t.artist).ifEmpty { t.artist }}: ${tr(kind.title)}"
+    }
+
+    /** yt-dlp from the nightly builds, and what the last update said. */
+    var ytdlpNightly by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("ytdlp_nightly", false))
+        private set
+    var ytdlpStatus by mutableStateOf("")
+        private set
+
+    fun toggleYtdlpNightly() {
+        ytdlpNightly = !ytdlpNightly
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("ytdlp_nightly", ytdlpNightly).apply()
+    }
+
+    fun updateYtDlp() {
+        ytdlpStatus = tr("Updating…")
+        val nightly = ytdlpNightly
+        viewModelScope.launch {
+            ytdlpStatus = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.YtDlp.update(getApplication(), nightly) }
+        }
+    }
+
     /** Music Cross Ears: this phone's music can move to a PC of the same account (RyM Link). */
     var crossEars by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("cross_ears", true).also { com.rymplayer.playback.Link.enabled = it })
         private set
@@ -537,7 +572,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     (recent + history).filter { it.videoId !in freshSeeds }.take(12).forEachIndexed { i, t ->
                         notes.kindOf(t)?.let { heard += it to 0.6f / (1 + i * 0.3f) }
                     }
-                    val kinds = com.rymplayer.data.RamPoints.pageKinds(heard)
+                    // "Only this kind" in the settings (a Muharram, say): the page keeps to it.
+                    val kinds = com.rymplayer.data.RamPoints.onlyKind(ctx)?.let { listOf(it) } ?: com.rymplayer.data.RamPoints.pageKinds(heard)
                     for ((seed, radio) in newRadios.awaitAll()) {
                         val kind = notes.seedKind(seed, radio)
                         notes.learn(kind, seed, radio)

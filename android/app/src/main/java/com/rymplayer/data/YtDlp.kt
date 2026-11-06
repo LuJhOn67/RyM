@@ -14,6 +14,24 @@ object YtDlp {
     @Volatile private var ready = false
     @Volatile private var updatedAt = 0L
 
+    /** Updates yt-dlp now (stable or nightly builds): what happened, to show. Blocking. */
+    fun update(ctx: Context, nightly: Boolean): String {
+        if (!ready) synchronized(this) {
+            if (!ready) {
+                YoutubeDL.getInstance().init(ctx)
+                ready = true
+            }
+        }
+        return runCatching {
+            val status = YoutubeDL.getInstance().updateYoutubeDL(ctx, if (nightly) YoutubeDL.UpdateChannel.NIGHTLY else YoutubeDL.UpdateChannel.STABLE)
+            updatedAt = System.currentTimeMillis()
+            when (status?.name) {
+                "ALREADY_UP_TO_DATE" -> "yt-dlp is up to date"
+                else -> "yt-dlp updated (${YoutubeDL.getInstance().version(ctx) ?: ""})"
+            }
+        }.getOrElse { "yt-dlp: ${it.message}" }
+    }
+
     private fun prepare(ctx: Context) {
         if (!ready) synchronized(this) {
             if (!ready) {

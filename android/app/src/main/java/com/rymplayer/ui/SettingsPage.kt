@@ -27,6 +27,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.AutoAwesome
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Equalizer
@@ -178,7 +181,15 @@ fun SettingsPage(vm: AppViewModel) {
                 SwitchRow(Icons.Default.Translate, tr("Translate Japanese lyrics"), tr("English in small letters under each line: the lyrics site's own translation, else a machine translation"), vm.translateLyrics) { vm.toggleTranslateLyrics() }
             }
             Section(tr("Devices")) {
-                SwitchRow(Icons.Default.Devices, "Music Cross Ears", tr("The music playing here can move to RyM on your PC (same Wi-Fi and Google account)"), vm.crossEars) { vm.toggleCrossEars() }
+                SwitchRow(Icons.Default.Devices, "Seamless Music", tr("Music moves between this phone and RyM on your PC (same Wi-Fi and Google account): to the PC when it's idle, and here when this phone is idle"), vm.crossEars) { vm.toggleCrossEars() }
+            }
+            Section(tr("Suggestions (RaM points)")) {
+                TapRow(Icons.Default.Tune, tr("Only this kind"), tr("For you shows only this kind (a Muharram, say) · tap to change"), vm.onlyKind?.let { tr(it.title) } ?: tr("Every kind heard")) { vm.cycleOnlyKind() }
+            }
+            Section("yt-dlp") {
+                SwitchRow(Icons.Default.NewReleases, tr("Nightly builds"), tr("The newest yt-dlp every day (fixes come sooner)"), vm.ytdlpNightly) { vm.toggleYtdlpNightly() }
+                Divider()
+                TapRow(Icons.Default.SystemUpdate, tr("Update yt-dlp"), vm.ytdlpStatus.ifEmpty { tr("yt-dlp finds songs YouTube refuses, and downloads") }, tr("Update")) { vm.updateYtDlp() }
             }
             Section(tr("Theme")) {
                 TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }

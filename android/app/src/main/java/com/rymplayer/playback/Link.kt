@@ -3,7 +3,14 @@ package com.rymplayer.playback
 import android.os.Handler
 import android.os.Looper
 import com.rymplayer.data.Track
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.floatOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -143,5 +150,79 @@ object Link {
 
     fun stop() {
         running = false
+    }
+
+    private var listening = false
+
+    /**
+     * Seamless Music the other way: a PC of the same account tells what it plays; [onPc] hears it
+     * on the main thread (its address, port, name and song).
+     */
+    @Synchronized fun listen(ctx: android.content.Context, onPc: (String, Int, String, String) -> Unit) {
+        if (listening) return
+        listening = true
+        val main = Handler(Looper.getMainLooper())
+        Thread({
+            // Some phones drop broadcasts on Wi-Fi without this.
+            val wifi = ctx.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val lock = wifi?.createMulticastLock("rym-link")?.apply { setReferenceCounted(false); runCatching { acquire() } }
+            val socket = runCatching {
+                DatagramSocket(null).apply {
+                    reuseAddress = true
+                    broadcast = true
+                    bind(java.net.InetSocketAddress(PORT))
+                }
+            }.getOrNull()
+            if (socket == null) {
+                listening = false
+                lock?.release()
+                return@Thread
+            }
+            val buf = ByteArray(4096)
+            while (listening) {
+                val packet = DatagramPacket(buf, buf.size)
+                if (runCatching { socket.receive(packet) }.isFailure) break
+                val note = runCatching { Json.parseToJsonElement(String(packet.data, 0, packet.length)).jsonObject }.getOrNull() ?: continue
+                val key = account ?: continue
+                if (!enabled || note["kind"]?.jsonPrimitive?.content != "pc" || note["account"]?.jsonPrimitive?.content != key) continue
+                if (note["playing"]?.jsonPrimitive?.booleanOrNull != true) continue
+                val port = note["port"]?.jsonPrimitive?.intOrNull ?: continue
+                val vid = note["video_id"]?.jsonPrimitive?.content ?: continue
+                val device = note["device"]?.jsonPrimitive?.content.orEmpty()
+                val ip = packet.address?.hostAddress ?: continue
+                main.post { onPc(ip, port, device, vid) }
+            }
+            socket.close()
+            lock?.release()
+        }, "rym-link-listen").apply { isDaemon = true }.start()
+    }
+
+    /** Takes the PC's music: its queue, the song in it and the second; then the PC pauses. Blocking. */
+    fun takeOver(ip: String, port: Int): Triple<List<Track>, Int, Float>? {
+        val key = account ?: return null
+        val base = "http://$ip:$port"
+        fun call(method: String, path: String): String? = runCatching {
+            val c = java.net.URL("$base$path?account=$key").openConnection() as java.net.HttpURLConnection
+            c.requestMethod = method
+            c.connectTimeout = 4000
+            c.readTimeout = 4000
+            if (method == "POST") {
+                c.doOutput = true
+                c.outputStream.close()
+            }
+            c.inputStream.bufferedReader().use { it.readText() }.also { c.disconnect() }
+        }.getOrNull()
+        val state = call("GET", "/state")?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return null
+        val songs = state["songs"]?.jsonArray?.mapNotNull { e ->
+            val o = e.jsonObject
+            val id = o["video_id"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            fun str(k: String) = o[k]?.jsonPrimitive?.takeIf { it.isString }?.content.orEmpty()
+            Track(id, str("title"), str("artist"), str("album"), str("duration"), str("thumb").ifEmpty { null })
+        }.orEmpty()
+        val current = state["current"]?.jsonPrimitive?.intOrNull ?: 0
+        if (songs.getOrNull(current) == null) return null
+        val position = state["position"]?.jsonPrimitive?.floatOrNull ?: 0f
+        call("POST", "/pause")
+        return Triple(songs, current, position)
     }
 }

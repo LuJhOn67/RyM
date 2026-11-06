@@ -75,6 +75,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.hasNext = { index + 1 < queue.size && !repeatOne }
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
         Link.pause = { pause() }
+        // Seamless Music from the PC: while nothing plays here, a PC of the same account's music moves here.
+        Link.listen(context) { ip, port, device, vid -> fromPc(ip, port, device, vid) }
         future.addListener({
             val c = runCatching { future.get() }.getOrElse {
                 ready.completeExceptionally(it)
@@ -457,6 +459,21 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         val out = com.rymplayer.data.RamPoints.upNext(notes, radio, seed, likedSongs(), played + queued, heard, { com.rymplayer.data.Recent.playedAt(context, it) })
         com.rymplayer.data.RamPoints.save(context, notes)
         return out
+    }
+
+    /** The PC song already taken or skipped (device, song), so it's once. */
+    private var pcSeen: Pair<String, String>? = null
+
+    private fun fromPc(ip: String, port: Int, device: String, vid: String) {
+        if (playing || loading || pcSeen == (device to vid)) return
+        pcSeen = device to vid
+        scope.launch {
+            val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Link.takeOver(ip, port) } ?: return@launch
+            val (songs, current, position) = got
+            resumeAt = songs[current].videoId to (position * 1000).toLong()
+            start(songs, current)
+            message = "${com.rymplayer.tr("Playing here, moved from")} $device"
+        }
     }
 
     /** Repeat this song: when it ends it starts again (no mix into the next one). */

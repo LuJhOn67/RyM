@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -193,6 +194,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
     val queueIndex = m.queueIndex
     val context = LocalContext.current
     var pick by remember(t.videoId) { mutableStateOf(false) }
+    var kinds by remember(t.videoId) { mutableStateOf(false) }
     if (pick) {
         SaveToPlaylist(vm, t) { pick = false; onDismiss() }
         return
@@ -220,6 +222,25 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         item(tr("Start radio"), Icons.Default.Radio) { vm.playRadio(t) }()
         item(tr("Play next"), Icons.Default.SkipNext) { vm.player.playNext(t) }()
         item(tr("Add to queue"), Icons.AutoMirrored.Filled.QueueMusic) { vm.player.addToQueue(t) }()
+        // RaM points: the artist's kind, put right by hand.
+        Row(
+            Modifier.fillMaxWidth().clickable { kinds = !kinds }.padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Category, null, tint = Dim)
+            Spacer(Modifier.width(20.dp))
+            Text(tr("This artist's kind"), fontSize = 15.sp, color = Color.White)
+        }
+        if (kinds) {
+            for (k in com.rymplayer.data.RamPoints.Kind.entries) {
+                Text(
+                    tr(k.title),
+                    fontSize = 15.sp,
+                    color = Color.White,
+                    modifier = Modifier.fillMaxWidth().clickable { onDismiss(); vm.setArtistKind(t, k) }.padding(start = 64.dp, top = 10.dp, bottom = 10.dp),
+                )
+            }
+        }
         item(tr("Download"), Icons.Default.Download) { vm.download(t) }()
         if (com.rymplayer.playback.Vlc.installed(LocalContext.current) && com.rymplayer.data.isYouTube(t.videoId)) {
             item(tr("Open in VLC"), Icons.Default.PlayArrow) { vm.openInVlc(t) }()

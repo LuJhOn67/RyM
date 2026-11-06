@@ -16,8 +16,9 @@ import android.content.Context
  *   artist never twice in a row, liked songs only now and then.
  */
 object RamPoints {
-    enum class Kind(val shelf: String) {
-        Songs("Songs for you"), Husseini("Husseini for you"), Quran("Quran for you"), Nasheed("Nasheeds for you"), Talk("Talks for you"),
+    enum class Kind(val shelf: String, val title: String) {
+        Songs("Songs for you", "Songs"), Husseini("Husseini for you", "Husseini"), Quran("Quran for you", "Quran"),
+        Nasheed("Nasheeds for you", "Nasheeds"), Talk("Talks for you", "Talks"),
     }
 
     val SHELVES = Kind.entries.map { it.shelf }.toSet()
@@ -103,7 +104,8 @@ object RamPoints {
     fun firstArtist(artist: String): String = Radio.firstArtist(artist)
 
     /** What RyM has learned about artists: how much each kind was seen with them. */
-    class Notes(val artists: MutableMap<String, IntArray> = HashMap()) {
+    /** [fixed]: artists the user put in a kind by hand (a song's menu); it wins. */
+    class Notes(val artists: MutableMap<String, IntArray> = HashMap(), val fixed: MutableMap<String, Kind> = HashMap()) {
         private fun add(artist: String, kind: Kind, weight: Int) {
             if (artist.isEmpty()) return
             val seen = artists.getOrPut(artist) { IntArray(5) }
@@ -121,7 +123,7 @@ object RamPoints {
         }
 
         /** The song's kind: its words, else its artist's; null when nothing tells. */
-        fun kindOf(t: Track): Kind? = wordKind(t) ?: artistKind(firstArtist(t.artist))
+        fun kindOf(t: Track): Kind? = firstArtist(t.artist).let { a -> fixed[a] ?: wordKind(t) ?: artistKind(a) }
 
         /** A radio's song's kind: its own, else the kind known for most of its radio, else songs. */
         fun seedKind(seed: Track, radio: List<Track>): Kind {
@@ -137,6 +139,7 @@ object RamPoints {
             val seedScript = script(seed)
             for (t in listOf(seed) + radio) {
                 val artist = firstArtist(t.artist)
+                if (artist in fixed) continue
                 val k = wordKind(t)
                 when {
                     k != null -> add(artist, k, 3)
@@ -145,14 +148,18 @@ object RamPoints {
             }
         }
 
-        fun encode(): String = artists.entries.sortedByDescending { it.value.sum() }.take(2000)
-            .joinToString("\n") { (a, c) -> a.replace('\t', ' ').replace('\n', ' ') + "\t" + c.joinToString(",") }
+        fun encode(): String = (artists.entries.sortedByDescending { it.value.sum() }.take(2000)
+            .map { (a, c) -> a.replace('\t', ' ').replace('\n', ' ') + "\t" + c.joinToString(",") } +
+            fixed.map { (a, k) -> "!" + a.replace('\t', ' ').replace('\n', ' ') + "\t" + k.name }).joinToString("\n")
 
         companion object {
-            fun decode(s: String): Notes = Notes(s.lineSequence().mapNotNull { line ->
+            fun decode(s: String): Notes = Notes(s.lineSequence().filter { !it.startsWith("!") }.mapNotNull { line ->
                 val (a, c) = line.split('\t').takeIf { it.size == 2 } ?: return@mapNotNull null
                 val counts = c.split(',').mapNotNull { it.toIntOrNull() }.takeIf { it.size == 5 } ?: return@mapNotNull null
                 a to counts.toIntArray()
+            }.toMap(HashMap()), s.lineSequence().filter { it.startsWith("!") }.mapNotNull { line ->
+                val (a, k) = line.drop(1).split('\t').takeIf { it.size == 2 } ?: return@mapNotNull null
+                runCatching { a to Kind.valueOf(k) }.getOrNull()
             }.toMap(HashMap()))
         }
     }
@@ -163,6 +170,22 @@ object RamPoints {
 
     fun save(ctx: Context, notes: Notes) {
         prefs(ctx).edit().putString("artists", notes.encode()).apply()
+    }
+
+    /** The user says the song's artist is of [kind]: kept, and it wins over words and radios. */
+    fun correct(ctx: Context, t: Track, kind: Kind) {
+        val artist = firstArtist(t.artist).takeIf { it.isNotEmpty() } ?: return
+        val notes = load(ctx)
+        notes.fixed[artist] = kind
+        notes.artists[artist] = IntArray(5).also { it[kind.ordinal] = 12 }
+        save(ctx, notes)
+    }
+
+    /** "Only this kind" (Settings): For you shows only it; null: every kind heard. */
+    fun onlyKind(ctx: Context): Kind? = prefs(ctx).getString("only_kind", null)?.let { n -> Kind.entries.firstOrNull { it.name == n } }
+
+    fun setOnlyKind(ctx: Context, kind: Kind?) {
+        prefs(ctx).edit().putString("only_kind", kind?.name).apply()
     }
 
     private class Scored(val t: Track, val points: Int, val artist: String, val liked: Boolean)
