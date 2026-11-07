@@ -260,6 +260,8 @@ export global App {
     callback mini();
     callback float-lyrics();
     callback share();
+    // The playing song's link on the clipboard.
+    callback copy-link();
     callback zoom(float);
     callback next-theme();
     callback set-speed(string);
@@ -1137,6 +1139,7 @@ component SideButtons inherits VerticalLayout {
     Icon { size: 40px * Ui.k; source: @image-url("icons/square-top-down-linear.svg"); tip: App.tr("Floating lyrics"); clicked => { App.float-lyrics(); } }
     Icon { size: 40px * Ui.k; source: @image-url("icons/minimize-square-3-linear.svg"); tip: App.tr("Mini player"); clicked => { App.mini(); } }
     Icon { size: 40px * Ui.k; source: @image-url("icons/share-linear.svg"); tip: App.tr("Share as a picture"); clicked => { App.share(); } }
+    Icon { size: 40px * Ui.k; source: @image-url("icons/link-round-angle-linear.svg"); tip: App.tr("Copy link"); clicked => { App.copy-link(); } }
 }
 
 component NowPlaying inherits Rectangle {
@@ -2011,6 +2014,7 @@ component WatchPage inherits Rectangle {
                     { id: 2, icon: @image-url("icons/square-top-down-linear.svg"), label: App.tr("Floating lyrics") },
                     { id: 3, icon: @image-url("icons/minimize-square-3-linear.svg"), label: App.tr("Mini player") },
                     { id: 4, icon: @image-url("icons/share-linear.svg"), label: App.tr("Share") },
+                    { id: 5, icon: @image-url("icons/link-round-angle-linear.svg"), label: App.tr("Copy link") },
                 ]: Rectangle {
                     height: 40px * Ui.k;
                     width: pill.preferred-width + 28px * Ui.k;
@@ -2030,6 +2034,7 @@ component WatchPage inherits Rectangle {
                             if (b.id == 2) { App.float-lyrics(); }
                             if (b.id == 3) { App.mini(); }
                             if (b.id == 4) { App.share(); }
+                            if (b.id == 5) { App.copy-link(); }
                         }
                     }
                 }

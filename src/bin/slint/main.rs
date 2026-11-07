@@ -548,6 +548,7 @@ fn wire(ui: &AppWindow, st: &Shared) {
         set_toggle(st, "float", on);
     }));
     app.on_share(w(open_share));
+    app.on_copy_link(w(copy_link));
     {
         let st = st.clone();
         app.on_prompt_done(move |ok| prompt_done(&st, ok));
@@ -2752,6 +2753,20 @@ fn show_float(st: &Shared, on: bool) {
 }
 
 /// The song as a picture to save or copy.
+/// The playing song's link (YouTube Music, or SoundCloud) on the clipboard.
+fn copy_link(st: &Shared) {
+    let Some(t) = st.borrow().q.now().cloned() else { return };
+    if rymplayer::local::is_local(&t.video_id) {
+        toast(st, tr("This song is already on your device"));
+        return;
+    }
+    let link = rymplayer::queue::share_link(&t);
+    match arboard::Clipboard::new().and_then(|mut c| c.set_text(link)) {
+        Ok(()) => toast(st, tr("Link copied")),
+        Err(e) => toast(st, &e.to_string()),
+    }
+}
+
 fn open_share(st: &Shared) {
     let Some(ui) = st.borrow().ui.upgrade() else { return };
     let app = ui.global::<App>();
@@ -3914,20 +3929,49 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     ui.global::<Theme>().set_vu_l(0.62);
     ui.global::<Theme>().set_vu_r(0.55);
     app.on_tr(|s| tr_any(&s).into());
-    let swatch = |r: u8, g: u8, b: u8| {
-        let px: Vec<u8> = (0..64 * 64)
-            .flat_map(|i| {
-                let k = (i % 64) as u8;
-                [r.saturating_add(k), g, b.saturating_add(k / 2), 255]
-            })
-            .collect();
-        to_image((64, 64, px))
+    // Sample cover art: a diagonal gradient from the color to a shifted one, a soft sun, two hills.
+    let art = |r: u8, g: u8, b: u8| -> Pixels {
+        let n = 256u32;
+        let (r2, g2, b2) = (b.saturating_add(40), r / 2 + 30, g.saturating_add(70));
+        let mut px = Vec::with_capacity((n * n * 4) as usize);
+        for y in 0..n {
+            for x in 0..n {
+                let (fx, fy) = (x as f32 / n as f32, y as f32 / n as f32);
+                let t = (fx + fy) / 2.0;
+                let mix = |a: u8, c: u8| a as f32 + (c as f32 - a as f32) * t;
+                let (mut cr, mut cg, mut cb) = (mix(r, r2), mix(g, g2), mix(b, b2));
+                let d = ((fx - 0.68).powi(2) + (fy - 0.34).powi(2)).sqrt();
+                let sun = (1.0 - d / 0.2).clamp(0.0, 1.0);
+                cr += (255.0 - cr) * sun * 0.75;
+                cg += (235.0 - cg) * sun * 0.75;
+                cb += (205.0 - cb) * sun * 0.6;
+                let (near, far) = (0.84 + 0.05 * (fx * 4.0 + 1.3).cos(), 0.72 + 0.06 * (fx * 6.0).sin());
+                // Soft edges (a pixel and a half), not stairs.
+                let edge = |line: f32| ((fy - line) * n as f32 / 1.5).clamp(0.0, 1.0);
+                let shade = 1.0 - 0.4 * edge(far) - 0.25 * edge(near);
+                px.extend_from_slice(&[(cr * shade).clamp(0.0, 255.0) as u8, (cg * shade).clamp(0.0, 255.0) as u8, (cb * shade).clamp(0.0, 255.0) as u8, 255]);
+            }
+        }
+        (n, n, px)
     };
+    let swatch = |r: u8, g: u8, b: u8| to_image(art(r, g, b));
     app.set_has_song(true);
     app.set_title("Seasons".into());
     app.set_artist("Rival x Cadmium, feat. Harley Bird".into());
-    app.set_cover(swatch(200, 60, 90));
-    app.set_backdrop(swatch(150, 80, 110));
+    let cover = art(70, 60, 170);
+    let lights = rymplayer::themes::cover_colors(&cover.2, 4);
+    let color = |c: (u8, u8, u8)| slint::Color::from_rgb_u8(c.0, c.1, c.2);
+    if let [l1, l2, l3, l4] = lights[..] {
+        let theme = ui.global::<Theme>();
+        theme.set_a1(color(l1));
+        theme.set_a2(color(l2));
+        theme.set_a3(color(l3));
+        theme.set_a4(color(l4));
+        theme.set_cover_color(color(l1));
+    }
+    let soft = image::RgbaImage::from_raw(cover.0, cover.1, cover.2.clone()).map(|img| image::imageops::blur(&image::imageops::resize(&img, 96, 96, image::imageops::FilterType::Triangle), 7.0));
+    app.set_backdrop(soft.map(|s| to_image((s.width(), s.height(), s.into_raw()))).unwrap_or_default());
+    app.set_cover(to_image(cover));
     app.set_liked(true);
     app.set_playing(true);
     app.set_duration(205.0);

@@ -1,185 +1,268 @@
+<div align="center">
+
 # RyM
 
-An ad-free YouTube Music player, written in Rust, for Windows, Android and Linux (beta). Your own
-account, your library, synced lyrics, and a sound engine with DJ-style song changes.
+**An ad-free YouTube Music player for Windows, Linux and Android, written in Rust.**
+Your own account and library, synced lyrics, smart suggestions, eleven color themes, and a sound
+engine that mixes songs like a DJ.
 
-[العربية](#بالعربي) · [Download](../../releases/latest)
+[**العربية**](#بالعربية) · [**Download**](../../releases/latest) · [Screenshots](#screenshots) · [Build](#build)
 
-| App | What it is |
+![RyM Slint](docs/screenshots/slint-dusk.jpg)
+
+</div>
+
+## The apps
+
+| App | Platform | What it is |
+|---|---|---|
+| **RyM Slint** | Windows, Linux | The main window app: the playing song beside Up next, similar songs and the artist's songs. Three layouts (Dusk, Mist, Wide) and eleven color themes. |
+| **RyM for Android** | Android 10+ | The phone app (Kotlin, Jetpack Compose), in `android/`. |
+| **RyM GTK** | Linux | A GTK 4 window app, with the same color themes. |
+| **RyM** | Windows, Linux | The same player in the terminal. |
+
+All the apps share one core: the same account, queue rules, suggestions, lyrics sources, sound
+settings and plugins.
+
+## Screenshots
+
+### Layouts
+
+| Dusk | Mist | Wide |
+|---|---|---|
+| ![Dusk](docs/screenshots/slint-dusk.jpg) | ![Mist](docs/screenshots/slint-mist.jpg) | ![Wide](docs/screenshots/slint-wide.jpg) |
+
+| Synced lyrics (Japanese with romaji and English) | Home: suggestions by RaM points |
 |---|---|
-| **RyM Slint** | The window app for Windows (Slint): the playing song beside Up next, similar songs and the artist's songs, dark and light themes |
-| **RymPlayer-GTK** | The window app (GTK 4) for Linux, in beta |
-| **RyM** | The same player in the terminal |
-| **RyM for Android** | The phone app (Kotlin and Jetpack Compose, Android 10 or newer), in `android/` |
+| ![Lyrics](docs/screenshots/slint-lyrics.jpg) | ![Home](docs/screenshots/slint-home.jpg) |
 
-All the apps share one core: the same account, queue rules, lyrics sources, sound settings and
-plugins.
+### The eleven color themes
+
+| OLED Black | Frosted Glass | Tactical Beige |
+|---|---|---|
+| ![OLED Black](docs/screenshots/theme-oled-black.jpg) | ![Frosted Glass](docs/screenshots/theme-frosted-glass.jpg) | ![Tactical Beige](docs/screenshots/theme-tactical-beige.jpg) |
+| **Stellar Neon** | **Dot Matrix** | **Hi-Fi Rack** |
+| ![Stellar Neon](docs/screenshots/theme-stellar-neon.jpg) | ![Dot Matrix](docs/screenshots/theme-dot-matrix.jpg) | ![Hi-Fi Rack](docs/screenshots/theme-hi-fi-rack.jpg) |
+| **Cyber HUD** | **Lo-Fi Rain** | **Aqua Glass** |
+| ![Cyber HUD](docs/screenshots/theme-cyber-hud.jpg) | ![Lo-Fi Rain](docs/screenshots/theme-lo-fi-rain.jpg) | ![Aqua Glass](docs/screenshots/theme-aqua-glass.jpg) |
+| **Manga Ink** | **Tactical Olive** | |
+| ![Manga Ink](docs/screenshots/theme-manga-ink.jpg) | ![Tactical Olive](docs/screenshots/theme-tactical-olive.jpg) | |
+
+### Extras
+
+| Vinyl record | Liquid Aurora |
+|---|---|
+| ![Vinyl](docs/screenshots/feature-vinyl.jpg) | ![Aurora](docs/screenshots/feature-aurora.jpg) |
+| **Wide + Cyber HUD** | **Wide + Hi-Fi Rack (needle meters)** |
+| ![Wide HUD](docs/screenshots/feature-wide-hud.jpg) | ![Wide Hi-Fi](docs/screenshots/feature-wide-hifi.jpg) |
+
+### On the phone
+
+| OLED Black | Cyber HUD | Hi-Fi Rack | Dot Matrix |
+|---|---|---|---|
+| ![](docs/screenshots/phone-player-oled-black.jpg) | ![](docs/screenshots/phone-player-cyber-hud.jpg) | ![](docs/screenshots/phone-player-hi-fi-rack.jpg) | ![](docs/screenshots/phone-player-dot-matrix.jpg) |
+| **Lo-Fi Rain** | **Frosted Glass** | **Vinyl record** | **Liquid Aurora** |
+| ![](docs/screenshots/phone-player-lo-fi-rain.jpg) | ![](docs/screenshots/phone-player-frosted-glass.jpg) | ![](docs/screenshots/phone-player-vinyl.jpg) | ![](docs/screenshots/phone-player-aurora.jpg) |
+| **Settings, Tactical Beige** | **Settings, Manga Ink** | **Search, Aqua Glass** | |
+| ![](docs/screenshots/phone-settings-tactical-beige.jpg) | ![](docs/screenshots/phone-settings-manga-ink.jpg) | ![](docs/screenshots/phone-search-aqua-glass.jpg) | |
 
 ## Features
 
 **Your music**
-- Sign in with Google: liked songs, library playlists, likes and listening history stay in sync with YouTube Music.
-- **For you**: songs you played lately, a mix made for you (new songs from your recent radio, songs you've never heard, and favourites), then YouTube Music's own shelves. Pages keep loading as you scroll.
-- **Up next** follows the playing song: songs like it, with your liked songs mixed in. "Play next" and "Add to queue" go right after the playing song.
-- Search, playlists, albums, artists, history, new playlists, and adding any song to a playlist.
-- Picks up where you left off, even after a crash: the same song, second and queue.
+- Sign in with Google: liked songs, playlists, likes and history stay in sync with YouTube Music. You can also listen without an account.
+- **Songs on this device**: "On this device" in the Library plays your Music folder and any folders you add in Settings. Files opened with RyM Slint play too.
+- Search (with suggestions and history), playlists, albums, artists, Spotify and SoundCloud links.
+- Picks up where you left off: the same song, second and queue.
+
+**Smart suggestions: RaM points**
+- Every song has a kind (songs, Husseini, Quran, nasheeds, talks), and kinds never mix: a song brings songs, a latmiya brings latmiyat.
+- Every song earns points when you play it and hear it to the end, and loses them when you skip it in its first seconds. 30% of every change goes to its artist, so new songs by artists you love come up first.
+- A song you just played rests for six hours, and points fade a little each day, so the same songs don't top every list.
+- "Recommend more" and "Don't recommend" in a song's menu, "Only this kind" in Settings, and buttons to reset all points or only the negative ones.
 
 **Lyrics**
-- Synced lyrics from LRCLIB, NetEase and KuGou (asked at once), then Genius and YouTube Music's own. One button per source to switch between them.
-- Floating lyrics: an always-on-top line on the PC (click-through or draggable) and a draggable pill on the phone.
+- Synced lyrics from LRCLIB, NetEase and KuGou (asked at once), then Genius and YouTube Music. One button per source.
+- Japanese lyrics with romaji and an English translation under each line.
+- Floating lyrics: an always-on-top line on the PC, and a draggable pill on the phone.
 
 **Sound**
-- **Smart Automix** (on/off): songs change like a DJ mix. The change starts when a song fades out, the next one comes in on its first sound and on the beat, the outgoing song's bass is filtered out so the two don't clash, and close tempos are matched (within 3%).
-- Crossfade (0–10 s, equal-power), skip silence, a 5-band equalizer (Flat, Bass Boost, Vocal, Rock, Pop, Custom) and even loudness.
-- Speed and pitch apart (0.5–2.0), with Normal, Nightcore and Slowed.
-- Sleep timer (15–60 minutes or the end of the song, fading out over the last 10 seconds).
-- **Your recap**: hours listened this month and in all, your top songs and artists.
+- **Smart Automix**: songs change like a DJ mix. They start when the old one fades out, on the beat, with the outgoing bass filtered out and close tempos matched.
+- Crossfade, skip silence, a 5-band equalizer, even loudness, and speed and pitch apart (Normal, Nightcore, Slowed). A speed button sits next to the heart.
+- Repeat all or repeat one, a sleep timer, and an alarm.
+- Plays songs as YouTube sends them (Opus first, the best format it has), with no re-encoding.
 
 **Looks**
-- Themes, including **RyM YTM**, with its own layout: a side menu with your playlists, big cover shelves, and colours taken from the playing song's cover.
-- The song's page: a big cover that zooms in, with the lyrics and Up next beside it.
-- English and Arabic (right to left).
+- Three layouts on the PC (Dusk, Mist, Wide) and **eleven color themes**, the same on every app: OLED Black, Frosted Glass, Tactical Beige, Stellar Neon, Dot Matrix, Hi-Fi Rack, Cyber HUD, Lo-Fi Rain, Aqua Glass, Manga Ink and Tactical Olive.
+- **Liquid Aurora**: the cover's four main colors glow behind everything and pulse with the bass.
+- **Vinyl record**: the cover turns like a record, faster with Nightcore and slower with Slowed.
+- Needle meters (Hi-Fi Rack), dot-matrix digits (Dot Matrix), frosted glass over the cover, and glowing frames in the cover's color.
+- Themes travel as `.json` files: export one on the PC and import it on the phone, or the other way round.
+- English and Arabic (right to left). On Windows the title bar follows the system's light or dark mode.
+
+**Between your devices**
+- **Seamless Music**: open RyM on the phone and it takes the song playing on the PC, at the same second, and the other way round (same Wi-Fi and account).
 
 **More**
-- Plugins from the built-in store: YouTube Video Player & Universal Downloader, Spotify to YTMusic, and SoundCloud.
-- Downloads to `Music\RymPlayer`, Discord status (PC), update checks, and VLC as an optional player.
+- Your listening stats: time this month and in all, your top songs and artists, and what kinds you listen to.
+- Share a song as a picture or copy its link. Discord status with "Play this song" and "Get RyM" buttons. Last.fm scrobbling.
+- Closing the window keeps the music playing from the tray (or quits, as you choose).
+- Plugins: video player and downloader, Spotify to YouTube Music, SoundCloud. Optional playback in VLC.
+- Downloads go to `Music\RymPlayer`. Updates are checked from inside the app.
 
-## Download and run
+## Download
 
 Get the files from [Releases](../../releases/latest):
 
-| File | Run |
+| File | For |
 |---|---|
-| `RyM-Slint.exe` | The window app for Windows: run it (one file) |
-| `RyM.exe` | The terminal app: run it in Windows Terminal |
-| `RyM-Android-<version>.apk` | Install it on the phone |
-| `RyM-x86_64.AppImage` | **Linux beta:** `chmod +x RyM-x86_64.AppImage` then run it |
-| `RyM-linux-x86_64.tar.gz` | **Linux beta:** the same apps unpacked, on the system's GTK 4 (see its README.txt) |
+| `RyM-Slint.exe` | Windows: run it (one file) |
+| `RyM.exe` | Windows: the terminal app (in Windows Terminal) |
+| `RyM-Android-<version>.apk` | Android: install it on the phone |
+| `RyM-x86_64.AppImage` | Linux: `chmod +x RyM-x86_64.AppImage`, then run it |
+| `RyM-linux-x86_64.tar.gz` | Linux: the same apps unpacked, on the system's GTK 4 (see its README.txt) |
 
-**Linux beta:** the AppImage carries GTK 4. It needs FUSE 2 (`libfuse2`; without it run it with
-`--appimage-extract-and-run`), ALSA (`alsa-lib`, with `pipewire-alsa` or `pulseaudio-alsa`), and
-WebKitGTK 4.1 for the Google sign-in window (`webkit2gtk-4.1` on Arch, `webkit2gtk4.1` on
-Fedora/Nobara, `libwebkit2gtk-4.1-0` on Ubuntu/PikaOS). Media keys go through MPRIS.
+**Linux:** the AppImage carries GTK 4 and the fonts it needs (Japanese included). It needs FUSE 2
+(`libfuse2`; without it, run it with `--appimage-extract-and-run`), ALSA (with `pipewire-alsa` or
+`pulseaudio-alsa`), and WebKitGTK 4.1 for the Google sign-in window. Media keys work through MPRIS.
 
-Sign in from the app (Settings, or `g` in the terminal), or browse without an account.
+**Optional:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install -U yt-dlp`, with Node.js) for
+the best download quality, the SoundCloud and video plugins, and as a backup when YouTube refuses a
+stream. The Google sign-in window on Windows needs WebView2 (built into Windows 11).
 
-**Optional:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your `PATH` (`pip install -U yt-dlp`, with
-Node.js) for the best download quality, the SoundCloud and video plugins, and as a backup when
-YouTube refuses a stream. WebView2 is needed for the Google sign-in window (built into Windows 11).
+Settings, sign-in data and the song cache live in `%LOCALAPPDATA%\RymPlayer` (Windows) and
+`~/.local/share/rymplayer` (Linux).
 
-## Terminal keys
+## Keys
 
-| Key | Action |
-|---|---|
-| `↑` `↓` / `j` `k`, `PgUp` `PgDn` | Move |
-| `Tab` | Switch between the library and the song list |
-| `Enter` | Open / play |
-| `Space` | Pause |
-| `n` / `p` | Next / previous |
-| `←` `→`, `0`–`9` | Seek 5 s, jump to 0–90 % |
-| `+` / `-` | Volume |
-| `/` | Search |
-| `l` | Like / unlike |
-| `r` | Radio from the selected song |
-| `o` | Song menu |
-| `a` | Add to a playlist |
-| `Q` | Up next |
-| `L` | Lyrics source |
-| `[` `]` | Speed and pitch (Normal, Nightcore, Slowed) |
-| `z` | Sleep timer |
-| `R` | Your recap |
-| `h` | History |
-| `d` / `D` | Download the song / download all liked songs |
-| `s` | Share |
-| `A` | Go to the artist |
-| `F5` / `u` | Refresh |
-| `P` | Plugins |
-| `U` | Updates |
-| `,` | Settings (sound, Smart Automix, themes, layout, language) |
-| `q` | Quit |
+**RyM Slint:** `Space` play/pause, `Ctrl` `+` / `-` / `0` app size, `Ctrl+T` next theme.
 
-The window app: `Ctrl+F` search, `F5` refresh, `Esc` leaves the song's page.
+**Terminal:**
 
-Settings, sign-in data and the song cache live in `%LOCALAPPDATA%\RymPlayer`.
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `↑` `↓` / `j` `k` | Move | `l` | Like |
+| `Tab` | Library / songs | `r` | Radio from the song |
+| `Enter` | Open / play | `o` | Song menu |
+| `Space` | Pause | `a` | Add to a playlist |
+| `n` / `p` | Next / previous | `Q` | Up next |
+| `←` `→`, `0`–`9` | Seek | `L` | Lyrics source |
+| `+` / `-` | Volume | `[` `]` | Speed (Normal, Nightcore, Slowed) |
+| `/` | Search | `z` | Sleep timer |
+| `R` | Your recap | `h` | History |
+| `d` / `D` | Download song / all liked | `s` | Share |
+| `A` | Go to the artist | `F5` / `u` | Refresh |
+| `P` | Plugins | `U` | Updates |
+| `,` | Settings | `q` | Quit |
 
 ## Build
 
 ```sh
-cargo build --release --bin RyM                                  # terminal
-cargo build --release --bin RyM-Slint --features slint-ui        # window app (Windows)
-cargo build --release --bin RymPlayer-GTK --features gtk-ui      # window app on Linux (needs GTK 4)
-cd android && ./gradlew assembleRelease                          # phone
+cargo build --release --bin RyM-Slint --features slint-ui                          # window app
+cargo build --release --bin RyM                                                    # terminal
+cargo build --release --no-default-features --features gtk-ui --bin RymPlayer-GTK  # GTK (Linux)
+cd android && ./gradlew assembleRelease                                            # phone
 ```
 
-On Linux the window app builds with `--no-default-features --features gtk-ui`; `packaging/` has the
-scripts that build it on Ubuntu (WSL works) and pack the tar.gz and the AppImage.
-
-On Windows, building needs the Visual Studio C++ build tools. CMake compiles libopus; the path in
-`.cargo/config.toml` points at the copy that ships with the Build Tools, so change it if yours is
-elsewhere.
-
-`cargo test` runs the offline tests; `cargo test -- --ignored --nocapture` also runs the live ones.
-On Android: `./gradlew testDebugUnitTest`.
+- **Windows** needs the Visual Studio C++ build tools. CMake compiles libopus; `.cargo/config.toml`
+  points at the copy in the Build Tools, so change it if yours is elsewhere.
+- **Linux:** `packaging/` has the scripts that build on Ubuntu (WSL works) and pack the tar.gz and
+  the AppImage.
+- **Tests:** `cargo test --lib` (offline), `cargo test -- --ignored --nocapture` (live), and
+  `./gradlew testReleaseUnitTest` for the phone.
+- **GitHub Actions** builds every push for Windows, Linux and Android, runs the tests and keeps the
+  programs on the run's page. A version tag (`v7.1.3`) publishes a release with the files; a tag
+  with a dash (`v7.2.0-beta`) publishes a pre-release.
+- `RyM-Slint --render out.png [dark|light|wide] [page] ["Theme name"] [vinyl|aurora]` draws the
+  window with sample songs, without opening it. The PC screenshots above come from it.
 
 ---
 
-## بالعربي
+<div dir="rtl">
 
-**RyM** مشغّل YouTube Music بلا إعلانات، مكتوب بـ Rust، لويندوز وأندرويد ولينكس (بيتا): حسابك، مكتبتك،
-كلمات متزامنة، ومحرك صوت يدمج الأغاني مثل الـ DJ.
+## بالعربية
 
-| التطبيق | شنو هو |
-|---|---|
-| **RyM Slint** | برنامج النوافذ لويندوز (Slint): الأغنية اللي تشتغل جنب التالي والأغاني المشابهة وأغاني نفس الفنان، بثيم غامق وثيم فاتح |
-| **RymPlayer-GTK** | برنامج النوافذ (GTK 4) للينكس، بيتا |
-| **RyM** | نفس المشغّل بالتيرمنال |
-| **RyM للموبايل** | تطبيق أندرويد (أندرويد 10 أو أحدث)، بمجلد `android/` |
+**RyM** مشغّل لـ YouTube Music بلا إعلانات، يعمل على ويندوز ولينكس وأندرويد، ومكتوب بلغة Rust. يتيح لك
+حسابك ومكتبتك، وكلمات أغانٍ متزامنة، واقتراحات ذكية، وأحد عشر ثيمًا لونيًا، ومحرّك صوت يدمج الأغاني
+كما يفعل منسّقو الموسيقى.
+
+[التنزيل](../../releases/latest) · [الصور](#screenshots)
+
+### التطبيقات
+
+| التطبيق | النظام | الوصف |
+|---|---|---|
+| **RyM Slint** | ويندوز، لينكس | التطبيق الرئيسي: الأغنية الحالية بجانب قائمة «التالي» والأغاني المشابهة وأغاني الفنان نفسه، بثلاث واجهات (Dusk وMist وWide) وأحد عشر ثيمًا لونيًا. |
+| **RyM للهاتف** | أندرويد 10 فأحدث | تطبيق الهاتف (Kotlin وJetpack Compose)، في مجلد `android/`. |
+| **RyM GTK** | لينكس | تطبيق نوافذ بـ GTK 4، بالثيمات اللونية نفسها. |
+| **RyM** | ويندوز، لينكس | المشغّل نفسه داخل الطرفية. |
+
+تشترك التطبيقات كلها في نواة واحدة: الحساب نفسه، وقواعد قائمة التشغيل، والاقتراحات، ومصادر الكلمات،
+وإعدادات الصوت، والإضافات.
 
 ### المميزات
 
 **موسيقاك**
-- تسجيل دخول بحساب Google: الأغاني المعجبة وقوائم التشغيل والإعجابات وسجل الاستماع كلها متزامنة ويا YouTube Music.
-- **لك**: آخر الأغاني اللي سمعتها، مكس معمول إلك (أغاني جديدة من الراديو، أغاني عمرك ما سمعتها، والمفضلة)، وبعدها أقسام YouTube Music. الصفحات تحمّل أكثر كلما تنزل.
-- **التالي** يمشي ويا الأغنية اللي تشتغل: أغاني تشبهها ويا أغانيك المعجبة. "تشغيل التالي" و"إضافة لقائمة الانتظار" يجن بعد الأغنية الحالية مباشرة.
-- بحث، قوائم تشغيل، ألبومات، فنانين، سجل، قوائم جديدة، وإضافة أي أغنية لقائمة.
-- يكمل من وين وقفت حتى لو البرنامج كرش: نفس الأغنية والثانية والقائمة.
+- تسجيل الدخول بحساب Google، فتبقى الأغاني المعجَب بها وقوائم التشغيل وسجل الاستماع متزامنة مع YouTube Music. ويمكنك الاستماع دون حساب أيضًا.
+- **أغاني جهازك**: قسم «على هذا الجهاز» في المكتبة يشغّل مجلد الموسيقى وأي مجلدات تضيفها من الإعدادات، ويشغّل RyM Slint أي ملف صوتي تفتحه به.
+- البحث مع الاقتراحات والسجل، وقوائم التشغيل والألبومات والفنانين، وروابط Spotify وSoundCloud.
+- يكمل من حيث توقفت: الأغنية نفسها والثانية نفسها وقائمة التشغيل نفسها.
+
+**اقتراحات ذكية: نظام RaM points**
+- لكل أغنية نوع (أغانٍ، أو حسيني، أو قرآن، أو أناشيد، أو محاضرات)، ولا تختلط الأنواع أبدًا: الأغنية تجلب أغاني، واللطمية تجلب لطميات.
+- تكسب كل أغنية نقاطًا حين تشغّلها وحين تسمعها حتى النهاية، وتخسر نقاطًا حين تتخطاها في ثوانيها الأولى. ويذهب 30% من كل تغيير إلى فنانها، فتظهر أولًا الأغاني الجديدة لفنانيك المفضّلين.
+- تستريح الأغنية التي سمعتها للتو ست ساعات، وتخفّ النقاط قليلًا كل يوم، حتى لا تتصدّر الأغاني نفسها كل قائمة.
+- خيارا «اقترح أكثر» و«لا تقترح» في قائمة الأغنية، وخيار «هذا النوع فقط» في الإعدادات، وزرّان لتصفير كل النقاط أو السالبة منها فقط.
 
 **الكلمات**
-- كلمات متزامنة من LRCLIB وNetEase وKuGou (يسألهم سوا)، وبعدها Genius وكلمات YouTube Music. زر لكل مصدر حتى تبدّل بينهم.
-- كلمات عائمة: سطر فوق كل البرامج بالحاسبة (الضغط يعبر منه أو تسحبه)، وكبسولة تسحبها بالموبايل.
+- كلمات متزامنة من LRCLIB وNetEase وKuGou معًا، ثم Genius وYouTube Music، مع زر لكل مصدر.
+- الكلمات اليابانية مكتوبة بالحروف اللاتينية (روماجي) ومعها ترجمة إنجليزية تحت كل سطر.
+- كلمات عائمة: سطر يبقى فوق كل النوافذ على الحاسوب، وكبسولة قابلة للسحب على الهاتف.
 
 **الصوت**
-- **الدمج الذكي (Smart Automix)** تشغيل وإطفاء: الأغاني تتبدل مثل مكس DJ. الدمج يبدي من تخفت الأغنية، والجاية تدخل من أول صوت بيها وعلى الإيقاع، وجهير الطالعة ينشال حتى ما يتصادم الجهيرين، والسرعات القريبة تتطابق (لحد 3%).
-- تداخل الأغاني (0–10 ثواني)، تخطي الصمت، معادل صوتي 5 نطاقات (Flat، Bass Boost، Vocal، Rock، Pop، مخصص)، وتوحيد مستوى الصوت.
-- السرعة وطبقة الصوت كل وحدة بروحها (0.5–2.0)، ويا Normal وNightcore وSlowed.
-- مؤقت النوم (15–60 دقيقة أو نهاية الأغنية، وآخر 10 ثواني يخفت الصوت).
-- **ملخصك**: ساعات الاستماع هذا الشهر وبالمجمل، وأكثر الأغاني والفنانين.
+- **الدمج الذكي (Smart Automix)**: تنتقل الأغاني كأنها مزيج من منسّق موسيقى. يبدأ الانتقال حين تخفت الأغنية، على الإيقاع، مع إزالة الجهير من الأغنية الخارجة ومطابقة السرعات المتقاربة.
+- تداخل الأغاني، وتخطي الصمت، ومعادل صوت بخمسة نطاقات، وتوحيد مستوى الصوت، والتحكم بالسرعة وطبقة الصوت كلٌّ على حدة (عادي وNightcore وSlowed)، مع زر للسرعة بجانب زر الإعجاب.
+- تكرار القائمة كلها أو أغنية واحدة، ومؤقت للنوم، ومنبّه.
+- يشغّل الأغاني كما يرسلها YouTube (بصيغة Opus أولًا، وهي أفضل ما يقدّمه) دون إعادة ترميز.
 
-**الشكل**
-- ثيمات، منها **RyM YTM** بترتيبه الخاص: قائمة جانبية بيها قوائمك، أغلفة كبيرة، وألوان من غلاف الأغنية.
-- صفحة الأغنية: غلاف كبير يسوي زوم، وجنبه الكلمات والتالي.
-- عربي وإنكليزي (العربي من اليمين لليسار).
+**المظهر**
+- ثلاث واجهات على الحاسوب (Dusk وMist وWide)، و**أحد عشر ثيمًا لونيًا** متطابقة في كل التطبيقات: OLED Black وFrosted Glass وTactical Beige وStellar Neon وDot Matrix وHi-Fi Rack وCyber HUD وLo-Fi Rain وAqua Glass وManga Ink وTactical Olive.
+- **الشفق السائل (Liquid Aurora)**: تتوهج ألوان الغلاف الأربعة الرئيسية خلف الواجهة وتنبض مع الجهير.
+- **الأسطوانة**: يدور الغلاف كأسطوانة، أسرع مع Nightcore وأبطأ مع Slowed.
+- عدّادات بإبرة (Hi-Fi Rack)، وأرقام نقطية (Dot Matrix)، وزجاج ضبابي فوق الغلاف، وإطارات متوهجة بلون الغلاف.
+- تنتقل الثيمات كملفات `.json`: صدّر ثيمًا من الحاسوب واستورده في الهاتف، أو العكس.
+- العربية والإنجليزية (العربية من اليمين إلى اليسار). وعلى ويندوز يتبع شريط العنوان الوضع الفاتح أو الداكن للنظام.
 
-**غيرها**
-- إضافات من المتجر: مشغّل الفيديو والمحمّل الشامل، Spotify to YTMusic، وSoundCloud.
-- تحميل الأغاني لـ `Music\RymPlayer`، حالة Discord (الحاسبة)، فحص التحديثات، وVLC كمشغّل اختياري.
+**بين أجهزتك**
+- **الموسيقى المتصلة (Seamless Music)**: افتح RyM على الهاتف فيأخذ الأغنية التي تعمل على الحاسوب من الثانية نفسها، والعكس صحيح (على شبكة Wi-Fi نفسها والحساب نفسه).
+
+**وأكثر**
+- إحصاءات استماعك: الوقت هذا الشهر وإجمالًا، وأكثر الأغاني والفنانين، والأنواع التي تسمعها.
+- مشاركة الأغنية كصورة أو نسخ رابطها، وحالة Discord مع زرّي «شغّل هذه الأغنية» و«احصل على RyM»، وتسجيل الاستماع في Last.fm.
+- إغلاق النافذة يُبقي الموسيقى تعمل من شريط المهام بجانب الساعة، أو يغلق البرنامج، بحسب اختيارك.
+- إضافات: مشغّل الفيديو والمحمّل، وتحويل Spotify إلى YouTube Music، وSoundCloud. والتشغيل عبر VLC اختياري.
+- تُحفظ التنزيلات في `Music\RymPlayer`، ويُفحص وجود التحديثات من داخل البرنامج.
 
 ### التنزيل والتشغيل
 
-نزّل من [الإصدارات](../../releases/latest):
-- `RyM-Slint.exe`: برنامج النوافذ لويندوز، شغّله مباشرة (ملف واحد).
-- `RyM.exe`: التيرمنال.
-- `RyM-Android-<النسخة>.apk`: نصّبه بالموبايل.
-- `RyM-x86_64.AppImage`: **لينكس بيتا**، `chmod +x RyM-x86_64.AppImage` وبعدين شغّله.
-- `RyM-linux-x86_64.tar.gz`: **لينكس بيتا**، نفس البرامج بدون تغليف، على GTK 4 مال النظام (اقرا README.txt اللي بداخله).
+نزّل الملفات من [صفحة الإصدارات](../../releases/latest):
 
-**لينكس بيتا:** الـ AppImage بداخله GTK 4. يحتاج FUSE 2 (`libfuse2`، وإذا ما موجود شغّله بـ
-`--appimage-extract-and-run`)، وALSA (`alsa-lib` ويا `pipewire-alsa` أو `pulseaudio-alsa`)، وWebKitGTK 4.1
-لنافذة تسجيل الدخول بـ Google (`webkit2gtk-4.1` بـ Arch، `webkit2gtk4.1` بـ Fedora/Nobara،
-`libwebkit2gtk-4.1-0` بـ Ubuntu/PikaOS). أزرار الميديا تشتغل عبر MPRIS.
+| الملف | الاستخدام |
+|---|---|
+| `RyM-Slint.exe` | ويندوز: شغّله مباشرة (ملف واحد) |
+| `RyM.exe` | ويندوز: نسخة الطرفية (في Windows Terminal) |
+| `RyM-Android-<الإصدار>.apk` | أندرويد: ثبّته على الهاتف |
+| `RyM-x86_64.AppImage` | لينكس: نفّذ `chmod +x RyM-x86_64.AppImage` ثم شغّله |
+| `RyM-linux-x86_64.tar.gz` | لينكس: البرامج نفسها دون تغليف، على GTK 4 الموجودة في النظام (اقرأ ملف README.txt بداخله) |
 
-**اختياري:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install -U yt-dlp` ويا Node.js) لأعلى جودة
-تحميل، ولإضافتي SoundCloud والفيديو، وكاحتياط إذا يوتيوب رفض الأغنية.
+**لينكس:** يحتوي ملف AppImage على GTK 4 والخطوط اللازمة، ومنها الخط الياباني. ويحتاج إلى FUSE 2
+(`libfuse2`، وإن لم يكن موجودًا فشغّله بالخيار `--appimage-extract-and-run`)، وإلى ALSA (مع
+`pipewire-alsa` أو `pulseaudio-alsa`)، وإلى WebKitGTK 4.1 لنافذة تسجيل الدخول بحساب Google.
+وتعمل أزرار الوسائط عبر MPRIS.
+
+**اختياري:** أداة [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install -U yt-dlp` مع Node.js)
+لأعلى جودة تنزيل، ولإضافتَي SoundCloud والفيديو، وكبديل حين يرفض YouTube إرسال الأغنية.
+
+</div>
 
 ---
 
@@ -188,8 +271,12 @@ On Android: `./gradlew testDebugUnitTest`.
 RyM is an unofficial client and isn't affiliated with Google or YouTube. It uses YouTube Music's
 internal API, which can change without notice. Use it with your own account, for personal listening.
 
-RyM برنامج غير رسمي وما إله علاقة بـ Google أو YouTube. يستعمل واجهة YouTube Music الداخلية اللي
-ممكن تتغير بأي وقت. استعمله بحسابك، للاستماع الشخصي.
+<div dir="rtl">
+
+RyM برنامج غير رسمي، ولا علاقة له بـ Google أو YouTube. يستخدم الواجهة البرمجية الداخلية لـ
+YouTube Music، وقد تتغير دون إشعار. استخدمه بحسابك الشخصي وللاستماع الشخصي فقط.
+
+</div>
 
 ## License
 

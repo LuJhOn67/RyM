@@ -204,6 +204,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Other music folders" => "مجلدات موسيقى ثانية",
         "Reset all points" => "تصفير كل النقاط",
         "Colors" => "الألوان",
+        "Copy link" => "نسخ الرابط",
         "The layout's own" => "ألوان الواجهة نفسها",
         "Liquid Aurora" => "الشفق السائل",
         "The cover's colors move behind everything with the bass" => "ألوان الغلاف تتحرك ورا كلشي ويا البيس",

@@ -118,9 +118,10 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 private val itemColors @Composable get() = ListItemDefaults.colors(
     containerColor = Color.Transparent,
     headlineColor = MaterialTheme.colorScheme.onBackground,
-    supportingColor = Dim,
+    // A color theme's own second color (the grey can't be read on the light ones).
+    supportingColor = if (themeBg == null) Dim else MaterialTheme.colorScheme.onSurfaceVariant,
     leadingIconColor = MaterialTheme.colorScheme.primary,
-    trailingIconColor = Dim,
+    trailingIconColor = if (themeBg == null) Dim else MaterialTheme.colorScheme.onSurfaceVariant,
 )
 
 /** One setting: icon, title, a line about it, and an on/off switch. */

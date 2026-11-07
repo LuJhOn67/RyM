@@ -148,9 +148,9 @@ private fun Main(vm: AppViewModel) {
                 Column {
                     MiniPlayer(vm, tint)
                     // RyM YTM: a black bar, the chosen tab in white without a pill behind it.
-                    NavigationBar(containerColor = if (vm.ytmTheme) Color.Black else Color(0xFF111114)) {
+                    NavigationBar(containerColor = if (vm.colors != null) MaterialTheme.colorScheme.surfaceVariant else if (vm.ytmTheme) Color.Black else Color(0xFF111114)) {
                         val tabs = listOf(Triple(Screen.Home, tr("Home"), Icons.Default.Home), Triple(Screen.Search, tr("Search"), Icons.Default.Search), Triple(Screen.Library, tr("Library"), Icons.Default.LibraryMusic))
-                        val colors = if (vm.ytmTheme) androidx.compose.material3.NavigationBarItemDefaults.colors(
+                        val colors = if (vm.colors == null && vm.ytmTheme) androidx.compose.material3.NavigationBarItemDefaults.colors(
                             selectedIconColor = Color.White,
                             selectedTextColor = Color.White,
                             unselectedIconColor = com.rymplayer.ui.Dim,
