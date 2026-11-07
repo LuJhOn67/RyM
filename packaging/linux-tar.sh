@@ -26,7 +26,8 @@ Needs GTK 4 (4.12 or newer), and WebKitGTK 4.1 for the Google sign-in window.
 Optional: yt-dlp (with Node.js), VLC.
 EOF
 tar czf RyM-linux-x86_64.tar.gz RyM-linux
-cp RyM-linux-x86_64.tar.gz /mnt/c/Users/Willy/Desktop/
+# On the PC (WSL), a copy on the Windows desktop.
+[ -d /mnt/c/Users/Willy/Desktop ] && cp RyM-linux-x86_64.tar.gz /mnt/c/Users/Willy/Desktop/ || true
 ls -la RyM-linux/ RyM-linux-x86_64.tar.gz
 echo "== libraries the window app needs:"
 ldd RyM-linux/RymPlayer-GTK | grep -E "gtk|glib|asound|ssl|not found" | sed 's/ (0x.*//' | sort -u

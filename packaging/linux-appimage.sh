@@ -1,7 +1,7 @@
 #!/bin/bash
 # Packs RymPlayer-GTK (with RyM beside it for the Google sign-in) into an AppImage.
 set -e
-source "$HOME/.cargo/env"
+[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 cd ~
 mkdir -p appimage && cd appimage
 [ -x linuxdeploy ] || curl -sSLo linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
