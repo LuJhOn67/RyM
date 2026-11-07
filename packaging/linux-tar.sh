@@ -11,6 +11,7 @@ mkdir -p ~/fonts-cache
 [ -s ~/fonts-cache/NotoSansJP.ttf ] || curl -sSfL -o ~/fonts-cache/NotoSansJP.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf"
 [ -s ~/fonts-cache/OFL.txt ] || curl -sSfL -o ~/fonts-cache/OFL.txt "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt"
 mkdir -p RyM-linux/fonts && cp ~/fonts-cache/NotoSansJP.ttf ~/fonts-cache/OFL.txt RyM-linux/fonts/
+cp ~/RyM/ui/fonts/Doto.ttf ~/RyM/ui/fonts/OFL-doto.txt RyM-linux/fonts/
 cat > RyM-linux/README.txt <<'EOF'
 RyM for Linux (x86_64)
 

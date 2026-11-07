@@ -1934,12 +1934,32 @@ component WatchPage inherits Rectangle {
                 clip: true;
                 background: #000000;
                 Image { width: 100%; height: 100%; source: App.backdrop; image-fit: cover; opacity: 0.55; }
-                if !App.show-lyrics: Cover {
+                if !App.show-lyrics && Theme.vinyl: Vinyl {
+                    width: parent.height * 0.86;
+                    height: self.width;
+                    source: App.cover;
+                    TouchArea { mouse-cursor: pointer; clicked => { App.show-lyrics = true; } }
+                }
+                if !App.show-lyrics && !Theme.vinyl: Cover {
                     width: parent.height * 0.82;
                     height: self.width;
                     radius: 10px * Ui.k;
                     source: App.cover;
+                    border-width: Theme.cover-border ? 2px * Ui.k : 0;
+                    border-color: Theme.cover-color;
+                    drop-shadow-blur: Theme.glow ? 30px * Ui.k : 0;
+                    drop-shadow-color: Theme.accent.with-alpha(0.55);
                     TouchArea { mouse-cursor: pointer; clicked => { App.show-lyrics = true; } }
+                }
+                // Hi-Fi Rack: the needle meters over the bottom of the picture.
+                if Theme.vu: HorizontalLayout {
+                    y: parent.height - self.height - 12px * Ui.k;
+                    x: 12px * Ui.k;
+                    width: min(parent.width - 24px * Ui.k, 420px * Ui.k);
+                    height: 60px * Ui.k;
+                    spacing: 10px * Ui.k;
+                    VuMeter { level: Theme.vu-l; label: "L"; }
+                    VuMeter { level: Theme.vu-r; label: "R"; }
                 }
                 if App.show-lyrics: Lyrics {
                     width: parent.width * 0.86;

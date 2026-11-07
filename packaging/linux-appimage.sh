@@ -32,6 +32,7 @@ mkdir -p ~/fonts-cache
 [ -s ~/fonts-cache/NotoSansJP.ttf ] || curl -sSfL -o ~/fonts-cache/NotoSansJP.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf"
 [ -s ~/fonts-cache/OFL.txt ] || curl -sSfL -o ~/fonts-cache/OFL.txt "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt"
 mkdir -p AppDir/usr/share/rym/fonts && cp ~/fonts-cache/NotoSansJP.ttf ~/fonts-cache/OFL.txt AppDir/usr/share/rym/fonts/
+cp ~/RyM/ui/fonts/Doto.ttf ~/RyM/ui/fonts/OFL-doto.txt AppDir/usr/share/rym/fonts/
 LDAI_OUTPUT=RyM-x86_64.AppImage ./linuxdeploy --appdir AppDir --output appimage >>/tmp/linuxdeploy.log 2>&1 || { tail -30 /tmp/linuxdeploy.log; exit 1; }
 ls -la RyM-x86_64.AppImage
 du -sh AppDir

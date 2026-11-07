@@ -71,6 +71,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OndemandVideo
@@ -186,7 +189,21 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
     val t = p.current ?: return
     var panel by remember { mutableStateOf(Panel.Cover) }
     val bg = Brush.verticalGradient(listOf(lerp(Color.Black, tint, 0.55f), lerp(Color.Black, tint, 0.18f), Color.Black))
-    Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding()) {
+    // The color theme's extras: glass over the cover, Liquid Aurora, the needle meters, dot digits.
+    val colors = vm.colors
+    val accent = MaterialTheme.colorScheme.primary
+    val (bass, vuL, vuR) = rememberLevels((vm.aurora || colors?.vu == true) && p.playing && p.visible)
+    Box(Modifier.fillMaxSize().background(bg)) {
+    if (colors != null && colors.glass > 0f) {
+        // The cover blurred behind see-through panels (the blur needs Android 12; before, a soft fade).
+        coil.compose.AsyncImage(
+            com.rymplayer.data.thumbSized(t.thumb, 480), null,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().blur(28.dp).alpha(0.3f + colors.glass * 0.5f),
+        )
+    }
+    if (vm.aurora) Aurora(coverLights(t.thumb), bass, p.playing, colors?.dark ?: true)
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ vm.playerOpen = false }) { Icon(Icons.Default.KeyboardArrowDown, tr("Close"), tint = Color.White, modifier = Modifier.size(30.dp)) }
             Text(tr("Now playing"), Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.8f))
@@ -211,13 +228,24 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                     val scale by animateFloatAsState(if (p.playing) 1f else 0.86f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessLow), label = "cover")
                     val side = minOf(maxWidth, maxHeight) - 48.dp
                     // A tap on the cover shows the lyrics (it never skips the song).
-                    Box(Modifier.scale(scale).shadow(24.dp, RoundedCornerShape(16.dp)).clickable { panel = Panel.Lyrics }) { Cover(t.thumb, side, 720, 16.dp) }
+                    if (vm.vinyl) {
+                        Vinyl(t.thumb, side, p.playing && !p.loading, vm.sound.speed, if (colors?.glow == true) accent else null, Modifier.clickable { panel = Panel.Lyrics })
+                    } else {
+                        val shape = RoundedCornerShape(16.dp * (colors?.round ?: 1f))
+                        Box(
+                            Modifier.scale(scale)
+                                .shadow(if (colors?.glow == true) 36.dp else 24.dp, shape, ambientColor = if (colors?.glow == true) accent else Color.Black, spotColor = if (colors?.glow == true) accent else Color.Black)
+                                .then(if (colors?.coverBorder == true) Modifier.border(2.dp, tint, shape) else Modifier)
+                                .clickable { panel = Panel.Lyrics },
+                        ) { Cover(t.thumb, side, 720, 16.dp * (colors?.round ?: 1f)) }
+                    }
                 }
                 Panel.Lyrics -> LyricsView(vm, tint)
                 Panel.Queue -> QueueView(vm)
             }
         }
         Column(Modifier.padding(horizontal = 24.dp)) {
+            if (colors?.vu == true) VuMeters(vuL, vuR, Modifier.padding(bottom = 10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Marquee(t.title, 22, FontWeight.Bold, Color.White)
@@ -245,9 +273,10 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = lerp(tint, Color.White, 0.45f), inactiveTrackColor = Color.White.copy(alpha = 0.2f)),
             )
             Row {
-                Text(fmtTime(dragging ?: p.position), color = Dim, fontSize = 12.sp)
+                val digits = if (colors?.dotClock == true) DotDigits else null
+                Text(fmtTime(dragging ?: p.position), color = Dim, fontSize = if (digits != null) 15.sp else 12.sp, fontFamily = digits)
                 Spacer(Modifier.weight(1f))
-                Text(fmtTime(dur), color = Dim, fontSize = 12.sp)
+                Text(fmtTime(dur), color = Dim, fontSize = if (digits != null) 15.sp else 12.sp, fontFamily = digits)
             }
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.size(48.dp))
@@ -275,6 +304,7 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 PanelButton(Icons.AutoMirrored.Filled.QueueMusic, tr("Up next"), panel == Panel.Queue) { panel = if (panel == Panel.Queue) Panel.Cover else Panel.Queue }
             }
         }
+    }
     }
 }
 

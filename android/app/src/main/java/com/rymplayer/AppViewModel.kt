@@ -277,6 +277,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         choosePalette(names[(names.indexOf(palette).coerceAtLeast(0) + 1) % names.size])
     }
 
+    /** Liquid Aurora (the cover's colors moving with the bass) and the cover as a spinning record. */
+    var aurora by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("aurora", false))
+        private set
+    var vinyl by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("vinyl", false))
+        private set
+
+    fun toggleAurora() {
+        aurora = !aurora
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("aurora", aurora).apply()
+    }
+
+    fun toggleVinyl() {
+        vinyl = !vinyl
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("vinyl", vinyl).apply()
+    }
+
     /** The colors shown now as JSON, on the clipboard (to paste on the PC or share). */
     fun exportTheme() {
         val t = colors ?: com.rymplayer.data.Themes.Theme(name = "RyM")

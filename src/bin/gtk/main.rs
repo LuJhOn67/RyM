@@ -18,6 +18,8 @@ use gtk::{Align, Application, ApplicationWindow, Button, CssProvider, HeaderBar,
 use rymplayer::i18n::tr;
 use rymplayer::api::{self, Api, LIKED_ID, Link, Playlist, Track};
 use rymplayer::audio::Audio;
+
+mod fx_view;
 use rymplayer::config::{Config, Source};
 use rymplayer::likes::{Likes, SYNC_EVERY};
 use rymplayer::lyrics::Lyrics;
@@ -383,6 +385,15 @@ fn colors_css(theme: usize, t: &rymplayer::themes::Theme) -> String {
         .replace("@input@", &soft(&t.text, 0.08))
         .replace("@divider@", &c(&t.border))
         .replace("@menu@", &c(&t.raised));
+    if t.dot_clock {
+        css.push_str(" .clock { font-family: \"Doto\"; font-weight: 800; font-size: 1.15em; }");
+    }
+    if t.glow {
+        css.push_str(&format!(" .np-art {{ box-shadow: 0 0 34px {}; }}", soft(&t.accent, 0.55)));
+    }
+    if t.cover_border {
+        css.push_str(&format!(" .np-art {{ border: 2px solid {}; }}", c(&t.accent)));
+    }
     // Corners: sharp themes square everything off.
     if t.round < 0.5 {
         let px = (t.round * 12.0).round();
@@ -406,6 +417,17 @@ fn current_colors(c: &Config) -> Option<rymplayer::themes::Theme> {
         "Custom" => c.custom_theme.clone(),
         name => rymplayer::themes::preset(name),
     }
+}
+
+/// The record or the cover, Liquid Aurora, and the meters, as the settings and colors say.
+fn apply_extras(s: &Ui) {
+    let colors = current_colors(&s.config);
+    s.w.art_stack.set_visible_child_name(if s.config.vinyl { "vinyl" } else { "cover" });
+    s.w.aurora.set_visible(s.config.aurora);
+    s.w.meters.set_visible(colors.as_ref().is_some_and(|t| t.vu));
+    let bg = colors.as_ref().and_then(|t| rymplayer::themes::rgba(&t.bg)).map_or((0.07, 0.07, 0.08), |(r, g, b, _)| (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0));
+    s.w.live.bg.set(bg);
+    s.w.live.dark.set(colors.as_ref().is_none_or(|t| t.dark));
 }
 
 fn apply_theme(provider: &CssProvider, theme: usize, colors: Option<&rymplayer::themes::Theme>) {
@@ -510,6 +532,11 @@ struct Widgets {
     /// The pages, and the playing song's page over them (its big cover; lyrics and Up next beside it).
     stack: gtk::Stack,
     np_art: gtk::Picture,
+    /// Theme extras: what they follow, the cover or the record, Liquid Aurora, the meters.
+    live: Rc<fx_view::Live>,
+    art_stack: gtk::Stack,
+    aurora: gtk::DrawingArea,
+    meters: gtk::DrawingArea,
     /// The RyM YTM layout, and its side menu's playlists.
     ytm: bool,
     nav_lists: gtk::Box,
@@ -610,6 +637,9 @@ struct Ui {
     request_id: u64,
     loading: bool,
     radio_pending: bool,
+    /// Liquid Aurora: the loudest bass lately; the theme extras last shown (vinyl, aurora, colors).
+    bass_peak: f32,
+    extras_key: Option<(bool, bool, String)>,
     /// The next song was picked by hand (RaM points: its minus points go).
     user_pick: bool,
     audio: Option<Audio>,
@@ -1155,12 +1185,32 @@ fn build(app: &Application) {
     if ytm {
         content.add_css_class("page-glow");
     }
+    let live = Rc::new(fx_view::Live::default());
+    let art_stack = gtk::Stack::new();
+    art_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+    let aurora = fx_view::aurora(live.clone());
+    let meters = fx_view::meters(live.clone());
+    meters.set_margin_bottom(8);
+    meters.set_visible(false);
     {
-        // The cover as big as the room allows, always square.
+        // Liquid Aurora takes the cover's colors.
+        let (live, aurora) = (live.clone(), aurora.clone());
+        np_art.connect_paintable_notify(move |p| {
+            if let Some(lights) = p.paintable().and_then(|p| p.downcast::<gdk::Texture>().ok()).and_then(|t| fx_view::cover_lights(&t)) {
+                *live.lights.borrow_mut() = lights;
+                aurora.queue_draw();
+            }
+        });
+    }
+    {
+        // The cover as big as the room allows, always square (or the record in its place).
         np_art.set_halign(Align::Fill);
         np_art.set_valign(Align::Fill);
         let art_box = gtk::AspectFrame::new(0.5, 0.5, 1.0, false);
-        art_box.set_child(Some(&np_art));
+        art_stack.add_named(&np_art, Some("cover"));
+        art_stack.add_named(&fx_view::vinyl(&np_art, live.clone()), Some("vinyl"));
+        art_box.set_child(Some(&art_stack));
+        side_box.prepend(&meters);
         art_box.set_hexpand(true);
         art_box.set_vexpand(true);
         art_box.set_margin_top(40);
@@ -1174,7 +1224,11 @@ fn build(app: &Application) {
         np_view.append(&side_box);
         // Back to the page it came from (Esc too).
         let np_page = gtk::Overlay::new();
-        np_page.set_child(Some(&np_view));
+        // Liquid Aurora under the page.
+        np_page.set_child(Some(&aurora));
+        np_page.add_overlay(&np_view);
+        np_page.set_measure_overlay(&np_view, true);
+        aurora.set_visible(false);
         np_back.add_css_class("np-back");
         np_back.set_halign(Align::Start);
         np_back.set_valign(Align::Start);
@@ -1215,8 +1269,8 @@ fn build(app: &Application) {
     play.add_css_class("play");
     play.set_tooltip_text(Some(tr("Play / pause")));
     let next = icon_button("media-skip-forward-symbolic", tr("Next"), &[]);
-    let pos = label("0:00", &["dim", "small"]);
-    let len = label("0:00", &["dim", "small"]);
+    let pos = label("0:00", &["dim", "small", "clock"]);
+    let len = label("0:00", &["dim", "small", "clock"]);
     let progress = Scale::with_range(Orientation::Horizontal, 0.0, 1.0, 0.5);
     progress.add_css_class("progress");
     progress.set_draw_value(false);
@@ -1356,6 +1410,10 @@ fn build(app: &Application) {
             rail,
             stack: main_stack.clone(),
             np_art: np_art.clone(),
+            live: live.clone(),
+            art_stack: art_stack.clone(),
+            aurora: aurora.clone(),
+            meters: meters.clone(),
             ytm,
             nav_lists: nav_lists.clone(),
             content,
@@ -1420,6 +1478,8 @@ fn build(app: &Application) {
         request_id: 0,
         loading: false,
         radio_pending: false,
+        bass_peak: 0.05,
+        extras_key: None,
         user_pick: false,
         audio,
         vlc: None,
@@ -3338,6 +3398,21 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Colors"), "", &colors));
+    for (title, about, on, set) in [
+        (tr("Liquid Aurora"), tr("The cover's colors move behind everything with the bass"), config.aurora, (|c: &mut Config, on| c.aurora = on) as fn(&mut Config, bool)),
+        (tr("Vinyl record"), tr("The cover turns like a record: faster with Nightcore, slower with Slowed"), config.vinyl, |c: &mut Config, on| c.vinyl = on),
+    ] {
+        let sw = gtk::Switch::new();
+        sw.set_active(on);
+        sw.set_valign(Align::Center);
+        let ui = ui.clone();
+        sw.connect_active_notify(move |w| {
+            let mut s = ui.borrow_mut();
+            set(&mut s.config, w.is_active());
+            s.config.save();
+        });
+        page.append(&setting_row(title, about, &sw));
+    }
     let path = gtk::Entry::new();
     path.set_placeholder_text(Some(tr("A .json theme file (its path), or the JSON itself")));
     path.set_width_chars(28);
@@ -3357,6 +3432,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
                         let mut s = ui.borrow_mut();
                         s.config.custom_theme = Some(t);
                         s.config.palette = "Custom".into();
+                        s.extras_key = None;
                         s.config.save();
                         apply_theme(&s.w.provider, s.config.gui_theme, current_colors(&s.config).as_ref());
                     }
@@ -4632,6 +4708,22 @@ fn tick(ui: &Shared) {
     };
     if let Some(a) = &mut s.audio {
         a.tick();
+    }
+    // Theme extras: the record turns, Liquid Aurora pulses with the bass, the needles follow.
+    {
+        let key = (s.config.vinyl, s.config.aurora, s.config.palette.clone());
+        if s.extras_key.as_ref() != Some(&key) {
+            s.extras_key = Some(key);
+            apply_extras(&s);
+        }
+        let (bass, left, right) = if playing { s.audio.as_ref().map(Audio::bands).unwrap_or_default() } else { (0.0, 0.0, 0.0) };
+        s.bass_peak = (s.bass_peak * 0.995).max(bass).max(0.01);
+        let live = s.w.live.clone();
+        live.playing.set(playing);
+        live.spin_rate.set(200.0 * s.config.speed as f64);
+        live.energy.set((bass / s.bass_peak).powf(1.5).clamp(0.0, 1.0) as f64);
+        let level = |x: f32| ((20.0 * x.max(1e-5).log10() + 30.0) / 30.0).clamp(0.0, 1.0) as f64;
+        live.vu.set((level(left), level(right)));
     }
     // Listening stats: time while playing, written once a minute.
     let since = s.listened_at.elapsed();

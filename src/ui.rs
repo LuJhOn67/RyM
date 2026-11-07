@@ -581,7 +581,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
 
     // Theme swatches across the top: the accents of every theme, current one marked.
     let mut swatch = vec![" ".into()];
-    for (i, t) in crate::config::THEMES.iter().enumerate() {
+    for (i, t) in crate::config::all_themes().iter().enumerate() {
         let mark = if i == app.config.theme { "◆" } else { "●" };
         swatch.push(format!("{mark} ").fg(t.accent));
     }

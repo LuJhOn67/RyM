@@ -31,6 +31,13 @@ import kotlin.math.sqrt
 object Automix {
     /** Loudness blocks per second (one every 10 ms). */
     const val BLOCKS = 100
+
+    /** The playing song's latest bass (below about 150 Hz), left and right (RMS): Liquid Aurora and the needle meters. */
+    object Levels {
+        @Volatile var bass = 0f
+        @Volatile var left = 0f
+        @Volatile var right = 0f
+    }
     private const val KEEP = 16 * BLOCKS
     const val CUE_OUT_DB = -28f
     const val CUE_OUT_HOLD = 40
@@ -222,12 +229,19 @@ object Automix {
         private var blockFrames = 480
         private var sum = 0.0
         private var inBlock = 0
+        // The bass filter (a one-pole low-pass at 150 Hz) and this block's bass, left and right power.
+        private var low = 0f
+        private var lowStep = 0.02f
+        private var bassSum = 0.0
+        private var leftSum = 0.0
+        private var rightSum = 0.0
 
         override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
             if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) return AudioProcessor.AudioFormat.NOT_SET
             channels = inputAudioFormat.channelCount
             rate = inputAudioFormat.sampleRate
             blockFrames = maxOf(1, rate / BLOCKS)
+            lowStep = (1.0 - kotlin.math.exp(-2.0 * Math.PI * 150.0 / rate)).toFloat()
             filters = Array(channels) { HighPass() }
             cutoff = 0f
             return inputAudioFormat
@@ -246,16 +260,28 @@ object Automix {
             val frames = bytes / (2 * channels)
             repeat(frames) {
                 var power = 0f
+                var mono = 0f
                 for (c in 0 until channels) {
                     var x = inputBuffer.short / 32768f
                     power += x * x
+                    mono += x
+                    if (c == 0) leftSum += x * x
+                    if (c == 1 || channels == 1) rightSum += x * x
                     if (cutoff >= 1f) x = filters[c].run(x)
                     out.putShort((x * 32768f).roundToInt().coerceIn(-32768, 32767).toShort())
                 }
                 sum += power / channels
+                low += lowStep * (mono / channels - low)
+                bassSum += low * low
                 if (++inBlock >= blockFrames) {
                     meter.push(sqrt(sum / inBlock).toFloat())
+                    Levels.bass = sqrt(bassSum / inBlock).toFloat()
+                    Levels.left = sqrt(leftSum / inBlock).toFloat()
+                    Levels.right = sqrt(rightSum / inBlock).toFloat()
                     sum = 0.0
+                    bassSum = 0.0
+                    leftSum = 0.0
+                    rightSum = 0.0
                     inBlock = 0
                 }
             }

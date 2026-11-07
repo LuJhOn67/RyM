@@ -322,6 +322,7 @@ impl Default for Config {
     }
 }
 
+#[derive(Clone)]
 pub struct Theme {
     pub name: &'static str,
     pub accent: Color,
@@ -336,6 +337,39 @@ pub struct Theme {
     pub text: Color,
     pub dim: Color,
     pub faint: Color,
+}
+
+/// Every terminal theme: the ones below, then the 11 color themes of the window apps
+/// (`themes.rs`) in terminal colors.
+pub fn all_themes() -> &'static [Theme] {
+    static ALL: std::sync::OnceLock<Vec<Theme>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        let mut all = THEMES.to_vec();
+        for t in crate::themes::presets() {
+            let bg = crate::themes::rgba(&t.bg).map_or((0, 0, 0), |(r, g, b, _)| (r, g, b));
+            // A see-through color laid over the background, as the terminal can't blend.
+            let c = |hex: &str| {
+                let (r, g, b, a) = crate::themes::rgba(hex).unwrap_or((128, 128, 128, 255));
+                let (r, g, b) = crate::colors::mix(bg, (r, g, b), a as f32 / 255.0);
+                Color::Rgb(r, g, b)
+            };
+            let accent = crate::themes::rgba(&t.accent).map_or((255, 0, 51), |(r, g, b, _)| (r, g, b));
+            let (cr, cg, cb) = crate::colors::mix(bg, accent, 0.45);
+            let raised = c(&t.raised);
+            all.push(Theme {
+                name: Box::leak(t.name.clone().into_boxed_str()),
+                accent: c(&t.accent),
+                focus: c(&t.accent2),
+                bg: Some(Color::Rgb(bg.0, bg.1, bg.2)),
+                cursor: Color::Rgb(cr, cg, cb),
+                cursor_dim: raised,
+                text: c(&t.text),
+                dim: c(&t.dim),
+                faint: c(&t.border),
+            });
+        }
+        all
+    })
 }
 
 /// The first one is the original look and stays the default.
@@ -488,7 +522,8 @@ fn cycle<T: Copy + PartialEq>(options: &[T], current: T, step: i32) -> T {
 
 impl Config {
     pub fn theme(&self) -> &'static Theme {
-        &THEMES[self.theme.min(THEMES.len() - 1)]
+        let all = all_themes();
+        &all[self.theme.min(all.len() - 1)]
     }
 
     pub fn load() -> Config {
@@ -570,7 +605,7 @@ impl Config {
     /// Moves a setting to its next (`step` 1) or previous (-1) value.
     pub fn change(&mut self, s: Setting, step: i32) {
         match s {
-            Setting::Theme => self.theme = (self.theme as i32 + step).rem_euclid(THEMES.len() as i32) as usize,
+            Setting::Theme => self.theme = (self.theme as i32 + step).rem_euclid(all_themes().len() as i32) as usize,
             Setting::Library => self.library = cycle(&[Side::Left, Side::Right, Side::Hidden], self.library, step),
             Setting::LibraryWidth => self.library_width = (self.library_width as i32 + 2 * step).clamp(18, 44) as u16,
             Setting::Lyrics => {
