@@ -261,11 +261,11 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                 }
                 IconButton(p::next, Modifier.size(56.dp)) { Icon(Icons.Default.SkipNext, tr("Next"), tint = Color.White, modifier = Modifier.size(36.dp)) }
                 // Repeat this song.
-                IconButton({ p.repeatOne = !p.repeatOne }, Modifier.size(48.dp)) {
+                IconButton({ p.cycleRepeat() }, Modifier.size(48.dp)) {
                     Icon(
                         if (p.repeatOne) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                        tr("Repeat this song"),
-                        tint = if (p.repeatOne) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f),
+                        tr(when (p.repeatMode) { 2 -> "Repeat this song"; 1 -> "Repeat all"; else -> "Repeat" }),
+                        tint = if (p.repeatMode != 0) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f),
                         modifier = Modifier.size(28.dp),
                     )
                 }

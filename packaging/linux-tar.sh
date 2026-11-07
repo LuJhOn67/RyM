@@ -6,6 +6,11 @@ rm -rf RyM-linux && mkdir RyM-linux
 cp ~/RyM/target/release/RymPlayer-GTK ~/RyM/target/release/RyM RyM-linux/
 strip RyM-linux/RymPlayer-GTK RyM-linux/RyM
 cp ~/RyM/assets/icons/rym-gui.png RyM-linux/rym.png
+# A Japanese font goes with it (systems without a CJK font drew Japanese as boxes).
+mkdir -p ~/fonts-cache
+[ -s ~/fonts-cache/NotoSansJP.ttf ] || curl -sSfL -o ~/fonts-cache/NotoSansJP.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf"
+[ -s ~/fonts-cache/OFL.txt ] || curl -sSfL -o ~/fonts-cache/OFL.txt "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt"
+mkdir -p RyM-linux/fonts && cp ~/fonts-cache/NotoSansJP.ttf ~/fonts-cache/OFL.txt RyM-linux/fonts/
 cat > RyM-linux/README.txt <<'EOF'
 RyM for Linux (x86_64)
 

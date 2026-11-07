@@ -785,6 +785,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** App on screen: liked songs are re-read every two minutes (and right away). */
     fun onForeground() {
         player.visible = true
+        // Seamless Music: opening RyM here takes the PC's music (if it's playing there).
+        player.takeFromPc()
         // RyM Link: the account's key, so a PC signed in to it can take the music over.
         if (com.rymplayer.playback.Link.account == null && api.signedIn) {
             viewModelScope.launch {

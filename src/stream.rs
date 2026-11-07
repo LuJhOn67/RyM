@@ -202,6 +202,10 @@ pub async fn fetch(video_id: String) -> Result<PathBuf> {
 
 /// Saves a song as a file in the Music folder: `Music\RymPlayer\Artist - Title.ext`.
 pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<PathBuf> {
+    // Already a file here: copying it onto itself would empty it.
+    if let Some(p) = crate::local::path_of(video_id) {
+        return Ok(p);
+    }
     let dir = music_dir();
     tokio::fs::create_dir_all(&dir).await?;
     let name = file_name(artist, title);

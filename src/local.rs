@@ -33,6 +33,11 @@ pub fn folders(extra: &[String]) -> Vec<PathBuf> {
     out
 }
 
+/// One file as a song (a file opened with RyM).
+pub fn track(path: &Path) -> Track {
+    read(path).3
+}
+
 /// Every song in `folders` (and their subfolders), sorted by artist, album and track number.
 /// Reads each file's tags, so it's slow on big libraries: call it off the UI thread.
 pub fn scan(folders: &[PathBuf]) -> Vec<Track> {

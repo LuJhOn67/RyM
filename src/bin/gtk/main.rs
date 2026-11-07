@@ -640,8 +640,28 @@ fn since_start() -> u128 {
     STARTED.get().map_or(0, |t| t.elapsed().as_millis())
 }
 
+/// Linux: the Japanese font that comes with RyM (fonts beside the program, or in the
+/// AppImage), so Japanese isn't drawn as boxes on systems without a CJK font.
+#[cfg(target_os = "linux")]
+fn add_bundled_fonts() {
+    #[link(name = "fontconfig")]
+    unsafe extern "C" {
+        fn FcConfigAppFontAddDir(config: *mut std::ffi::c_void, dir: *const std::ffi::c_char) -> i32;
+    }
+    let beside = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("fonts")));
+    let in_appimage = std::env::var_os("APPDIR").map(|a| std::path::PathBuf::from(a).join("usr/share/rym/fonts"));
+    for dir in [beside, in_appimage].into_iter().flatten().filter(|d| d.is_dir()) {
+        if let Ok(c) = std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
+            // SAFETY: a null config means the current one; the string lives through the call.
+            unsafe { FcConfigAppFontAddDir(std::ptr::null_mut(), c.as_ptr()) };
+        }
+    }
+}
+
 fn main() {
     STARTED.get_or_init(Instant::now);
+    #[cfg(target_os = "linux")]
+    add_bundled_fonts();
     // The window app has no console: a crash's message and place go to rym-gtk.log.
     std::panic::set_hook(Box::new(|info| {
         let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
@@ -2113,6 +2133,21 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     page.append(&setting_row(tr("Equalizer"), tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own (move a band)"), &preset));
     page.append(&bands);
 
+    page.append(&label(tr("On this device"), &["shelf"]));
+    let folders = gtk::Entry::new();
+    folders.set_text(&config.local_folders.join("; "));
+    folders.set_placeholder_text(Some("/home/you/Songs"));
+    folders.set_width_chars(28);
+    {
+        let ui = ui.clone();
+        folders.connect_changed(move |e| {
+            let mut s = ui.borrow_mut();
+            s.config.local_folders = e.text().split(';').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Other music folders"), tr("Besides your Music folder; separate them with ;"), &folders));
+
     page.append(&label("Discord", &["shelf"]));
     let app_id = gtk::Entry::new();
     app_id.set_text(&config.discord_app_id);
@@ -3045,7 +3080,26 @@ fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
         let ui = ui.clone();
         recap.connect_clicked(move |_| go(&ui, Page::Recap));
     }
-    page.append(&recap);
+    // Songs on this computer (the Music folder and the folders from the settings): no account needed.
+    let local = Button::with_label(tr("On this device"));
+    local.add_css_class("ghost");
+    {
+        let ui = ui.clone();
+        local.connect_clicked(move |_| {
+            let folders = rymplayer::local::folders(&ui.borrow().config.local_folders);
+            open_songs(&ui, tr("On this device").into(), async move {
+                let songs = tokio::task::spawn_blocking(move || rymplayer::local::scan(&folders)).await?;
+                if songs.is_empty() {
+                    anyhow::bail!("{}", tr("No songs found in your Music folder"));
+                }
+                Ok(songs)
+            });
+        });
+    }
+    let buttons = gtk::Box::new(Orientation::Horizontal, 8);
+    buttons.append(&local);
+    buttons.append(&recap);
+    page.append(&buttons);
     if !signed {
         page.append(&note(tr("Sign in (Settings) to see your playlists")));
         return page.upcast();
@@ -4275,6 +4329,9 @@ fn previous(ui: &Shared) {
 /// The queue ran out (or a single song plays): YouTube Music's radio keeps it going.
 fn continue_with_radio(ui: &Shared) {
     let (Some(api), Some(t)) = (api_of(ui), now_playing(ui)) else { return };
+    if rymplayer::local::is_local(&t.video_id) {
+        return;
+    }
     {
         let mut s = ui.borrow_mut();
         if s.radio_pending {

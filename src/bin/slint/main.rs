@@ -62,6 +62,17 @@ enum Ev {
     Update(anyhow::Result<Option<rymplayer::updates::Release>>, bool),
     Installed(anyhow::Result<PathBuf>),
     MediaKey(souvlaki::MediaControlEvent),
+    /// The plugin store's list.
+    Store(anyhow::Result<Vec<rymplayer::plugins::Plugin>>),
+    /// A video's picture and sound links (video plugin), and a song's direct link for VLC.
+    VideoLinks(Track, anyhow::Result<(String, Option<String>)>),
+    InVlc(u64, anyhow::Result<(String, Vec<(String, String)>)>),
+    /// Up next saved as a playlist (what to say), a song added to one.
+    SavedQueue(anyhow::Result<String>),
+    AddedTo(String, anyhow::Result<()>),
+    /// The account's history (Recently played, kept in step with the phone).
+    History(anyhow::Result<Vec<Track>>),
+    ResultsMore(u64, anyhow::Result<Paged>),
     /// The tray icon was clicked (show the window), or one of its menu's items picked.
     TrayShow,
     TrayMenu(String),
@@ -116,6 +127,8 @@ struct State {
     resume_at: Option<(String, f32)>,
     radio_pending: bool,
     repeat_one: bool,
+    /// Repeat all: at the end of the list it starts over.
+    repeat_all: bool,
     lyrics: Option<Lyrics>,
     liked: Likes,
     liked_tracks: Vec<Track>,
@@ -179,6 +192,20 @@ struct State {
     /// What the last yt-dlp update and update check said (shown in the settings).
     ytdlp_text: String,
     update_text: String,
+    /// The plugin store's list once loaded.
+    store: Vec<rymplayer::plugins::Plugin>,
+    /// Where the search results go on.
+    results_more: Option<More>,
+    /// A phone took the music: until then, its songs aren't taken back here (no ping-pong).
+    link_quiet_until: Option<Instant>,
+    /// Seamless Music, asked first: the phone waiting for an answer (address, port, key, name).
+    peer_pending: Option<(std::net::IpAddr, u16, String, String)>,
+    /// What the text box question is for ("save-queue", "link").
+    prompt_for: String,
+    /// VLC playing a song or a video.
+    vlc: Option<std::process::Child>,
+    /// The title bar follows Windows' dark / light setting (what it was last set to).
+    title_dark: Option<bool>,
     /// The icon next to the clock (while RyM runs in the background, its window hidden).
     tray: Option<tray_icon::TrayIcon>,
     /// Likes made on the phone come in every few minutes.
@@ -265,6 +292,10 @@ fn main() {
     let st = build(&ui, config);
     STATE.with(|s| *s.borrow_mut() = Some(st.clone()));
     start(&st);
+    let files: Vec<Track> = args.iter().skip(1).map(std::path::PathBuf::from).filter(|p| p.is_file()).map(|p| rymplayer::local::track(&p)).collect();
+    if !files.is_empty() {
+        play_list(&st, files, 0);
+    }
     let ticker = slint::Timer::default();
     {
         let st = st.clone();
@@ -347,6 +378,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         resume_at: None,
         radio_pending: false,
         repeat_one: false,
+        repeat_all: false,
         lyrics: None,
         liked: Likes::default(),
         liked_tracks: Vec::new(),
@@ -385,6 +417,13 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         link_seen: None,
         likes_timer: slint::Timer::default(),
         tray: None,
+        store: Vec::new(),
+        results_more: None,
+        link_quiet_until: None,
+        peer_pending: None,
+        prompt_for: String::new(),
+        vlc: None,
+        title_dark: None,
         float: None,
         float_shown: (String::new(), String::new()),
         share: None,
@@ -409,6 +448,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     }
     wire(ui, &st);
     fill_settings(&st);
+    show_speed(&st);
     st
 }
 
@@ -431,10 +471,21 @@ fn wire(ui: &AppWindow, st: &Shared) {
     app.on_repeat(w(|st| {
         let on = {
             let mut s = st.borrow_mut();
-            s.repeat_one = !s.repeat_one;
-            s.repeat_one
+            // Off, then repeat all (for good), then this song (for good), then off.
+            let (one, all) = match (s.repeat_one, s.repeat_all) {
+                (false, false) => (false, true),
+                (false, true) => (true, false),
+                _ => (false, false),
+            };
+            s.repeat_one = one;
+            s.repeat_all = all;
+            (one, all)
         };
-        with_app(st, |a| a.set_repeat_one(on));
+        with_app(st, |a| {
+            a.set_repeat_one(on.0);
+            a.set_repeat_all(on.1);
+        });
+        toast(st, if on.0 { tr("Repeat this song") } else if on.1 { tr("Repeat all") } else { tr("Repeat off") });
     }));
     app.on_refresh_home(w(refresh_home));
     app.on_more(w(load_more));
@@ -461,6 +512,20 @@ fn wire(ui: &AppWindow, st: &Shared) {
     app.on_share(w(open_share));
     {
         let st = st.clone();
+        app.on_prompt_done(move |ok| prompt_done(&st, ok));
+    }
+    {
+        let st = st.clone();
+        app.on_peer_choice(move |yes| {
+            with_app(&st, |a| a.set_peer_ask(false));
+            let pending = st.borrow_mut().peer_pending.take();
+            if yes && let Some((ip, port, key, device)) = pending {
+                post(async move { Ev::TookOver(device, rymplayer::link::take_over(ip, port, &key).await) });
+            }
+        });
+    }
+    {
+        let st = st.clone();
         app.on_close_choice(move |tray, remember| {
             with_app(&st, |a| a.set_close_ask(false));
             if remember {
@@ -474,6 +539,10 @@ fn wire(ui: &AppWindow, st: &Shared) {
                 quit(&st);
             }
         });
+    }
+    {
+        let st = st.clone();
+        app.on_set_speed(move |id| set_speed(&st, &id));
     }
     app.on_next_theme(w(|st| {
         let next = (st.borrow().config.gui_theme.min(2) + 1) % 3;
@@ -681,12 +750,20 @@ fn start(st: &Shared) {
     slint::Timer::single_shot(Duration::from_millis(1500), move || start_media_controls(&st2));
     {
         let st4 = st.clone();
-        st.borrow().likes_timer.start(slint::TimerMode::Repeated, Duration::from_secs(300), move || {
-            let api = st4.borrow().api.clone().filter(Api::logged_in);
-            if let Some(api) = api {
-                post(async move { Ev::Liked(api.playlist_tracks(LIKED_ID.into()).await) });
-            }
+        // Likes and the account's history (songs played on the phone) every 2 minutes; the
+        // title bar follows Windows' dark / light setting.
+        st.borrow().likes_timer.start(slint::TimerMode::Repeated, Duration::from_secs(120), move || {
+            sync_with_account(&st4);
         });
+    }
+    post(async { Ev::Store(rymplayer::plugins::store().await) });
+    {
+        let st5 = st.clone();
+        slint::Timer::single_shot(Duration::from_millis(400), move || title_bar(&st5));
+        let st6 = st.clone();
+        let t = slint::Timer::default();
+        t.start(slint::TimerMode::Repeated, Duration::from_secs(3), move || title_bar(&st6));
+        std::mem::forget(t);
     }
     let st3 = st.clone();
     slint::Timer::single_shot(Duration::from_secs(8), move || {
@@ -705,13 +782,13 @@ fn go(st: &Shared, page: i32) {
     if page == 6 {
         fill_stats(st);
     }
-    let (empty_home, loading, signed) = {
+    let (empty_home, loading) = {
         let s = st.borrow();
-        (s.home.is_empty(), s.home_loading, s.api.as_ref().is_some_and(Api::logged_in))
+        (s.home.is_empty(), s.home_loading)
     };
     match page {
         3 if empty_home && !loading => refresh_home(st),
-        2 if signed => show_playlists(st),
+        2 => show_playlists(st),
         _ => {}
     }
 }
@@ -899,8 +976,10 @@ fn wave_for(video_id: &str) -> Vec<f32> {
 fn render_queue(st: &Shared) {
     let mut s = st.borrow_mut();
     if let Ok(mut p) = s.link.lock() {
-        p.songs = s.q.songs.clone();
-        p.current = s.q.current.unwrap_or(0);
+        let current = s.q.current.unwrap_or(0);
+        let kept: Vec<(usize, &Track)> = s.q.songs.iter().enumerate().filter(|(_, t)| !rymplayer::local::is_local(&t.video_id)).collect();
+        p.current = kept.iter().position(|(i, _)| *i >= current).unwrap_or(0);
+        p.songs = kept.into_iter().map(|(_, t)| t.clone()).collect();
     }
     let start = s.q.current.map_or(0, |c| c + 1);
     let rows: Vec<(usize, Track)> = s.q.songs.iter().enumerate().skip(start).take(QUEUE_SHOWN).map(|(i, t)| (i, t.clone())).collect();
@@ -973,14 +1052,19 @@ fn shelf_name(name: &str) -> String {
 }
 
 fn show_playlists(st: &Shared) {
+    let names: Vec<SharedString> = st.borrow().playlists.iter().map(|p| SharedString::from(p.title.as_str())).collect();
+    with_app(st, |a| a.set_playlist_names(ModelRc::from(Rc::new(VecModel::from(names)))));
     let mut s = st.borrow_mut();
-    let mut cards = vec![
-        Card { key: "p:liked".into(), title: tr("Liked songs").into(), sub: format!("{} {}", s.liked_tracks.len(), tr("songs")).into(), cover: Image::default() },
-        Card { key: "p:history".into(), title: tr("History").into(), sub: SharedString::new(), cover: Image::default() },
-    ];
-    // The liked songs' tile shows the newest liked song's cover.
-    if let Some(t) = s.liked_tracks.first().cloned() {
-        cards[0].cover = cover(&mut s, t.thumb.as_ref(), CARD_PX);
+    // Songs on this computer (the Music folder and the folders from the settings): no account needed.
+    let mut cards = vec![Card { key: "p:local".into(), title: tr("On this device").into(), sub: SharedString::new(), cover: Image::default() }];
+    if s.api.as_ref().is_some_and(Api::logged_in) {
+        // The liked songs' tile shows the newest liked song's cover.
+        let liked_cover = match s.liked_tracks.first().cloned() {
+            Some(t) => cover(&mut s, t.thumb.as_ref(), CARD_PX),
+            None => Image::default(),
+        };
+        cards.push(Card { key: "p:liked".into(), title: tr("Liked songs").into(), sub: format!("{} {}", s.liked_tracks.len(), tr("songs")).into(), cover: liked_cover });
+        cards.push(Card { key: "p:history".into(), title: tr("History").into(), sub: SharedString::new(), cover: Image::default() });
     }
     let lists = s.playlists.clone();
     for (i, p) in lists.iter().enumerate() {
@@ -1033,6 +1117,21 @@ fn mark_playing(st: &Shared) {
 
 // ---------------------------------------------------------------- settings
 
+/// The plugins in use show their parts (video menu items, SoundCloud search).
+fn plugin_flags(st: &Shared) {
+    let (video, sc) = {
+        let s = st.borrow();
+        (s.config.plugins.contains_key(rymplayer::plugins::VIDEO), s.config.plugins.contains_key(rymplayer::plugins::SOUNDCLOUD))
+    };
+    with_app(st, |a| {
+        a.set_has_video(video);
+        a.set_has_soundcloud(sc);
+        if !sc {
+            a.set_search_in(0);
+        }
+    });
+}
+
 fn fill_settings(st: &Shared) {
     let s = st.borrow();
     let c = &s.config;
@@ -1070,6 +1169,8 @@ fn fill_settings(st: &Shared) {
         choice("eq", "Equalizer", t(c.eq_name())),
         choice("mode", "Speed", t(c.mode_name())),
         choice("sleep", "Sleep timer", sleep),
+        head("On this device"),
+        field("local-folders", "Other music folders", "Besides your Music folder; separate them with ;", &c.local_folders.join("; ")),
         head("Lyrics"),
         choice("lyrics-size", "Lyrics size", format!("{} px", c.lyrics_font)),
         switch("translate", "Translate Japanese lyrics", "English under each Japanese line", c.lyrics_translation),
@@ -1082,7 +1183,12 @@ fn fill_settings(st: &Shared) {
         field("alarm-time", "Time", "Like 07:30", &c.alarm_time),
         head("Devices"),
         switch("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
-        switch("announce", "Tell the phone what plays here", "Your phone (same account, same Wi-Fi) takes it when it's idle", c.link_announce),
+        switch("link-auto", "Take over from the phone by itself", "Off: RyM asks first", c.link_auto),
+        switch("announce", "Tell the phone what plays here", "Open RyM on your phone and it takes the music from here", c.link_announce),
+        head("Playback and downloads"),
+        choice("source", "Audio source", t(c.source.label())),
+        choice("quality", "Download quality", t(if c.download_best { "Best (yt-dlp)" } else { "Fast" })),
+        choice("connections", "Download connections", c.download_connections.to_string()),
         head("Discord"),
         switch("discord", "Show on Discord", "What you play on your Discord profile; needs an application id from discord.com/developers", c.discord),
         field("discord-id", "Application id", "", &c.discord_app_id),
@@ -1099,11 +1205,30 @@ fn fill_settings(st: &Shared) {
             "quit" => "Close RyM",
             _ => "Ask",
         })),
+        head("Plugins"),
         head("Updates"),
         switch("auto-update", "Check for updates", "Every 12 hours", c.auto_update_check),
         switch("beta", "Beta updates", "Pre-releases too", c.beta_updates),
         button("check", "Check now", s.update_text.clone(), "Check"),
     ];
+    let mut rows = rows;
+    if rymplayer::vlc::find().is_some() {
+        let at = rows.iter().position(|r| r.id == "connections").map_or(rows.len(), |i| i + 1);
+        rows.insert(at, switch("vlc", "Play songs in VLC", "Each song opens in VLC", c.play_in_vlc));
+    }
+    if let Some(at) = rows.iter().position(|r| r.kind == 4 && r.title == tr_any("Plugins")) {
+        let mut extra: Vec<Setting> = s
+            .store
+            .iter()
+            .map(|p| Setting { id: format!("plugin:{}", p.id).into(), kind: 0, title: p.name().into(), about: p.description().into(), on: c.plugins.contains_key(&p.id), value: SharedString::new() })
+            .collect();
+        if c.plugins.contains_key(rymplayer::plugins::VIDEO) {
+            extra.push(button("link-dl", "Download from a link", tr_any("Video or sound from YouTube or any site"), "Download"));
+        }
+        for (i, row) in extra.into_iter().enumerate() {
+            rows.insert(at + 1 + i, row);
+        }
+    }
     s.m.settings.set_vec(rows);
 }
 
@@ -1125,6 +1250,17 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "alarm" => c.alarm_on = on,
             "seamless" => c.cross_ears = on,
             "announce" => c.link_announce = on,
+            "link-auto" => c.link_auto = on,
+            "vlc" => c.play_in_vlc = on,
+            p if p.starts_with("plugin:") => {
+                let pid = &p[7..];
+                if on {
+                    let version = s.store.iter().find(|x| x.id == pid).map(|x| x.version.clone()).unwrap_or_default();
+                    s.config.plugins.insert(pid.to_string(), version);
+                } else {
+                    s.config.plugins.remove(pid);
+                }
+            }
             "discord" => c.discord = on,
             "ytdlp-nightly" => c.ytdlp_nightly = on,
             "auto-update" => c.auto_update_check = on,
@@ -1206,6 +1342,24 @@ fn choose(st: &Shared, id: &str, step: i32) {
             s.config.close_action = names[cycle(at, names.len())].to_string();
             s.config.save();
         }
+        "source" => {
+            let mut s = st.borrow_mut();
+            s.config.source = s.config.source.next();
+            stream::use_source(s.config.source);
+            s.config.save();
+        }
+        "quality" => {
+            let mut s = st.borrow_mut();
+            s.config.download_best = !s.config.download_best;
+            stream::download_best(s.config.download_best);
+            s.config.save();
+        }
+        "connections" => {
+            let mut s = st.borrow_mut();
+            s.config.download_connections = (s.config.download_connections as i32 + step).clamp(1, 16) as u8;
+            stream::download_parallel(s.config.download_connections, s.config.download_piece_mb);
+            s.config.save();
+        }
         "only-kind" => {
             let names: Vec<&str> = std::iter::once("").chain(rymplayer::ram_points::Kind::ALL.iter().map(|k| k.name())).collect();
             let mut s = st.borrow_mut();
@@ -1232,7 +1386,14 @@ fn choose(st: &Shared, id: &str, step: i32) {
                 a.set_speed(s.config.speed);
             }
             s.config.save();
+            let speed_row = id == "mode";
             let size = s.config.lyrics_font as i32;
+            if speed_row {
+                drop(s);
+                show_speed(st);
+                fill_settings(st);
+                return;
+            }
             if let Some(ui) = s.ui.upgrade() {
                 ui.global::<App>().set_lyrics_size(size);
             }
@@ -1260,6 +1421,7 @@ fn set_text(st: &Shared, id: &str, text: &str) {
         "discord-id" => c.discord_app_id = text,
         "lastfm-key" => c.lastfm_key = text,
         "lastfm-secret" => c.lastfm_secret = text,
+        "local-folders" => c.local_folders = text.split(';').map(|f| f.trim().trim_matches('"').to_string()).filter(|f| !f.is_empty()).collect(),
         _ => return,
     }
     s.config.save();
@@ -1267,6 +1429,7 @@ fn set_text(st: &Shared, id: &str, text: &str) {
 
 fn press(st: &Shared, id: &str) {
     match id {
+        "link-dl" => ask_text(st, "link", tr("Download from a link"), tr("Paste a link from YouTube or any site")),
         "check" => check_updates(st, true),
         "ytdlp" => {
             let nightly = st.borrow().config.ytdlp_nightly;
@@ -1296,6 +1459,41 @@ fn press(st: &Shared, id: &str) {
         }
         _ => {}
     }
+}
+
+/// The speed button's pick: a speed (sound at its own pitch), or Nightcore / Slowed.
+fn set_speed(st: &Shared, id: &str) {
+    {
+        let mut s = st.borrow_mut();
+        match id {
+            "nightcore" => s.config.set_mode("Nightcore"),
+            "slowed" => s.config.set_mode("Slowed"),
+            other => {
+                s.config.set_mode("Normal");
+                s.config.speed = other.parse::<f32>().unwrap_or(1.0).clamp(0.5, 2.0);
+            }
+        }
+        rymplayer::fx::set(s.config.fx());
+        if let Some(a) = &s.audio {
+            a.set_speed(s.config.speed);
+        }
+        s.config.save();
+    }
+    show_speed(st);
+    fill_settings(st);
+}
+
+/// What the speed button shows.
+fn show_speed(st: &Shared) {
+    let text = {
+        let c = &st.borrow().config;
+        match c.mode_name() {
+            "Nightcore" => "Nightcore".to_string(),
+            "Slowed" => "Slowed".to_string(),
+            _ => format!("{}×", (c.speed * 100.0).round() / 100.0),
+        }
+    };
+    with_app(st, |a| a.set_speed_text(text.into()));
 }
 
 fn set_theme(st: &Shared, index: usize) {
@@ -1360,6 +1558,13 @@ fn load_more(st: &Shared) {
         return;
     }
     match page {
+        1 => {
+            if let Some(more) = s.results_more.take() {
+                s.loading_more = true;
+                let id = s.search_id;
+                post(async move { Ev::ResultsMore(id, api.more(more).await) });
+            }
+        }
         3 => {
             if let Some(more) = s.home_more.take() {
                 s.loading_more = true;
@@ -1393,19 +1598,54 @@ fn typed(st: &Shared, q: String) {
 }
 
 fn search(st: &Shared, q: String) {
+    use rymplayer::{plugins, soundcloud, spotify};
     let q = q.trim().to_string();
     if q.is_empty() {
         return;
     }
-    let Some(api) = st.borrow().api.clone() else { return };
+    let (api, on_soundcloud, has_sc, has_spotify) = {
+        let s = st.borrow();
+        let sc = s.config.plugins.contains_key(plugins::SOUNDCLOUD);
+        let at = s.ui.upgrade().map_or(0, |ui| ui.global::<App>().get_search_in());
+        (s.api.clone(), sc && at == 1, sc, s.config.plugins.contains_key(plugins::SPOTIFY))
+    };
     let id = {
         let mut s = st.borrow_mut();
         s.search_id += 1;
+        s.results_more = None;
         s.suggestions.clear();
         s.suggest_for = None;
         s.m.suggestions.set_vec(Vec::new());
         s.search_id
     };
+    // A Spotify or SoundCloud link (their plugins) opens as a list; SoundCloud searches there.
+    if spotify::is_link(&q) {
+        let Some(api) = api else { return };
+        if !has_spotify {
+            toast(st, tr("Install the Spotify plugin to open Spotify links"));
+            return;
+        }
+        toast(st, tr("Finding the Spotify songs on YouTube Music..."));
+        open_list(st, "Spotify".into(), spotify::import(api, q));
+        return;
+    }
+    if soundcloud::is_link(&q) || on_soundcloud {
+        if !has_sc {
+            toast(st, tr("Install the SoundCloud plugin to open SoundCloud links"));
+            return;
+        }
+        if soundcloud::is_link(&q) {
+            open_list(st, "SoundCloud".into(), soundcloud::open_link(q));
+            return;
+        }
+        with_app(st, |a| {
+            a.set_searching(true);
+            a.set_page(1);
+        });
+        post(async move { Ev::Search(id, soundcloud::search(q).await.map(|tracks| Paged { tracks, more: None })) });
+        return;
+    }
+    let Some(api) = api else { return };
     with_app(st, |a| {
         a.set_searching(true);
         a.set_page(1);
@@ -1460,6 +1700,7 @@ fn track_of(st: &Shared, key: &str) -> Option<Track> {
 }
 
 fn play_key(st: &Shared, key: &str) {
+    st.borrow_mut().link_quiet_until = None;
     let Some((kind, rest)) = key.split_once(':') else { return };
     let Ok(i) = rest.parse::<usize>() else { return };
     match kind {
@@ -1480,6 +1721,11 @@ fn play_key(st: &Shared, key: &str) {
 }
 
 fn open_card(st: &Shared, key: &str) {
+    st.borrow_mut().link_quiet_until = None;
+    if key == "p:local" {
+        open_local(st);
+        return;
+    }
     if let Some(rest) = key.strip_prefix("p:") {
         let Some(api) = st.borrow().api.clone() else { return };
         match rest {
@@ -1504,6 +1750,18 @@ fn open_card(st: &Shared, key: &str) {
         feed::opened(&t);
         play_with_radio(st, t);
     }
+}
+
+/// The songs on this computer, read off the UI thread.
+fn open_local(st: &Shared) {
+    let folders = rymplayer::local::folders(&st.borrow().config.local_folders);
+    open_list(st, tr("On this device").into(), async move {
+        let songs = tokio::task::spawn_blocking(move || rymplayer::local::scan(&folders)).await?;
+        if songs.is_empty() {
+            anyhow::bail!("{}", tr("No songs found in your Music folder"));
+        }
+        Ok(songs)
+    });
 }
 
 /// A home playlist, album or mix opens as a list.
@@ -1536,6 +1794,10 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         open_list(st, tr("Similar songs").into(), async move { Ok(songs) });
         return;
     }
+    if action == "save-queue" {
+        ask_text(st, "save-queue", tr("Save Up next as a playlist"), tr("The playlist's name"));
+        return;
+    }
     if action == "download-all" {
         let songs: Vec<Track> = st.borrow().list.iter().filter(|t| t.link.is_none()).cloned().collect();
         if songs.is_empty() {
@@ -1558,6 +1820,36 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         return;
     }
     match action {
+        "radio" => play_with_radio(st, t),
+        "album" => {
+            let api = st.borrow().api.clone();
+            match (api, t.album_id.clone()) {
+                (Some(api), Some(id)) => open_list(st, t.album.clone(), api.album_tracks(id)),
+                _ => toast(st, tr("No album for this song")),
+            }
+        }
+        "video" => {
+            toast(st, tr("Opening the video..."));
+            post(async move {
+                let links = rymplayer::video::links(&t.video_id).await;
+                Ev::VideoLinks(t, links)
+            });
+        }
+        "video-dl" => {
+            let url = rymplayer::video::watch_url(&t.video_id);
+            toast(st, &format!("{} {}", tr("Downloading"), t.title));
+            post(async move { Ev::Downloaded(rymplayer::video::download(&url, true).await) });
+        }
+        a if a.starts_with("save:") => {
+            let (api, list) = {
+                let s = st.borrow();
+                (s.api.clone(), a[5..].parse::<usize>().ok().and_then(|i| s.playlists.get(i).cloned()))
+            };
+            if let (Some(api), Some(p)) = (api, list) {
+                let (vid, title) = (t.video_id.clone(), p.title.clone());
+                post(async move { Ev::AddedTo(title, api.add_to_playlist(p.id, vid).await) });
+            }
+        }
         "more" => {
             rymplayer::ram_points::recommend_more(&t);
             toast(st, &format!("{}: {}", tr("More like this"), t.artist));
@@ -1602,6 +1894,115 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         }
         _ => {}
     }
+}
+
+/// A question with a text box; the answer goes to `prompt_done`.
+fn ask_text(st: &Shared, what: &str, title: &str, hint: &str) {
+    st.borrow_mut().prompt_for = what.to_string();
+    with_app(st, |a| {
+        a.set_prompt_title(title.into());
+        a.set_prompt_hint(hint.into());
+        a.set_prompt_text(SharedString::new());
+        a.set_prompt_open(true);
+    });
+}
+
+fn prompt_done(st: &Shared, ok: bool) {
+    let text = st.borrow().ui.upgrade().map(|ui| ui.global::<App>().get_prompt_text().trim().to_string()).unwrap_or_default();
+    with_app(st, |a| a.set_prompt_open(false));
+    if !ok || text.is_empty() {
+        return;
+    }
+    let what = std::mem::take(&mut st.borrow_mut().prompt_for);
+    match what.as_str() {
+        // Up next as a new playlist: the playing song and every one after it.
+        "save-queue" => {
+            let (api, songs) = {
+                let s = st.borrow();
+                let from = s.q.current.unwrap_or(0);
+                (s.api.clone().filter(Api::logged_in), s.q.songs.iter().skip(from).filter(|t| rymplayer::is_youtube(&t.video_id)).map(|t| t.video_id.clone()).collect::<Vec<_>>())
+            };
+            let Some(api) = api else { return };
+            toast(st, tr("Saving…"));
+            post(async move {
+                let r = async {
+                    let p = api.clone().create_playlist(text.clone()).await?;
+                    let n = songs.len();
+                    for vid in songs {
+                        let _ = api.clone().add_to_playlist(p.id.clone(), vid).await;
+                    }
+                    Ok::<_, anyhow::Error>(format!("{text}: {n} {}", tr("songs")))
+                }
+                .await;
+                Ev::SavedQueue(r)
+            });
+        }
+        // Video plugin: download from a link (YouTube or any site yt-dlp knows).
+        "link" => {
+            toast(st, &format!("{} {text}", tr("Downloading")));
+            post(async move { Ev::Downloaded(rymplayer::video::download(&text, true).await) });
+        }
+        _ => {}
+    }
+}
+
+/// Likes, and Recently played from the account's history (the phone's plays come in there).
+fn sync_with_account(st: &Shared) {
+    let api = st.borrow().api.clone().filter(Api::logged_in);
+    if let Some(api) = api {
+        let a2 = api.clone();
+        post(async move { Ev::Liked(a2.playlist_tracks(LIKED_ID.into()).await) });
+        post(async move { Ev::History(api.history().await) });
+    }
+}
+
+/// Windows: the title bar dark or light as Windows is set (apps' mode), on every RyM window.
+fn title_bar(st: &Shared) {
+    #[cfg(windows)]
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn RegGetValueW(key: isize, sub: *const u16, value: *const u16, flags: u32, kind: *mut u32, data: *mut u8, len: *mut u32) -> i32;
+        }
+        #[link(name = "dwmapi")]
+        unsafe extern "system" {
+            fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const i32, size: u32) -> i32;
+        }
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn EnumWindows(each: unsafe extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
+            fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        }
+        let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let (sub, name) = (wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"), wide("AppsUseLightTheme"));
+        let mut value: u32 = 1;
+        let mut len: u32 = 4;
+        // HKEY_CURRENT_USER, REG_DWORD only.
+        // SAFETY: the buffers outlive the call and `len` is their size.
+        let found = unsafe { RegGetValueW(0x8000_0001u32 as i32 as isize, sub.as_ptr(), name.as_ptr(), 0x10, std::ptr::null_mut(), &mut value as *mut u32 as *mut u8, &mut len) } == 0;
+        let dark = found && value == 0;
+        if st.borrow().title_dark == Some(dark) {
+            return;
+        }
+        st.borrow_mut().title_dark = Some(dark);
+        unsafe extern "system" fn each(hwnd: isize, dark: isize) -> i32 {
+            let mut pid = 0u32;
+            // SAFETY: plain Win32 calls on a handle Windows just gave.
+            unsafe {
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                if pid == std::process::id() {
+                    let on: i32 = dark as i32;
+                    // DWMWA_USE_IMMERSIVE_DARK_MODE
+                    DwmSetWindowAttribute(hwnd, 20, &on, 4);
+                }
+            }
+            1
+        }
+        // SAFETY: the callback only touches the handles it's given.
+        unsafe { EnumWindows(each, dark as isize) };
+    }
+    #[cfg(not(windows))]
+    let _ = st;
 }
 
 fn toggle_like(st: &Shared, t: &Track) {
@@ -1687,7 +2088,13 @@ fn play_at(st: &Shared, i: usize) {
     save_session(st);
     log(&format!("play {} ({})", track.title, track.video_id));
     let vid = track.video_id.clone();
-    post(async move { Ev::Fetched(id, stream::open(vid).await) });
+    let in_vlc = st.borrow().config.play_in_vlc && rymplayer::vlc::find().is_some();
+    if in_vlc {
+        post(async move { Ev::InVlc(id, stream::link(&vid).await) });
+    } else {
+        rymplayer::vlc::stop(&mut st.borrow_mut().vlc);
+        post(async move { Ev::Fetched(id, stream::open(vid).await) });
+    }
     if let Some(api) = api.clone() {
         let vid = track.video_id.clone();
         post(async move {
@@ -1769,12 +2176,14 @@ fn toggle_playback(st: &Shared) {
 }
 
 fn skip(st: &Shared) {
-    let (current, len) = {
+    let (current, len, all) = {
         let s = st.borrow();
-        (s.q.current, s.q.songs.len())
+        (s.q.current, s.q.songs.len(), s.repeat_all)
     };
     match current {
         Some(i) if i + 1 < len => play_at(st, i + 1),
+        // Repeat all: from the top again.
+        Some(_) if all && len > 0 => play_at(st, 0),
         Some(_) => continue_with_radio(st),
         None => {}
     }
@@ -1806,6 +2215,9 @@ fn continue_with_radio(st: &Shared) {
         (s.api.clone(), s.q.now().cloned())
     };
     let (Some(api), Some(t)) = (api, t) else { return };
+    if rymplayer::local::is_local(&t.video_id) {
+        return;
+    }
     {
         let mut s = st.borrow_mut();
         if s.radio_pending {
@@ -2642,12 +3054,26 @@ fn heard_peer(st: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr
     if note.kind != "phone" || note.account != key || !note.playing || note.video_id.is_empty() || !idle {
         return;
     }
+    // The phone took the music from here lately: its songs stay there until something is played here.
+    if st.borrow().link_quiet_until.is_some_and(|t| Instant::now() < t) {
+        return;
+    }
     let seen = (note.device.clone(), note.video_id.clone());
     if st.borrow().link_seen.as_ref() == Some(&seen) {
         return;
     }
     st.borrow_mut().link_seen = Some(seen);
     let (device, port) = (note.device.clone(), note.port);
+    // "Take over from the phone" off: asked first.
+    if !st.borrow().config.link_auto {
+        st.borrow_mut().peer_pending = Some((ip, port, key, device.clone()));
+        let text = format!("{} {}:\n{} — {}", tr("Playing on"), device, note.title, note.artist);
+        with_app(st, |a| {
+            a.set_peer_text(text.into());
+            a.set_peer_ask(true);
+        });
+        return;
+    }
     post(async move { Ev::TookOver(device, rymplayer::link::take_over(ip, port, &key).await) });
 }
 
@@ -2819,7 +3245,11 @@ fn handle(st: &Shared, ev: Ev) {
             with_app(st, |a| a.set_searching(false));
             match result {
                 Ok(p) => {
-                    st.borrow_mut().results = p.tracks.into_iter().filter(|t| t.link.is_none()).collect();
+                    {
+                        let mut s = st.borrow_mut();
+                        s.results = p.tracks.into_iter().filter(|t| t.link.is_none()).collect();
+                        s.results_more = p.more;
+                    }
                     show_songs(st, 'r');
                     mark_playing(st);
                 }
@@ -3012,6 +3442,113 @@ fn handle(st: &Shared, ev: Ev) {
         }
         Ev::Installed(Err(e)) => set_update_text(st, format!("{}: {e}", tr("Update failed"))),
         Ev::MediaKey(k) => media_key(st, k),
+        Ev::Store(Ok(list)) => {
+            st.borrow_mut().store = list.into_iter().filter(|p| p.for_this_pc()).collect();
+            plugin_flags(st);
+            fill_settings(st);
+        }
+        Ev::Store(Err(e)) => log(&format!("plugin store: {e}")),
+        Ev::VideoLinks(t, result) => {
+            let msg = match (result, rymplayer::vlc::find()) {
+                (Ok((video, audio)), Some(exe)) => {
+                    // The song pauses while the video plays.
+                    let playing = st.borrow().audio.as_ref().is_some_and(Audio::is_playing);
+                    if playing {
+                        toggle_playback(st);
+                    }
+                    match rymplayer::video::watch_in_vlc(&exe, &video, audio.as_deref(), &format!("{} - {}", t.artist, t.title)) {
+                        Ok(child) => {
+                            st.borrow_mut().vlc = Some(child);
+                            None
+                        }
+                        Err(e) => Some(format!("{}: {e}", tr("Can't open the video"))),
+                    }
+                }
+                (_, None) => {
+                    let _ = rymplayer::updates::open_link(&rymplayer::video::watch_url(&t.video_id));
+                    Some(tr("VLC isn't installed: opening YouTube in the browser").to_string())
+                }
+                (Err(e), _) => Some(format!("{}: {e}", tr("Can't open the video"))),
+            };
+            if let Some(m) = msg {
+                toast(st, &m);
+            }
+        }
+        Ev::InVlc(id, result) => {
+            let mut s = st.borrow_mut();
+            if id != s.request_id {
+                return;
+            }
+            s.loading = false;
+            let Some(t) = s.q.now().cloned() else { return };
+            let msg = match (result, rymplayer::vlc::find()) {
+                (Ok((url, headers)), Some(exe)) => {
+                    rymplayer::vlc::stop(&mut s.vlc);
+                    match rymplayer::vlc::play(&exe, &url, &headers, &format!("{} - {}", t.artist, t.title)) {
+                        Ok(child) => {
+                            s.vlc = Some(child);
+                            tr("Playing in VLC").to_string()
+                        }
+                        Err(e) => format!("VLC: {e}"),
+                    }
+                }
+                (Err(e), _) => format!("{}: {e}", tr("Can't play")),
+                (_, None) => tr("VLC isn't installed").into(),
+            };
+            drop(s);
+            with_app(st, |a| a.set_loading(false));
+            toast(st, &msg);
+        }
+        Ev::SavedQueue(Ok(text)) => {
+            toast(st, &format!("{} {text}", tr("Saved:")));
+            let api = st.borrow().api.clone();
+            if let Some(api) = api {
+                post(async move { Ev::Playlists(api.library_playlists().await) });
+            }
+        }
+        Ev::SavedQueue(Err(e)) => toast(st, &format!("{}: {e}", tr("Couldn't save"))),
+        Ev::AddedTo(title, Ok(())) => toast(st, &format!("{} {title}", tr("Added to"))),
+        Ev::AddedTo(_, Err(e)) => toast(st, &format!("{}: {e}", tr("Couldn't add"))),
+        Ev::History(Ok(history)) => {
+            // Recently played on top of Home follows the account's history (plays from the phone too).
+            let mut home = st.borrow().home.clone();
+            if home.iter().any(|t| t.album == feed::RECENTLY_PLAYED) {
+                let mut seen = HashSet::new();
+                let row: Vec<Track> = history
+                    .into_iter()
+                    .chain(rymplayer::recent::tracks())
+                    .filter(|t| t.link.is_none() && seen.insert(t.video_id.clone()))
+                    .take(20)
+                    .map(|t| Track { album: feed::RECENTLY_PLAYED.into(), ..t })
+                    .collect();
+                let changed = {
+                    let old: Vec<&str> = home.iter().filter(|t| t.album == feed::RECENTLY_PLAYED).map(|t| t.video_id.as_str()).collect();
+                    old != row.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>()
+                };
+                if changed {
+                    home.retain(|t| t.album != feed::RECENTLY_PLAYED);
+                    let rest = std::mem::take(&mut home);
+                    home = row.into_iter().chain(rest).collect();
+                    show_home(st, home);
+                }
+            }
+        }
+        Ev::History(Err(_)) => {}
+        Ev::ResultsMore(id, result) => {
+            st.borrow_mut().loading_more = false;
+            if st.borrow().search_id != id {
+                return;
+            }
+            if let Ok(p) = result {
+                {
+                    let mut s = st.borrow_mut();
+                    s.results.extend(p.tracks.into_iter().filter(|t| t.link.is_none()));
+                    s.results_more = p.more;
+                }
+                show_songs(st, 'r');
+                mark_playing(st);
+            }
+        }
         Ev::TrayShow => show_window(st),
         Ev::TrayMenu(id) => match id.as_str() {
             "show" => show_window(st),
@@ -3076,6 +3613,8 @@ fn handle(st: &Shared, ev: Ev) {
             }
         }
         Ev::LinkPause => {
+            // No taking it back from the phone for a while (until something is played here).
+            st.borrow_mut().link_quiet_until = Some(Instant::now() + Duration::from_secs(30 * 60));
             let playing = st.borrow().audio.as_ref().is_some_and(Audio::is_playing);
             if playing {
                 toggle_playback(st);

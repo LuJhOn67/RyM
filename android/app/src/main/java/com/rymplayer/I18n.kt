@@ -135,6 +135,8 @@ object I18n {
         "Nasheeds for you" to "أناشيد لك",
         "Talks for you" to "محاضرات وبودكاست لك",
         "Repeat this song" to "تكرار الأغنية",
+        "Repeat all" to "تكرار الكل",
+        "Repeat" to "تكرار",
         "Songs" to "أغاني",
         "Husseini" to "حسيني",
         "Quran" to "قرآن",

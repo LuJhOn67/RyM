@@ -72,7 +72,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     init {
         QueueBridge.next = { next() }
         QueueBridge.prev = { prev() }
-        QueueBridge.hasNext = { index + 1 < queue.size && !repeatOne }
+        QueueBridge.hasNext = { (index + 1 < queue.size || repeatMode == 1) && !repeatOne }
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
         Link.pause = { pause() }
         // Seamless Music from the PC: while nothing plays here, a PC of the same account's music moves here.
@@ -110,7 +110,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                         } else if (ended != null && ended == current?.videoId && endedFor != playCount) {
                             endedFor = playCount
                             // Nothing after it yet: the radio is asked again and plays once it's in (see append).
-                            if (index + 1 < queue.size) next() else current?.let(::keepGoing)
+                            if (index + 1 < queue.size) next() else if (repeatMode == 1 && queue.isNotEmpty()) play(0) else current?.let(::keepGoing)
                         }
                     }
                 }
@@ -420,7 +420,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     }
 
     fun next() {
-        if (index + 1 < queue.size) play(index + 1)
+        if (index + 1 < queue.size) play(index + 1) else if (repeatMode == 1 && queue.isNotEmpty()) play(0)
     }
 
     /** When Previous was last pressed: twice in a row goes back even mid-song. */
@@ -464,9 +464,20 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     /** The PC song already taken or skipped (device, song), so it's once. */
     private var pcSeen: Pair<String, String>? = null
 
+    /** The PC's latest note (address, port, name, song, when heard). */
+    private var pcNote: PcNote? = null
+    private data class PcNote(val ip: String, val port: Int, val device: String, val vid: String, val at: Long)
+
     private fun fromPc(ip: String, port: Int, device: String, vid: String) {
-        if (playing || loading || pcSeen == (device to vid)) return
-        pcSeen = device to vid
+        pcNote = PcNote(ip, port, device, vid, System.currentTimeMillis())
+    }
+
+    /** RyM was opened on the phone: if the PC is playing (heard in the last seconds) and nothing plays here, the music comes here. */
+    fun takeFromPc() {
+        val n = pcNote?.takeIf { System.currentTimeMillis() - it.at < 8000 } ?: return
+        if (playing || loading || pcSeen == (n.device to n.vid)) return
+        pcSeen = n.device to n.vid
+        val (ip, port, device) = Triple(n.ip, n.port, n.device)
         scope.launch {
             val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Link.takeOver(ip, port) } ?: return@launch
             val (songs, current, position) = got
@@ -476,8 +487,13 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         }
     }
 
-    /** Repeat this song: when it ends it starts again (no mix into the next one). */
-    var repeatOne by mutableStateOf(false)
+    /** Repeat: 0 off, 1 all (the list starts over at its end), 2 this song (for good, no mix). */
+    var repeatMode by mutableIntStateOf(0)
+    val repeatOne: Boolean get() = repeatMode == 2
+
+    fun cycleRepeat() {
+        repeatMode = (repeatMode + 1) % 3
+    }
 
     /** The liked songs, mixed into Up next (set by the app). */
     var likedSongs: () -> List<Track> = { emptyList() }

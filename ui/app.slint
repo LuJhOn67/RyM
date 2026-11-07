@@ -115,6 +115,8 @@ export global App {
     in property <[float]> wave;
     in-out property <float> volume: 0.8;
     in property <bool> repeat-one;
+    // Repeat all: the list starts over when it ends (every time).
+    in property <bool> repeat-all;
     in-out property <bool> show-lyrics;
     in property <[LyricLine]> lyrics;
     in property <string> lyrics-note;
@@ -127,6 +129,8 @@ export global App {
     in property <[string]> sources;
     in property <int> source-at: -1;
     in property <string> sleep-text;
+    // The playing speed as the button by the heart shows it ("1×", "Nightcore").
+    in property <string> speed-text: "1×";
 
     // ---- the pages
     // 0 now playing (Up next), 1 search, 2 library, 3 home, 4 settings, 5 a list, 6 stats
@@ -163,6 +167,20 @@ export global App {
     in property <string> toast;
     // The X was pressed: close RyM, or keep it playing in the background?
     in-out property <bool> close-ask;
+    // The library's playlists (Save to playlist), and the plugins in use.
+    in property <[string]> playlist-names;
+    in property <bool> has-video;
+    in property <bool> has-soundcloud;
+    // Search on YouTube Music (0) or SoundCloud (1).
+    in-out property <int> search-in: 0;
+    // A question with a text box (a playlist's name, a link): its title and what's typed.
+    in-out property <bool> prompt-open;
+    in property <string> prompt-title;
+    in property <string> prompt-hint;
+    in-out property <string> prompt-text;
+    // Seamless Music, asked first: what plays on the phone.
+    in-out property <bool> peer-ask;
+    in property <string> peer-text;
 
     callback toggle-play();
     callback next();
@@ -197,7 +215,10 @@ export global App {
     callback share();
     callback zoom(float);
     callback next-theme();
+    callback set-speed(string);
     callback close-choice(bool, bool);
+    callback prompt-done(bool);
+    callback peer-choice(bool);
 }
 
 // ---------------------------------------------------------------- small parts
@@ -252,10 +273,22 @@ component SongRow inherits Rectangle {
     height: cover-size + 24px * Ui.k;
     border-radius: 8px * Ui.k;
     background: dragged != 0 ? Theme.accent.with-alpha(0.25) : (song.playing || area.has-hover ? Theme.hover : transparent);
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { App.play(root.song.key); }
+    }
     ContextMenuArea {
         Menu {
             MenuItem { title: App.tr("Play next"); activated => { App.menu("next", root.song.key); } }
             MenuItem { title: App.tr("Add to queue"); activated => { App.menu("add", root.song.key); } }
+            MenuItem { title: App.tr("Start radio"); activated => { App.menu("radio", root.song.key); } }
+            Menu {
+                title: App.tr("Save to playlist");
+                for name[pi] in App.playlist-names: MenuItem { title: name; activated => { App.menu("save:" + pi, root.song.key); } }
+            }
+            MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", root.song.key); } }
+            MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", root.song.key); } }
+            MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", root.song.key); } }
             MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", root.song.key); } }
             MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", root.song.key); } }
             MenuItem { title: root.song.liked ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", root.song.key); } }
@@ -271,10 +304,6 @@ component SongRow inherits Rectangle {
             MenuItem { title: App.tr("Download"); activated => { App.menu("download", root.song.key); } }
             MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", root.song.key); } }
             MenuItem { title: App.tr("Remove from queue"); enabled: root.in-queue; activated => { App.menu("remove", root.song.key); } }
-        }
-        area := TouchArea {
-            mouse-cursor: pointer;
-            clicked => { App.play(root.song.key); }
         }
     }
     HorizontalLayout {
@@ -350,10 +379,22 @@ component CardItem inherits VerticalLayout {
             border-radius: 6px * Ui.k;
             background: area.has-hover ? #00000030 : transparent;
         }
+        area := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { App.open-card(root.card.key); }
+        }
         ContextMenuArea {
             Menu {
                 MenuItem { title: App.tr("Play next"); activated => { App.menu("next", root.card.key); } }
                 MenuItem { title: App.tr("Add to queue"); activated => { App.menu("add", root.card.key); } }
+                MenuItem { title: App.tr("Start radio"); activated => { App.menu("radio", root.card.key); } }
+                Menu {
+                    title: App.tr("Save to playlist");
+                    for name[pi] in App.playlist-names: MenuItem { title: name; activated => { App.menu("save:" + pi, root.card.key); } }
+                }
+                MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", root.card.key); } }
+                MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", root.card.key); } }
+                MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", root.card.key); } }
                 MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", root.card.key); } }
                 MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", root.card.key); } }
                 MenuItem { title: false ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", root.card.key); } }
@@ -368,10 +409,6 @@ component CardItem inherits VerticalLayout {
                 }
                 MenuItem { title: App.tr("Download"); activated => { App.menu("download", root.card.key); } }
                 MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", root.card.key); } }
-            }
-            area := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { App.open-card(root.card.key); }
             }
         }
     }
@@ -770,6 +807,64 @@ component Lyrics inherits Rectangle {
     }
 }
 
+// The speed by the heart: what it is, and a list to pick another.
+component SpeedButton inherits Rectangle {
+    in property <length> size: 44px * Ui.k;
+    height: self.size;
+    width: max(self.size, label.preferred-width + 22px * Ui.k);
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: App.speed-text == "1×" ? Theme.border : Theme.accent;
+    background: area.has-hover ? Theme.hover : transparent;
+    label := Text {
+        text: App.speed-text;
+        font-size: root.size * 0.36;
+        font-weight: 700;
+        color: App.speed-text == "1×" ? Theme.icon : Theme.accent;
+    }
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { list.show(); }
+    }
+    list := PopupWindow {
+        y: root.height + 6px;
+        x: (root.width - 180px) / 2;
+        width: 180px;
+        Rectangle {
+            background: Theme.raised;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border;
+            VerticalLayout {
+                padding: 6px;
+                for o in [
+                    { id: "0.75", label: "0.75×" },
+                    { id: "1", label: "1×" },
+                    { id: "1.25", label: "1.25×" },
+                    { id: "1.5", label: "1.5×" },
+                    { id: "nightcore", label: "Nightcore" },
+                    { id: "slowed", label: "Slowed" },
+                ]: Rectangle {
+                    height: 36px;
+                    border-radius: 8px;
+                    background: oa.has-hover ? Theme.hover : transparent;
+                    Text {
+                        x: 12px;
+                        text: o.label;
+                        font-size: 15px;
+                        font-weight: App.speed-text == o.label ? 700 : 400;
+                        color: App.speed-text == o.label ? Theme.accent : Theme.text;
+                    }
+                    oa := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { App.set-speed(o.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The account's picture, or the plain figure; it opens the account's menu.
 component Account inherits Rectangle {
     border-radius: self.width / 2;
@@ -923,6 +1018,10 @@ component NowPlaying inherits Rectangle {
                 }
             }
         }
+        SpeedButton {
+            x: 718px * Ui.k - self.width - 10px * Ui.k;
+            y: 627px * Ui.k;
+        }
         Icon {
             x: 718px * Ui.k;
             y: 616px * Ui.k;
@@ -979,8 +1078,8 @@ component NowPlaying inherits Rectangle {
             x: 767px * Ui.k;
             y: 882px * Ui.k;
             source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg");
-            tint: App.repeat-one ? Theme.accent : Theme.icon;
-            tip: App.tr("Repeat this song");
+            tint: App.repeat-one || App.repeat-all ? Theme.accent : Theme.icon;
+            tip: App.repeat-one ? App.tr("Repeat this song") : (App.repeat-all ? App.tr("Repeat all") : App.tr("Repeat"));
             clicked => { App.repeat(); }
         }
         Account {
@@ -1039,7 +1138,9 @@ component UpNext inherits Page {
         Header {
             title: App.tr("Queue");
             action: App.queue-open ? App.tr("Less") : App.tr("Extend");
+            action2: App.queue.length > 0 && App.signed-in ? App.tr("Save") : "";
             acted => { App.queue-open = !App.queue-open; }
+            acted2 => { App.menu("save-queue", ""); }
         }
         if App.queue.length == 0: Text {
             text: App.tr("Nothing is coming up");
@@ -1107,6 +1208,7 @@ component SearchBox inherits Rectangle {
 
 component SearchPage inherits Page {
     content-height: col.preferred-height;
+    near-end => { App.more(); }
     col := VerticalLayout {
         padding-top: 48px * Ui.k;
         padding-left: Ui.rtl ? 30px * Ui.k : 0;
@@ -1115,6 +1217,24 @@ component SearchPage inherits Page {
         spacing: 14px * Ui.k;
         Header { title: App.tr("Search"); }
         if !Theme.wide: SearchBox { }
+        if App.has-soundcloud: HorizontalLayout {
+            spacing: 8px * Ui.k;
+            alignment: Ui.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+            for where[wi] in ["YouTube Music", "SoundCloud"]: Rectangle {
+                height: 34px * Ui.k;
+                width: wl.preferred-width + 26px * Ui.k;
+                border-radius: self.height / 2;
+                background: App.search-in == wi ? Theme.accent : (wa.has-hover ? Theme.hover : Theme.raised);
+                wl := Text { text: where; font-size: 15px * Ui.k; color: App.search-in == wi ? #ffffff : Theme.text; }
+                wa := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        App.search-in = wi;
+                        if (App.query != "") { App.search(App.query); }
+                    }
+                }
+            }
+        }
         // While typing: suggestions (the account's searches first, with a way to forget them).
         for g[i] in App.suggestions: Rectangle {
             height: 52px * Ui.k;
@@ -1497,10 +1617,19 @@ component UpNextSide inherits Page {
             height: 88px * Ui.k;
             border-radius: 8px * Ui.k;
             background: ca.has-hover ? Theme.hover : transparent;
+            ca := TouchArea { mouse-cursor: pointer; clicked => { App.open-card(c.key); } }
             ContextMenuArea {
                 Menu {
                     MenuItem { title: App.tr("Play next"); activated => { App.menu("next", c.key); } }
                     MenuItem { title: App.tr("Add to queue"); activated => { App.menu("add", c.key); } }
+                    MenuItem { title: App.tr("Start radio"); activated => { App.menu("radio", c.key); } }
+                    Menu {
+                        title: App.tr("Save to playlist");
+                        for name[pi] in App.playlist-names: MenuItem { title: name; activated => { App.menu("save:" + pi, c.key); } }
+                    }
+                    MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", c.key); } }
+                    MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", c.key); } }
+                    MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", c.key); } }
                     MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", c.key); } }
                     MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", c.key); } }
                     MenuItem { title: false ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", c.key); } }
@@ -1516,7 +1645,6 @@ component UpNextSide inherits Page {
                     MenuItem { title: App.tr("Download"); activated => { App.menu("download", c.key); } }
                     MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", c.key); } }
                 }
-                ca := TouchArea { mouse-cursor: pointer; clicked => { App.open-card(c.key); } }
             }
             HorizontalLayout {
                 padding: 12px * Ui.k;
@@ -1594,6 +1722,7 @@ component WatchPage inherits Rectangle {
                     }
                     if App.sleep-text != "": Text { text: "☾ " + App.sleep-text; font-size: 14px * Ui.k; color: Theme.accent; horizontal-alignment: Ui.start; }
                 }
+                VerticalLayout { alignment: center; SpeedButton { size: 40px * Ui.k; } }
                 for b in [
                     { id: 0, icon: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"), label: App.tr("Like") },
                     { id: 1, icon: @image-url("icons/text-square-bold.svg"), label: App.tr("Lyrics") },
@@ -1632,7 +1761,7 @@ component WatchPage inherits Rectangle {
             HorizontalLayout {
                 alignment: center;
                 spacing: 18px * Ui.k;
-                Icon { size: 44px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one ? Theme.accent : Theme.icon; clicked => { App.repeat(); } }
+                Icon { size: 44px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one || App.repeat-all ? Theme.accent : Theme.icon; clicked => { App.repeat(); } }
                 Icon { size: 48px * Ui.k; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } }
                 Icon { size: 68px * Ui.k; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg"); clicked => { App.toggle-play(); } }
                 Icon { size: 48px * Ui.k; source: @image-url("icons/next.svg"); clicked => { App.next(); } }
@@ -1703,6 +1832,7 @@ component BottomBar inherits Rectangle {
                     Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 17px * Ui.k; font-weight: 700; color: Theme.text; overflow: elide; }
                     Text { text: App.artist; font-size: 14px * Ui.k; color: Theme.dim; overflow: elide; }
                 }
+                VerticalLayout { alignment: center; SpeedButton { size: 34px * Ui.k; } }
                 VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: Theme.accent; clicked => { App.like-now(); } } }
             }
             TouchArea {
@@ -1716,7 +1846,7 @@ component BottomBar inherits Rectangle {
         HorizontalLayout {
             alignment: end;
             spacing: 10px * Ui.k;
-            VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one ? Theme.accent : Theme.icon; clicked => { App.repeat(); } } }
+            VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one || App.repeat-all ? Theme.accent : Theme.icon; clicked => { App.repeat(); } } }
             VerticalLayout { alignment: center; FlatVolume { width: 120px * Ui.k; } }
         }
     }
@@ -1830,6 +1960,72 @@ export component AppWindow inherits Window {
                     alignment: LayoutAlignment.end;
                     Button { text: App.tr("Close RyM"); clicked => { App.close-choice(false, card.remember); } }
                     Button { text: App.tr("Keep in background"); strong: true; clicked => { App.close-choice(true, card.remember); } }
+                }
+            }
+        }
+    }
+    // A question with a text box (a playlist's name, a link to download).
+    if App.prompt-open: Rectangle {
+        background: #00000090;
+        TouchArea { }
+        Rectangle {
+            width: min(root.width - 40px, 480px);
+            height: pcol.preferred-height;
+            border-radius: 18px;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            pcol := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: App.prompt-title; font-size: 21px; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+                Rectangle {
+                    height: 44px;
+                    border-radius: 10px;
+                    background: Theme.bg;
+                    border-width: 1px;
+                    border-color: pin.has-focus ? Theme.accent : Theme.border;
+                    pin := TextInput {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        text <=> App.prompt-text;
+                        font-size: 16px;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                        single-line: true;
+                        accepted => { App.prompt-done(true); }
+                    }
+                    if App.prompt-text == "": Text { x: 12px; text: App.prompt-hint; font-size: 16px; color: Theme.dim; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: LayoutAlignment.end;
+                    Button { text: App.tr("Cancel"); clicked => { App.prompt-done(false); } }
+                    Button { text: App.tr("OK"); strong: true; clicked => { App.prompt-done(true); } }
+                }
+            }
+        }
+    }
+    // Seamless Music, asked first: play the phone's song here?
+    if App.peer-ask: Rectangle {
+        background: #00000070;
+        TouchArea { }
+        Rectangle {
+            width: min(root.width - 40px, 440px);
+            height: qcol.preferred-height;
+            border-radius: 18px;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            qcol := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: App.peer-text; font-size: 17px; color: Theme.text; wrap: word-wrap; horizontal-alignment: Ui.start; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: LayoutAlignment.end;
+                    Button { text: App.tr("Not now"); clicked => { App.peer-choice(false); } }
+                    Button { text: App.tr("Play here"); strong: true; clicked => { App.peer-choice(true); } }
                 }
             }
         }
