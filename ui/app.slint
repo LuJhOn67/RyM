@@ -1247,7 +1247,7 @@ component NowPlaying inherits Rectangle {
         VerticalLayout {
             x: 278px * Ui.k;
             y: 610px * Ui.k;
-            width: 420px * Ui.k;
+            width: 506px * Ui.k;
             height: 120px * Ui.k;
             alignment: start;
             spacing: 14px * Ui.k;
@@ -1259,26 +1259,33 @@ component NowPlaying inherits Rectangle {
                 overflow: elide;
                 horizontal-alignment: Ui.start;
             }
-            Text {
-                text: App.loading ? App.tr("Loading…") : App.artist;
-                font-size: 24px * Ui.k;
-                color: artist-area.has-hover ? Theme.accent : Theme.dim;
-                overflow: elide;
-                horizontal-alignment: Ui.start;
-                artist-area := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { App.open-artist(); }
+            // The artist, with room on its right for the speed and the heart.
+            HorizontalLayout {
+                Text {
+                    horizontal-stretch: 1;
+                    text: App.loading ? App.tr("Loading…") : App.artist;
+                    font-size: 24px * Ui.k;
+                    color: artist-area.has-hover ? Theme.accent : Theme.dim;
+                    overflow: elide;
+                    horizontal-alignment: Ui.start;
+                    vertical-alignment: center;
+                    artist-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { App.open-artist(); }
+                    }
                 }
+                Rectangle { width: 124px * Ui.k; }
             }
         }
-        SpeedButton {
-            x: 718px * Ui.k - self.width - 10px * Ui.k;
-            y: 627px * Ui.k;
+        // On the artist's line, at its right end: the speed, then the heart.
+        speed := SpeedButton {
+            x: heart.x - self.width - 10px * Ui.k;
+            y: 672px * Ui.k;
         }
-        Icon {
-            x: 718px * Ui.k;
-            y: 616px * Ui.k;
-            size: 66px * Ui.k;
+        heart := Icon {
+            x: 784px * Ui.k - self.width;
+            y: 671px * Ui.k;
+            size: 46px * Ui.k;
             source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg");
             tint: Theme.accent;
             tip: App.tr("Like");
