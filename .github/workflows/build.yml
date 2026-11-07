@@ -1,0 +1,111 @@
+# Builds RyM on every push to main (and by hand from the Actions page), runs the tests, and keeps
+# the programs as downloads on the run's page:
+# - Linux: RyM Slint, RyM GTK + RyM (tar.gz and AppImage, with the Japanese and dot-matrix fonts)
+# - Windows: RyM-Slint.exe and RyM.exe
+# - Android: the APK (signed with this runner's debug key, so it installs beside a phone build
+#   from the PC only after uninstalling that one)
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      # .cargo/config.toml points CMake at the Windows install; the system one here.
+      CMAKE: cmake
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config cmake file libasound2-dev libssl-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev libgtk-4-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libfontconfig1-dev libfreetype-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --lib
+
+      - name: RyM (terminal) and RyM Slint
+        run: |
+          cargo build --release --bin RyM
+          cargo build --release --bin RyM-Slint --features slint-ui
+
+      - name: RyM GTK
+        run: cargo build --release --no-default-features --features gtk-ui --bin RymPlayer-GTK
+
+      - name: Package (tar.gz and AppImage)
+        run: |
+          # The packaging scripts work from ~/RyM.
+          ln -sfn "$GITHUB_WORKSPACE" ~/RyM
+          bash packaging/linux-tar.sh
+          bash packaging/linux-appimage.sh
+          mkdir -p out
+          cp ~/RyM-linux-x86_64.tar.gz ~/appimage/RyM-x86_64.AppImage out/
+          cp target/release/RyM-Slint out/RyM-Slint-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RyM-linux-x86_64
+          path: out/
+
+  windows:
+    runs-on: windows-latest
+    env:
+      CMAKE: cmake
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --lib
+
+      - name: RyM Slint and RyM
+        run: |
+          cargo build --release --bin RyM-Slint --features slint-ui
+          cargo build --release --bin RyM
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RyM-windows
+          path: |
+            target/release/RyM-Slint.exe
+            target/release/RyM.exe
+
+  android:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Tests and APK
+        run: |
+          chmod +x gradlew
+          ./gradlew testReleaseUnitTest assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RyM-android
+          path: android/app/build/outputs/apk/release/*.apk
