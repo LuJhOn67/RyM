@@ -16,6 +16,12 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# A newer push to a branch cancels that branch's build still running (the free plan runs few jobs
+# at once, and a release tag waited behind them). A tag's build is never cancelled.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
