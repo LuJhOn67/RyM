@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val model: AppViewModel = viewModel()
-            RymTheme(model.ytmTheme) { RymApp(model) }
+            RymTheme(model.ytmTheme, model.colors) { RymApp(model) }
         }
         showUpdateFrom(intent)
         // Not again when the screen turns (the same intent comes back with the saved state).

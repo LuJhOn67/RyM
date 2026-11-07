@@ -357,8 +357,62 @@ fn apply_lyrics_font(px: u8) {
     });
 }
 
-fn apply_theme(provider: &CssProvider, theme: usize) {
-    provider.load_from_string(&css(theme));
+/// A color theme (Settings > Colors, or a .json file) over the layout: its colors in the CSS,
+/// its corners, and its pattern behind the window.
+fn colors_css(theme: usize, t: &rymplayer::themes::Theme) -> String {
+    let c = |hex: &str| {
+        let (r, g, b, a) = rymplayer::themes::rgba(hex).unwrap_or((128, 128, 128, 255));
+        format!("rgba({r},{g},{b},{:.3})", a as f32 / 255.0)
+    };
+    let soft = |hex: &str, alpha: f32| {
+        let (r, g, b, _) = rymplayer::themes::rgba(hex).unwrap_or((128, 128, 128, 255));
+        format!("rgba({r},{g},{b},{alpha})")
+    };
+    let style = if ytm_layout(theme) { format!("{STYLE}{YTM_STYLE}") } else { STYLE.to_string() };
+    let mut css = style
+        .replace("@bg@", &c(&t.bg))
+        .replace("@surface@", &c(&t.raised))
+        .replace("@bar@", &c(&t.raised))
+        .replace("@hover@", &soft(&t.text, 0.07))
+        .replace("@selected@", &soft(&t.accent, 0.22))
+        .replace("@text@", &c(&t.text))
+        .replace("@dim@", &c(&t.dim))
+        .replace("@accent@", &c(&t.accent))
+        .replace("@pill_bg@", &c(&t.accent))
+        .replace("@pill_text@", &c(&t.bg))
+        .replace("@input@", &soft(&t.text, 0.08))
+        .replace("@divider@", &c(&t.border))
+        .replace("@menu@", &c(&t.raised));
+    // Corners: sharp themes square everything off.
+    if t.round < 0.5 {
+        let px = (t.round * 12.0).round();
+        css.push_str(&format!(" button, entry, .card, .tile, popover > contents, .pill, image, picture {{ border-radius: {px}px; }}"));
+    }
+    // The pattern, as a picture repeated behind the window.
+    if let Some((w, h, px)) = t.tile() {
+        let file = rymplayer::data_dir().join("theme-pattern.png");
+        if image::RgbaImage::from_raw(w, h, px).is_some_and(|img| img.save(&file).is_ok()) {
+            let url = file.to_string_lossy().replace('\\', "/");
+            css.push_str(&format!(" window.background {{ background-image: url(\"file://{url}\"); background-repeat: repeat; }}"));
+        }
+    }
+    css
+}
+
+/// The color theme picked in the settings (None: the layout's own colors).
+fn current_colors(c: &Config) -> Option<rymplayer::themes::Theme> {
+    match c.palette.as_str() {
+        "" => None,
+        "Custom" => c.custom_theme.clone(),
+        name => rymplayer::themes::preset(name),
+    }
+}
+
+fn apply_theme(provider: &CssProvider, theme: usize, colors: Option<&rymplayer::themes::Theme>) {
+    match colors {
+        Some(t) => provider.load_from_string(&colors_css(theme, t)),
+        None => provider.load_from_string(&css(theme)),
+    }
 }
 
 // ---------------------------------------------------------------- state
@@ -889,7 +943,7 @@ fn build(app: &Application) {
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
-    apply_theme(&provider, config.gui_theme);
+    apply_theme(&provider, config.gui_theme, current_colors(&config).as_ref());
     let lyrics_provider = CssProvider::new();
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &lyrics_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
@@ -3247,7 +3301,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
                 let was = ytm_layout(s.config.gui_theme);
                 s.config.gui_theme = d.selected() as usize;
                 s.config.save();
-                apply_theme(&s.w.provider, s.config.gui_theme);
+                apply_theme(&s.w.provider, s.config.gui_theme, current_colors(&s.config).as_ref());
                 (was != ytm_layout(s.config.gui_theme), s.w.window.clone())
             };
             // The RyM YTM layout is built when the window opens: RyM opens again, going on
@@ -3263,6 +3317,74 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Theme"), "", &theme));
+
+    // Colors over the theme: the layout's own, the built-in themes, or an imported one.
+    let mut names: Vec<String> = vec![tr("The layout's own").to_string()];
+    names.extend(rymplayer::themes::presets().into_iter().map(|t| t.name));
+    names.push("Custom".into());
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let colors = gtk::DropDown::from_strings(&refs);
+    let at = if config.palette.is_empty() { 0 } else { names.iter().position(|n| *n == config.palette).unwrap_or(0) };
+    colors.set_selected(at as u32);
+    {
+        let ui = ui.clone();
+        let names = names.clone();
+        colors.connect_selected_notify(move |d| {
+            let i = d.selected() as usize;
+            let mut s = ui.borrow_mut();
+            s.config.palette = if i == 0 { String::new() } else { names.get(i).cloned().unwrap_or_default() };
+            s.config.save();
+            apply_theme(&s.w.provider, s.config.gui_theme, current_colors(&s.config).as_ref());
+        });
+    }
+    page.append(&setting_row(tr("Colors"), "", &colors));
+    let path = gtk::Entry::new();
+    path.set_placeholder_text(Some(tr("A .json theme file (its path), or the JSON itself")));
+    path.set_width_chars(28);
+    let import = Button::with_label(tr("Import"));
+    import.add_css_class("ghost");
+    {
+        let ui = ui.clone();
+        let path = path.clone();
+        let colors = colors.clone();
+        let last = names.len() - 1;
+        import.connect_clicked(move |_| {
+            let text = path.text().trim().to_string();
+            let json = if text.starts_with('{') { Ok(text.clone()) } else { std::fs::read_to_string(text.trim_matches('"')).map_err(|e| e.to_string()) };
+            match json.and_then(|j| rymplayer::themes::Theme::from_json(&j)) {
+                Ok(t) => {
+                    {
+                        let mut s = ui.borrow_mut();
+                        s.config.custom_theme = Some(t);
+                        s.config.palette = "Custom".into();
+                        s.config.save();
+                        apply_theme(&s.w.provider, s.config.gui_theme, current_colors(&s.config).as_ref());
+                    }
+                    colors.set_selected(last as u32);
+                }
+                Err(e) => toast(&ui, &format!("{}: {e}", tr("Import colors"))),
+            }
+        });
+    }
+    let export = Button::with_label(tr("Export"));
+    export.add_css_class("ghost");
+    {
+        let ui = ui.clone();
+        export.connect_clicked(move |_| {
+            let theme = current_colors(&ui.borrow().config).unwrap_or_else(|| rymplayer::themes::Theme { name: "RyM".into(), ..Default::default() });
+            let dir = directories::UserDirs::new().and_then(|u| u.download_dir().map(|d| d.to_path_buf())).unwrap_or_else(rymplayer::data_dir);
+            let file = dir.join(format!("RyM theme - {}.json", theme.name.replace(['/', '\\', ':'], "-")));
+            match std::fs::write(&file, theme.to_json()) {
+                Ok(()) => toast(&ui, &format!("{} {}", tr("Saved to"), file.display())),
+                Err(e) => toast(&ui, &e.to_string()),
+            }
+        });
+    }
+    let row = gtk::Box::new(Orientation::Horizontal, 8);
+    row.append(&path);
+    row.append(&import);
+    row.append(&export);
+    page.append(&setting_row(tr("Import colors"), tr("Saves these colors as a .json file in Downloads"), &row));
     page.append(&setting_row(
         tr("Suggestions"),
         tr("For you and Up next by points: new songs, the same artist and kind (Husseini brings only Husseini, songs only songs)"),

@@ -107,6 +107,21 @@ pub struct Config {
     pub only_kind: String,
     /// The accent color from the playing song's cover (Slint app).
     pub accent_from_cover: bool,
+    /// The colors: a built-in theme's name, "Custom" (`custom_theme`), or empty (the layout's own).
+    #[serde(default)]
+    pub palette: String,
+    /// The user's own theme (imported from a `.json` file).
+    #[serde(default)]
+    pub custom_theme: Option<crate::themes::Theme>,
+    /// Liquid Aurora: the cover's colors move behind everything with the bass.
+    #[serde(default)]
+    pub aurora: bool,
+    /// The cover as a spinning record.
+    #[serde(default)]
+    pub vinyl: bool,
+    /// How blurred the cover is behind the glass themes (2 to 20).
+    #[serde(default = "glass_blur")]
+    pub glass_blur: f32,
     /// The wave under the song moves with the music (Slint app).
     pub visualizer: bool,
     /// Romaji under Japanese lyrics.
@@ -285,6 +300,11 @@ impl Default for Config {
             ui_zoom: 0.85,
             only_kind: String::new(),
             accent_from_cover: false,
+            palette: String::new(),
+            custom_theme: None,
+            aurora: false,
+            vinyl: false,
+            glass_blur: glass_blur(),
             visualizer: false,
             romaji: true,
             karaoke: true,
@@ -615,4 +635,8 @@ mod tests {
         let partial: Config = serde_json::from_str(r#"{"theme": 2}"#).unwrap();
         assert_eq!(partial.library_width, 28);
     }
+}
+
+fn glass_blur() -> f32 {
+    7.0
 }

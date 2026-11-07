@@ -89,14 +89,15 @@ import com.rymplayer.data.Updates
 import com.rymplayer.tr
 
 private val Page: Color @Composable get() = MaterialTheme.colorScheme.background
-private val CardColor = Color(0xFF17171B)
+private val CardColor: Color
+    @androidx.compose.runtime.Composable get() = if (themeBg == null) Color(0xFF17171B) else MaterialTheme.colorScheme.surfaceVariant
 
 /** A page's top bar: back arrow and title. */
 @Composable
 private fun TopBar(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }
-        Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
+        Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
     }
 }
 
@@ -116,7 +117,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 private val itemColors @Composable get() = ListItemDefaults.colors(
     containerColor = Color.Transparent,
-    headlineColor = Color.White,
+    headlineColor = MaterialTheme.colorScheme.onBackground,
     supportingColor = Dim,
     leadingIconColor = MaterialTheme.colorScheme.primary,
     trailingIconColor = Dim,
@@ -149,7 +150,7 @@ private fun TapRow(icon: ImageVector, title: String, about: String, value: Strin
 }
 
 @Composable
-private fun Divider() = HorizontalDivider(Modifier.padding(start = 56.dp), color = Color.White.copy(alpha = 0.06f))
+private fun Divider() = HorizontalDivider(Modifier.padding(start = 56.dp), color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
 
 /** Settings, in sections: general, playback and quality, extensions, updates, about, account. */
 @Composable
@@ -209,6 +210,9 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section(tr("Theme")) {
                 TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }
+                TapRow(Icons.Default.Palette, tr("Colors"), tr("11 looks, the same as on the PC · tap to change"), vm.palette.ifEmpty { tr("The layout's own") }) { vm.cyclePalette() }
+                TapRow(Icons.Default.Download, tr("Import colors"), tr("Copy a theme's JSON (from the PC's export), then tap here"), tr("Import")) { vm.importTheme() }
+                TapRow(Icons.Default.SwapHoriz, tr("Export colors"), tr("Copies these colors as JSON"), tr("Export")) { vm.exportTheme() }
             }
             Section(tr("Sound")) {
                 val snd = vm.sound

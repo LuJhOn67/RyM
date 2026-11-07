@@ -19,6 +19,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -89,24 +92,71 @@ import com.rymplayer.data.thumbSized
 val Accent = Color(0xFFFF2D55)
 val Dim = Color(0xFFAAAAAA)
 
-/** The pages' background: near black, or pure black in RyM YTM. */
-fun pageColor(ytm: Boolean) = if (ytm) Color.Black else Color(0xFF0B0B0D)
+/** The color theme's background (Settings > Colors); null: the app's own. */
+var themeBg by androidx.compose.runtime.mutableStateOf<Color?>(null)
+
+/** The pages' background: the color theme's, else near black, or pure black in RyM YTM. */
+fun pageColor(ytm: Boolean) = themeBg ?: if (ytm) Color.Black else Color(0xFF0B0B0D)
+
+private fun hex(h: String) = Color(com.rymplayer.data.Themes.argb(h) ?: 0xFF808080.toInt())
+
+/** The theme's pattern (grid, dots, rain...) as a small picture repeated over the app; null: plain. */
+private fun patternBrush(t: com.rymplayer.data.Themes.Theme, s: Float): androidx.compose.ui.graphics.ShaderBrush? {
+    val text = com.rymplayer.data.Themes.argb(t.text) ?: return null
+    val acc = com.rymplayer.data.Themes.argb(t.accent2) ?: return null
+    fun a(c: Int, alpha: Int) = (c and 0xFFFFFF) or (alpha shl 24)
+    val (w, h) = when (t.style) {
+        "grid" -> 40 to 40; "dots" -> 12 to 12; "halftone" -> 14 to 14; "rain" -> 60 to 120; "scanlines" -> 4 to 4
+        "hud" -> 64 to 64; "aqua" -> 120 to 120; "stars" -> 160 to 160; else -> return null
+    }
+    val bmp = android.graphics.Bitmap.createBitmap((w * s).toInt().coerceAtLeast(1), (h * s).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+    val c = android.graphics.Canvas(bmp)
+    val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = s }
+    val rnd = java.util.Random(7)
+    val (W, H) = w * s to h * s
+    when (t.style) {
+        "grid" -> { p.color = a(text, 30); c.drawLine(0f, H - s / 2, W, H - s / 2, p); c.drawLine(W - s / 2, 0f, W - s / 2, H, p) }
+        "dots" -> { p.color = a(text, 36); c.drawCircle(6 * s, 6 * s, 1.6f * s, p) }
+        "halftone" -> { p.color = a(0, 42); c.drawCircle(7 * s, 7 * s, 3.2f * s, p) }
+        "scanlines" -> { p.color = a(0, 60); c.drawRect(0f, 0f, W, s, p) }
+        "rain" -> { p.color = a(acc, 60); repeat(7) { val x = rnd.nextInt(w) * s; val y = rnd.nextInt(h) * s; c.drawLine(x, y, x, y + (10 + rnd.nextInt(18)) * s, p) } }
+        "hud" -> {
+            p.color = a(acc, 80); val k = 6 * s
+            c.drawLine(0f, 0f, k, 0f, p); c.drawLine(0f, 0f, 0f, k, p); c.drawLine(W, 0f, W - k, 0f, p); c.drawLine(W - s / 2, 0f, W - s / 2, k, p)
+            c.drawLine(0f, H - s / 2, k, H - s / 2, p); c.drawLine(0f, H, 0f, H - k, p); c.drawLine(W, H - s / 2, W - k, H - s / 2, p); c.drawLine(W - s / 2, H, W - s / 2, H - k, p)
+        }
+        "aqua" -> { p.style = android.graphics.Paint.Style.STROKE; p.color = a(-1, 80); repeat(5) { c.drawCircle(rnd.nextInt(w) * s, rnd.nextInt(h) * s, (3 + rnd.nextInt(9)) * s, p) } }
+        "stars" -> repeat(26) { p.color = a(if (rnd.nextInt(4) == 0) acc else text, 50 + rnd.nextInt(150)); c.drawCircle(rnd.nextInt(w) * s, rnd.nextInt(h) * s, 0.8f * s, p) }
+    }
+    return androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(bmp.asImageBitmap(), androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated))
+}
 
 @Composable
-fun RymTheme(ytm: Boolean = false, content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = if (ytm) Color(0xFFFF3048) else Accent,
-            background = pageColor(ytm),
-            surface = pageColor(ytm),
-            surfaceVariant = if (ytm) Color(0xFF212121) else Color(0xFF1C1C21),
-            onSurfaceVariant = Dim,
-            // Pure white text on the dark pages (the default is a light grey).
-            onBackground = Color.White,
-            onSurface = Color.White,
-        ),
-        content = content,
+fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = null, content: @Composable () -> Unit) {
+    androidx.compose.runtime.SideEffect { themeBg = colors?.let { hex(it.bg) } }
+    val scheme = if (colors == null) darkColorScheme(
+        primary = if (ytm) Color(0xFFFF3048) else Accent,
+        background = if (ytm) Color.Black else Color(0xFF0B0B0D),
+        surface = if (ytm) Color.Black else Color(0xFF0B0B0D),
+        surfaceVariant = if (ytm) Color(0xFF212121) else Color(0xFF1C1C21),
+        onSurfaceVariant = Dim,
+        // Pure white text on the dark pages (the default is a light grey).
+        onBackground = Color.White,
+        onSurface = Color.White,
+    ) else if (colors.dark) darkColorScheme(
+        primary = hex(colors.accent), secondary = hex(colors.accent2), onPrimary = hex(colors.bg),
+        background = hex(colors.bg), surface = hex(colors.bg), surfaceVariant = hex(colors.raised),
+        onSurfaceVariant = hex(colors.dim), onBackground = hex(colors.text), onSurface = hex(colors.text), outline = hex(colors.border),
+    ) else androidx.compose.material3.lightColorScheme(
+        primary = hex(colors.accent), secondary = hex(colors.accent2), onPrimary = hex(colors.bg),
+        background = hex(colors.bg), surface = hex(colors.bg), surfaceVariant = hex(colors.raised),
+        onSurfaceVariant = hex(colors.dim), onBackground = hex(colors.text), onSurface = hex(colors.text), outline = hex(colors.border),
     )
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val brush = remember(colors, density) { colors?.let { patternBrush(it, density) } }
+    MaterialTheme(colorScheme = scheme) {
+        Box(Modifier.fillMaxSize().drawWithContent { drawContent(); brush?.let { drawRect(it) } }) { content() }
+    }
 }
 
 /** Cover art with a rounded corner and a note placeholder while it loads. */
@@ -165,7 +215,7 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
         Column(Modifier.weight(1f)) {
             Text(
                 t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
-                color = if (current) MaterialTheme.colorScheme.primary else Color.White,
+                color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
             )
             // The artist's name opens their page; album and length follow it.
             Row {
@@ -201,12 +251,12 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         SaveToPlaylist(vm, t) { pick = false; onDismiss() }
         return
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppColorsSheet, contentColor = Color.White) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppColorsSheet, contentColor = MaterialTheme.colorScheme.onBackground) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Cover(t.thumb, 48.dp, 120, 6.dp)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
                 Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
             }
         }
@@ -218,7 +268,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             ) {
                 Icon(icon, null, tint = Dim)
                 Spacer(Modifier.width(20.dp))
-                Text(label, fontSize = 15.sp, color = Color.White)
+                Text(label, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
             }
         }
         item(tr("Start radio"), Icons.Default.Radio) { vm.playRadio(t) }()
@@ -233,14 +283,14 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         ) {
             Icon(Icons.Default.Category, null, tint = Dim)
             Spacer(Modifier.width(20.dp))
-            Text(tr("This artist's kind"), fontSize = 15.sp, color = Color.White)
+            Text(tr("This artist's kind"), fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
         }
         if (kinds) {
             for (k in com.rymplayer.data.RamPoints.Kind.entries) {
                 Text(
                     tr(k.title),
                     fontSize = 15.sp,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.fillMaxWidth().clickable { onDismiss(); vm.setArtistKind(t, k) }.padding(start = 64.dp, top = 10.dp, bottom = 10.dp),
                 )
             }
@@ -259,7 +309,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             ) {
                 Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, tint = Dim)
                 Spacer(Modifier.width(20.dp))
-                Text(tr("Save to playlist"), fontSize = 15.sp, color = Color.White)
+                Text(tr("Save to playlist"), fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
             }
         }
         t.albumId?.let { id -> item(tr("Go to album"), Icons.Default.Album) { vm.open(Screen.Songs(Screen.Kind.Album, id, t.album)) }() }
@@ -285,7 +335,8 @@ fun shareSong(context: Context, t: Track) {
 }
 
 /** A sheet a little lighter than the page, so it stands out. */
-private val AppColorsSheet: Color get() = androidx.compose.ui.graphics.lerp(Color(0xFF0B0B0D), Color.White, 0.08f)
+private val AppColorsSheet: Color
+    @Composable get() = if (themeBg == null) androidx.compose.ui.graphics.lerp(Color(0xFF0B0B0D), Color.White, 0.08f) else MaterialTheme.colorScheme.surfaceVariant
 
 @Composable
 fun SaveToPlaylist(vm: AppViewModel, t: Track, onDismiss: () -> Unit) {

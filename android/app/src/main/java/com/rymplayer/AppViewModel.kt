@@ -259,6 +259,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var ytmTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("theme_ytm", false))
         private set
 
+    /** Settings > Colors: a built-in theme's name, "Custom" (imported), or "" (the app's own). */
+    var palette by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("palette", "").orEmpty())
+        private set
+    private var customTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("custom_theme", null)
+        ?.let { runCatching { com.rymplayer.data.Themes.fromJson(it) }.getOrNull() })
+    val colors: com.rymplayer.data.Themes.Theme?
+        get() = when (palette) { "" -> null; "Custom" -> customTheme; else -> com.rymplayer.data.Themes.preset(palette) }
+
+    private fun choosePalette(name: String) {
+        palette = name
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putString("palette", name).apply()
+    }
+
+    fun cyclePalette() {
+        val names = listOf("") + com.rymplayer.data.Themes.presets.map { it.name } + (if (customTheme != null) listOf("Custom") else emptyList())
+        choosePalette(names[(names.indexOf(palette).coerceAtLeast(0) + 1) % names.size])
+    }
+
+    /** The colors shown now as JSON, on the clipboard (to paste on the PC or share). */
+    fun exportTheme() {
+        val t = colors ?: com.rymplayer.data.Themes.Theme(name = "RyM")
+        val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("RyM theme", t.toJson()))
+        player.message = tr("Theme copied: paste it on the PC or share it")
+    }
+
+    /** A theme's JSON from the clipboard becomes "Custom". */
+    fun importTheme() {
+        val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(getApplication())?.toString().orEmpty()
+        runCatching { com.rymplayer.data.Themes.fromJson(text) }
+            .onSuccess { t ->
+                customTheme = t
+                getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putString("custom_theme", t.toJson()).apply()
+                choosePalette("Custom")
+                player.message = t.name
+            }
+            .onFailure { player.message = "${tr("Import colors")}: ${it.message}" }
+    }
+
     fun toggleTheme() {
         ytmTheme = !ytmTheme
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("theme_ytm", ytmTheme).apply()

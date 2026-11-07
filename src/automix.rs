@@ -201,6 +201,11 @@ pub struct Meter {
     /// It has started sounding (its start gate opened).
     open: AtomicBool,
     rate: AtomicU32,
+    /// The latest block's bass (below about 150 Hz), left and right levels (RMS): the moving
+    /// backdrop and the needle meters.
+    bass: AtomicU32,
+    left: AtomicU32,
+    right: AtomicU32,
 }
 
 impl Meter {
@@ -212,6 +217,9 @@ impl Meter {
             highpass: AtomicU32::new(0),
             open: AtomicBool::new(false),
             rate: AtomicU32::new(48_000),
+            bass: AtomicU32::new(0),
+            left: AtomicU32::new(0),
+            right: AtomicU32::new(0),
         })
     }
 
@@ -240,6 +248,12 @@ impl Meter {
 
     pub fn rate(&self) -> u32 {
         self.rate.load(Ordering::Relaxed)
+    }
+
+    /// The latest bass, left and right levels (RMS, 0 to about 1).
+    pub fn bands(&self) -> (f32, f32, f32) {
+        let get = |a: &AtomicU32| f32::from_bits(a.load(Ordering::Relaxed));
+        (get(&self.bass), get(&self.left), get(&self.right))
     }
 
     /// The frame where its next beat falls, at least `ahead` seconds from now; `None` without a
@@ -297,13 +311,22 @@ pub struct Probe<S: Source<Item = f32>> {
     blocks: Blocks,
     power: f32,
     at: usize,
+    /// The frame's samples summed (its mono), the bass filter's state and its step.
+    mono: f32,
+    low: f32,
+    low_step: f32,
+    /// This block's bass, left and right power, and its frames.
+    bands: (f32, f32, f32),
+    band_frames: f32,
 }
 
 impl<S: Source<Item = f32>> Probe<S> {
     pub fn new(inner: S, meter: Arc<Meter>) -> Self {
         let channels = inner.channels().get() as usize;
         let rate = inner.sample_rate().get();
-        Probe { inner, meter, channels, blocks: Blocks::new(rate), power: 0.0, at: 0 }
+        // A one-pole low-pass at 150 Hz.
+        let low_step = 1.0 - (-2.0 * std::f32::consts::PI * 150.0 / rate.max(1) as f32).exp();
+        Probe { inner, meter, channels, blocks: Blocks::new(rate), power: 0.0, at: 0, mono: 0.0, low: 0.0, low_step, bands: (0.0, 0.0, 0.0), band_frames: 0.0 }
     }
 }
 
@@ -313,10 +336,27 @@ impl<S: Source<Item = f32>> Iterator for Probe<S> {
     fn next(&mut self) -> Option<f32> {
         let x = self.inner.next()?;
         self.power += x * x;
+        self.mono += x;
+        if self.at == 0 {
+            self.bands.1 += x * x;
+        }
+        if self.at == 1 || self.channels == 1 {
+            self.bands.2 += x * x;
+        }
         self.at += 1;
         if self.at >= self.channels {
+            self.low += self.low_step * (self.mono / self.channels as f32 - self.low);
+            self.bands.0 += self.low * self.low;
+            self.band_frames += 1.0;
+            self.mono = 0.0;
             if let Some(rms) = self.blocks.add(self.power / self.channels as f32) {
                 self.meter.level.push(rms);
+                let n = self.band_frames.max(1.0);
+                self.meter.bass.store((self.bands.0 / n).sqrt().to_bits(), Ordering::Relaxed);
+                self.meter.left.store((self.bands.1 / n).sqrt().to_bits(), Ordering::Relaxed);
+                self.meter.right.store((self.bands.2 / n).sqrt().to_bits(), Ordering::Relaxed);
+                self.bands = (0.0, 0.0, 0.0);
+                self.band_frames = 0.0;
             }
             self.power = 0.0;
             self.at = 0;

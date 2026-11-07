@@ -128,6 +128,8 @@ struct State {
     radio_pending: bool,
     /// The next song was picked by hand (RaM points: its minus points go).
     user_pick: bool,
+    /// Liquid Aurora: the loudest bass lately (the pulse is against it).
+    bass_peak: f32,
     /// "Reset all points" pressed once (a second press within 5 s resets).
     reset_asked: Option<Instant>,
     repeat_one: bool,
@@ -339,6 +341,9 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     let app = ui.global::<App>();
     ui.global::<Theme>().set_index(config.gui_theme.min(2) as i32);
     ui.global::<Theme>().set_cover_accent(false);
+    paint(&ui.global::<Theme>(), current_colors(&config).as_ref());
+    ui.global::<Theme>().set_aurora(config.aurora);
+    ui.global::<Theme>().set_vinyl(config.vinyl);
     ui.global::<Ui>().set_rtl(config.arabic);
     app.set_karaoke(config.karaoke);
     app.set_queue(ModelRc::from(m.queue.clone()));
@@ -382,6 +387,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         resume_at: None,
         radio_pending: false,
         user_pick: false,
+        bass_peak: 0.05,
         reset_asked: None,
         repeat_one: false,
         repeat_all: false,
@@ -948,13 +954,14 @@ fn show_now(st: &Shared) {
     });
     if let Some(url) = t.thumb.clone() {
         let vid = t.video_id.clone();
+        let blur = st.borrow().config.glass_blur.clamp(2.0, 20.0);
         post(async move {
             let sized = rymplayer::api::thumb_sized(&url, ART_PX);
             let art = fetch(&sized).await.ok().and_then(|b| {
                 let big = decode_square(&b, ART_PX)?;
                 let img = image::RgbaImage::from_raw(big.0, big.1, big.2.clone())?;
                 let small = image::imageops::resize(&img, 96, 96, image::imageops::FilterType::Triangle);
-                let soft = image::imageops::blur(&small, 7.0);
+                let soft = image::imageops::blur(&small, blur);
                 Some((big, (soft.width(), soft.height(), soft.into_raw())))
             });
             Ev::Art(vid, art)
@@ -1163,6 +1170,12 @@ fn fill_settings(st: &Shared) {
     let rows = vec![
         head("Look"),
         choice("theme", "Theme", THEMES[c.gui_theme.min(2)].to_string()),
+        choice("palette", "Colors", if c.palette.is_empty() { t("The layout's own") } else { c.palette.clone() }),
+        switch("aurora", "Liquid Aurora", "The cover's colors move behind everything with the bass", c.aurora),
+        switch("vinyl", "Vinyl record", "The cover turns like a record: faster with Nightcore, slower with Slowed", c.vinyl),
+        choice("glass-blur", "Glass blur", format!("{}", c.glass_blur.round())),
+        button("theme-export", "Export colors", t("Saves these colors as a .json file in Downloads"), "Export"),
+        button("theme-import", "Import colors", t("A .json theme file (its path), or the JSON itself"), "Import"),
         choice("zoom", "App size", format!("{}%", (c.ui_zoom * 100.0).round())),
         switch("accent", "Accent from the cover", "The playing song's colors on the buttons and the wave", c.accent_from_cover),
         switch("visualizer", "Moving wave", "The wave under the song moves with the music", c.visualizer),
@@ -1246,6 +1259,8 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
         let c = &mut s.config;
         match id {
             "accent" => c.accent_from_cover = on,
+            "aurora" => c.aurora = on,
+            "vinyl" => c.vinyl = on,
             "visualizer" => c.visualizer = on,
             "arabic" => c.arabic = on,
             "automix" => c.automix = on,
@@ -1295,6 +1310,17 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             show_now(st);
         }
         "discord" if !on => rymplayer::discord::show("", rymplayer::discord::Show::Off),
+        "aurora" => {
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                ui.global::<Theme>().set_aurora(on);
+                ui.global::<Theme>().set_energy(0.0);
+            }
+        }
+        "vinyl" => {
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                ui.global::<Theme>().set_vinyl(on);
+            }
+        }
         "romaji" | "translate" => {
             let l = st.borrow().lyrics.clone();
             show_lyrics(st, l);
@@ -1317,6 +1343,28 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let next = cycle(st.borrow().config.gui_theme.min(2), 3);
             set_theme(st, next);
             return;
+        }
+        "palette" => {
+            // The layout's own colors, the built-in themes, then the imported one (if any).
+            let mut names = vec![String::new()];
+            names.extend(rymplayer::themes::presets().into_iter().map(|t| t.name));
+            if st.borrow().config.custom_theme.is_some() {
+                names.push("Custom".into());
+            }
+            let at = names.iter().position(|n| *n == st.borrow().config.palette).unwrap_or(0);
+            let name = names[cycle(at, names.len())].clone();
+            set_colors(st, &name);
+            return;
+        }
+        "glass-blur" => {
+            {
+                let mut s = st.borrow_mut();
+                s.config.glass_blur = (s.config.glass_blur + step as f32).clamp(2.0, 20.0);
+                s.config.save();
+                // The cover is blurred again.
+                s.art_for.clear();
+            }
+            show_now(st);
         }
         "zoom" => {
             let z = st.borrow().config.ui_zoom + step as f32 * 0.05;
@@ -1462,6 +1510,8 @@ fn press(st: &Shared, id: &str) {
                 toast(st, tr("Press again to reset all points"));
             }
         }
+        "theme-export" => export_colors(st),
+        "theme-import" => ask_text(st, "theme", tr("Import colors"), tr("A .json theme file (its path), or the JSON itself")),
         "ram-reset-neg" => {
             rymplayer::ram_points::reset_negative();
             toast(st, tr("Negative points are back to 0"));
@@ -1532,6 +1582,94 @@ fn show_speed(st: &Shared) {
         }
     };
     with_app(st, |a| a.set_speed_text(text.into()));
+    // The record turns at 33⅓ a minute (200° a second) times the speed.
+    let speed = st.borrow().config.speed;
+    if let Some(ui) = st.borrow().ui.upgrade() {
+        ui.global::<Theme>().set_spin_rate(200.0 * speed);
+    }
+}
+
+/// The color theme picked in the settings (None: the layout's own colors).
+fn current_colors(c: &Config) -> Option<rymplayer::themes::Theme> {
+    match c.palette.as_str() {
+        "" => None,
+        "Custom" => c.custom_theme.clone(),
+        name => rymplayer::themes::preset(name),
+    }
+}
+
+/// A theme as the window's colors.
+fn pal_of(t: &rymplayer::themes::Theme) -> Pal {
+    let c = |hex: &str| {
+        let (r, g, b, a) = rymplayer::themes::rgba(hex).unwrap_or((128, 128, 128, 255));
+        slint::Color::from_argb_u8(a, r, g, b)
+    };
+    Pal {
+        dark: t.dark,
+        bg: c(&t.bg),
+        raised: c(&t.raised),
+        text: c(&t.text),
+        dim: c(&t.dim),
+        icon: c(&t.icon),
+        accent: c(&t.accent),
+        accent2: c(&t.accent2),
+        bar: c(&t.bar),
+        border: c(&t.border),
+        round: t.round,
+        glow: t.glow,
+        cover_border: t.cover_border,
+        glass: t.glass,
+        dot_clock: t.dot_clock,
+        vu: t.vu,
+        rain: t.style == rymplayer::themes::Style::Rain,
+        pattern: t.tile().map(to_image).unwrap_or_default(),
+    }
+}
+
+fn paint(theme: &Theme, colors: Option<&rymplayer::themes::Theme>) {
+    theme.set_custom(colors.is_some());
+    if let Some(t) = colors {
+        theme.set_p(pal_of(t));
+    }
+}
+
+/// Settings > Colors: a built-in theme by name, "Custom", or "" (the layout's own).
+fn set_colors(st: &Shared, name: &str) {
+    let colors = {
+        let mut s = st.borrow_mut();
+        s.config.palette = name.to_string();
+        s.config.save();
+        current_colors(&s.config)
+    };
+    if let Some(ui) = st.borrow().ui.upgrade() {
+        paint(&ui.global::<Theme>(), colors.as_ref());
+    }
+    toast(st, if name.is_empty() { tr("The layout's own") } else { name });
+    fill_settings(st);
+}
+
+/// The colors shown now, as a .json file in Downloads.
+fn export_colors(st: &Shared) {
+    let theme = current_colors(&st.borrow().config).unwrap_or_else(|| rymplayer::themes::Theme { name: "RyM".into(), ..Default::default() });
+    let dir = directories::UserDirs::new().and_then(|u| u.download_dir().map(|d| d.to_path_buf())).unwrap_or_else(rymplayer::data_dir);
+    let file = dir.join(format!("RyM theme - {}.json", theme.name.replace(['/', '\\', ':'], "-")));
+    match std::fs::write(&file, theme.to_json()) {
+        Ok(()) => toast(st, &format!("{} {}", tr("Saved to"), file.display())),
+        Err(e) => toast(st, &e.to_string()),
+    }
+}
+
+/// A theme from a .json file (its path) or the JSON itself: it becomes "Custom" and is shown.
+fn import_colors(st: &Shared, text: &str) {
+    let text = text.trim();
+    let json = if text.starts_with('{') { Ok(text.to_string()) } else { std::fs::read_to_string(text.trim_matches('"')).map_err(|e| e.to_string()) };
+    match json.and_then(|j| rymplayer::themes::Theme::from_json(&j)) {
+        Ok(t) => {
+            st.borrow_mut().config.custom_theme = Some(t);
+            set_colors(st, "Custom");
+        }
+        Err(e) => toast(st, &format!("{}: {e}", tr("Import colors"))),
+    }
 }
 
 fn set_theme(st: &Shared, index: usize) {
@@ -1977,6 +2115,7 @@ fn prompt_done(st: &Shared, ok: bool) {
                 Ev::SavedQueue(r)
             });
         }
+        "theme" => import_colors(st, &text),
         // Video plugin: download from a link (YouTube or any site yt-dlp knows).
         "link" => {
             toast(st, &format!("{} {text}", tr("Downloading")));
@@ -2457,6 +2596,23 @@ fn extras(st: &Shared) {
         s.wave_live = false;
         if let Some(ui) = &ui {
             ui.global::<App>().set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for(&id)))));
+        }
+    }
+    // Liquid Aurora pulses with the bass; the needle meters follow left and right.
+    if let Some(ui) = &ui {
+        let theme = ui.global::<Theme>();
+        let (aurora, vu) = (theme.get_aurora(), theme.get_vu());
+        if aurora || vu {
+            let (bass, left, right) = if playing { s.audio.as_ref().map(Audio::bands).unwrap_or_default() } else { (0.0, 0.0, 0.0) };
+            if aurora {
+                s.bass_peak = (s.bass_peak * 0.995).max(bass).max(0.01);
+                theme.set_energy((bass / s.bass_peak).powf(1.5).clamp(0.0, 1.0));
+            }
+            if vu {
+                let level = |x: f32| ((20.0 * x.max(1e-5).log10() + 30.0) / 30.0).clamp(0.0, 1.0);
+                theme.set_vu_l(level(left));
+                theme.set_vu_r(level(right));
+            }
         }
     }
     // The karaoke and the floating lyrics: the sung line, how far into it, and the next one.
@@ -2961,6 +3117,11 @@ fn mini_sync(st: &Shared) {
     if mini.global::<Theme>().get_index() != theme {
         mini.global::<Theme>().set_index(theme);
     }
+    let (custom, pal) = (ui.global::<Theme>().get_custom(), ui.global::<Theme>().get_p());
+    if mini.global::<Theme>().get_custom() != custom || mini.global::<Theme>().get_p() != pal {
+        mini.global::<Theme>().set_custom(custom);
+        mini.global::<Theme>().set_p(pal);
+    }
 }
 
 fn set_update_text(st: &Shared, text: impl Into<String>) {
@@ -3334,7 +3495,9 @@ fn handle(st: &Shared, ev: Ev) {
         Ev::Art(vid, art) => {
             let current = st.borrow().q.now().is_some_and(|t| t.video_id == vid);
             if current && let Some((big, soft)) = art {
-                let accent = st.borrow().config.accent_from_cover.then(|| cover_color(&big)).flatten();
+                let from_cover = cover_color(&big);
+                let accent = st.borrow().config.accent_from_cover.then_some(from_cover).flatten();
+                let lights = rymplayer::themes::cover_colors(&big.2, 4);
                 let (big, soft) = (to_image(big), to_image(soft));
                 with_app(st, |a| {
                     a.set_cover(big);
@@ -3343,8 +3506,15 @@ fn handle(st: &Shared, ev: Ev) {
                 if let Some(ui) = st.borrow().ui.upgrade() {
                     let theme = ui.global::<Theme>();
                     theme.set_cover_accent(accent.is_some());
-                    if let Some(c) = accent {
+                    if let Some(c) = from_cover {
                         theme.set_cover_color(c);
+                    }
+                    let color = |c: (u8, u8, u8)| slint::Color::from_rgb_u8(c.0, c.1, c.2);
+                    if let [a, b, c, d] = lights[..] {
+                        theme.set_a1(color(a));
+                        theme.set_a2(color(b));
+                        theme.set_a3(color(c));
+                        theme.set_a4(color(d));
                     }
                 }
             }
@@ -3708,6 +3878,15 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     let ui = AppWindow::new().expect("window");
     let app = ui.global::<App>();
     ui.global::<Theme>().set_index(if theme_index > 0 { theme_index } else if dark { 0 } else { 1 });
+    // Extra words after the page: a color theme's name, "vinyl", "aurora".
+    let extras: Vec<String> = std::env::args().skip_while(|a| a != "--render").skip(4).collect();
+    let preset = extras.iter().find_map(|e| rymplayer::themes::preset(e));
+    paint(&ui.global::<Theme>(), preset.as_ref());
+    ui.global::<Theme>().set_vinyl(extras.iter().any(|e| e == "vinyl"));
+    ui.global::<Theme>().set_aurora(extras.iter().any(|e| e == "aurora"));
+    ui.global::<Theme>().set_energy(0.6);
+    ui.global::<Theme>().set_vu_l(0.62);
+    ui.global::<Theme>().set_vu_r(0.55);
     app.on_tr(|s| tr_any(&s).into());
     let swatch = |r: u8, g: u8, b: u8| {
         let px: Vec<u8> = (0..64 * 64)

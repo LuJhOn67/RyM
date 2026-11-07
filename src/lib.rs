@@ -33,6 +33,7 @@ pub mod soundcloud;
 pub mod spotify;
 pub mod stats;
 pub mod stream;
+pub mod themes;
 pub mod updates;
 pub mod video;
 pub mod vlc;

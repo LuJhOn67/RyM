@@ -446,6 +446,12 @@ impl Audio {
         self.meter.played(secs)
     }
 
+    /// The playing song's bass, left and right levels now (RMS): the moving backdrop and the
+    /// needle meters.
+    pub fn bands(&self) -> (f32, f32, f32) {
+        self.meter.bands()
+    }
+
     pub fn position(&self) -> f32 {
         self.player.get_pos().as_secs_f32()
     }

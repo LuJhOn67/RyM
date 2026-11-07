@@ -79,4 +79,6 @@ dependencies {
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     testImplementation("junit:junit:4.13.2")
+    // The real org.json for unit tests (the Android one is only a stub off the phone).
+    testImplementation("org.json:json:20240303")
 }

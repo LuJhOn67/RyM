@@ -176,10 +176,10 @@ private fun YtmSection(vm: AppViewModel, sec: YtmShelf, current: String?, modifi
             if (sec.songs) {
                 OutlinedButton(
                     { vm.playFrom(sec.items.map { it.copy(album = "") }, 0) },
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                     modifier = Modifier.height(32.dp),
-                ) { Text(tr("Play all"), fontSize = 13.sp, color = Color.White) }
+                ) { Text(tr("Play all"), fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground) }
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -217,7 +217,7 @@ private fun QuickPick(vm: AppViewModel, t: Track, playing: Boolean, width: andro
             Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = if (playing) MaterialTheme.colorScheme.primary else Color.White)
             Text(listOf(t.artist, t.duration).filter { it.isNotBlank() }.joinToString(" • "), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
         }
-        IconButton({ vm.menu = com.rymplayer.MenuFor(song) }) { Icon(Icons.Default.MoreVert, tr("More"), tint = Color.White) }
+        IconButton({ vm.menu = com.rymplayer.MenuFor(song) }) { Icon(Icons.Default.MoreVert, tr("More"), tint = MaterialTheme.colorScheme.onBackground) }
     }
 }
 
@@ -497,7 +497,7 @@ fun RecapPage(vm: AppViewModel) {
     LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding(), contentPadding = PaddingValues(bottom = 32.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
-                IconButton({ vm.recapOpen = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }
+                IconButton({ vm.recapOpen = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
                 Text(tr("Your recap"), fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
         }
