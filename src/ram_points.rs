@@ -9,9 +9,14 @@
 //!   artist as the playing song (a lot), artists heard lately or liked, the same writing (Arabic,
 //!   Latin, Japanese...), and new songs over ones played or shown lately. The best go first; the
 //!   same artist never twice in a row, liked songs only now and then.
+//! - **Song points.** Playing a song gives it points, hearing it to the end a few more, skipping
+//!   it in its first seconds takes some away; 30% of every change goes to its artist too, so an
+//!   artist's songs not heard yet come up when the artist is a favorite. A song just played counts
+//!   a third for 6 hours (no same top songs every time), and points fade by 5% a day. A song
+//!   picked by hand loses its minus points first (a skip by mistake doesn't keep it down).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -186,6 +191,84 @@ pub struct Notes {
     /// Songs never suggested again ("Don't recommend").
     #[serde(default)]
     hidden: std::collections::HashSet<String>,
+    /// Each song's points (from playing, finishing and skipping it), by id.
+    #[serde(default)]
+    tracks: HashMap<String, Score>,
+    /// Each artist's share of their songs' points.
+    #[serde(default)]
+    affinity: HashMap<String, f32>,
+    /// Artists as they're written (the keys above are lowercase), for the settings.
+    #[serde(default)]
+    names: HashMap<String, String>,
+}
+
+/// A song's points, and when it last played (seconds since 1970).
+#[derive(Default, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Score {
+    pub points: f32,
+    pub last: u64,
+}
+
+/// A song played.
+const PLAY: f32 = 10.0;
+/// Heard to the end (80% or more).
+const FINISH: f32 = 6.0;
+/// Skipped in its first 30 seconds (and before its half).
+const SKIP: f32 = -15.0;
+/// The share of a song's points its artist gets.
+const TO_ARTIST: f32 = 0.3;
+/// A song just played counts this much ...
+const COOLDOWN: f32 = 0.35;
+/// ... for this long.
+const COOLDOWN_SECS: u64 = 6 * 60 * 60;
+/// Points kept each day since the song last played.
+const DECAY: f32 = 0.95;
+/// Songs kept, at most (the weakest go first).
+const TRACKS_KEPT: usize = 5000;
+
+/// One change to the points file at a time (playing and the settings can come together).
+static FILE: Mutex<()> = Mutex::new(());
+
+/// One song gave way to another: the old one's listening time counts (`listened` of `length`
+/// seconds), then the new one is played; `manual`: picked by hand. Done off the UI thread.
+pub fn moved_on(left: Option<(Track, f32, f32)>, next: Track, manual: bool) {
+    std::thread::spawn(move || {
+        let _one = FILE.lock();
+        let mut notes = Notes::load();
+        let now = crate::updates::now();
+        if let Some((t, listened, length)) = left.filter(|(t, ..)| !t.video_id.is_empty()) {
+            notes.left(&t, listened, length);
+        }
+        notes.played(&next, manual, now);
+        notes.save();
+    });
+}
+
+/// What the settings show: songs with points, and the artists with the most.
+pub struct Summary {
+    pub tracked: usize,
+    pub top_artists: Vec<String>,
+}
+
+pub fn summary() -> Summary {
+    let _one = FILE.lock();
+    Notes::load().summary()
+}
+
+/// "Reset all points": every song's and artist's points back to 0 (kinds and hidden songs stay).
+pub fn reset_all() {
+    let _one = FILE.lock();
+    let mut notes = Notes::load();
+    notes.reset_all();
+    notes.save();
+}
+
+/// "Reset negative points only": skipped songs and artists back to 0; favorites stay.
+pub fn reset_negative() {
+    let _one = FILE.lock();
+    let mut notes = Notes::load();
+    notes.reset_negative();
+    notes.save();
 }
 
 /// "Recommend more" in a song's menu: its artist comes up more in Up next and For you.
@@ -259,6 +342,13 @@ impl Notes {
     }
 
     pub fn save(&mut self) {
+        self.names.retain(|a, _| self.affinity.contains_key(a));
+        if self.tracks.len() > TRACKS_KEPT {
+            let mut all: Vec<(String, f32)> = self.tracks.iter().map(|(id, s)| (id.clone(), s.points.abs())).collect();
+            all.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let keep: HashSet<String> = all.into_iter().take(TRACKS_KEPT).map(|(id, _)| id).collect();
+            self.tracks.retain(|id, _| keep.contains(id));
+        }
         if self.artists.len() > ARTISTS_KEPT {
             let mut totals: Vec<(String, u32)> = self.artists.iter().map(|(a, c)| (a.clone(), c.iter().sum())).collect();
             totals.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
@@ -269,6 +359,84 @@ impl Notes {
             let _ = std::fs::create_dir_all(crate::data_dir());
             let _ = std::fs::write(Self::path(), json);
         }
+    }
+
+    /// `delta` points to the song, and 30% of it to its artist.
+    fn give(&mut self, t: &Track, delta: f32) {
+        if t.video_id.is_empty() || delta == 0.0 {
+            return;
+        }
+        let s = self.tracks.entry(t.video_id.clone()).or_default();
+        s.points = (s.points + delta).clamp(-100.0, 100.0);
+        let artist = first_artist(&t.artist);
+        if !artist.is_empty() {
+            let written = t.artist.split([',', '&']).next().unwrap_or_default().trim().to_string();
+            self.names.entry(artist.clone()).or_insert(written);
+            let a = self.affinity.entry(artist).or_default();
+            *a = (*a + delta * TO_ARTIST).clamp(-60.0, 60.0);
+        }
+    }
+
+    /// The song starts. Picked by hand, its minus points go first (back to 0).
+    pub fn played(&mut self, t: &Track, manual: bool, now: u64) {
+        if t.video_id.is_empty() {
+            return;
+        }
+        if manual && let Some(below) = self.tracks.get(&t.video_id).map(|s| s.points).filter(|p| *p < 0.0) {
+            self.give(t, -below);
+        }
+        self.give(t, PLAY);
+        self.tracks.entry(t.video_id.clone()).or_default().last = now;
+    }
+
+    /// The song stopped after `listened` of its `length` seconds: a quick skip loses points,
+    /// hearing it to the end gives some.
+    pub fn left(&mut self, t: &Track, listened: f32, length: f32) {
+        if listened < 30.0 && (length <= 0.0 || listened < length * 0.5) {
+            self.give(t, SKIP);
+        } else if length > 0.0 && listened >= length * 0.8 {
+            self.give(t, FINISH);
+        }
+    }
+
+    /// The song's points now: 5% less each day since it played, a third for 6 hours after.
+    pub fn track_points(&self, id: &str, now: u64) -> f32 {
+        let Some(s) = self.tracks.get(id) else { return 0.0 };
+        let ago = now.saturating_sub(s.last);
+        let mut p = s.points * DECAY.powf(ago as f32 / DAY as f32);
+        if p > 0.0 && ago < COOLDOWN_SECS {
+            p *= COOLDOWN;
+        }
+        p
+    }
+
+    /// The artist's points: from their songs, and "Recommend more" / "Don't recommend".
+    pub fn artist_points(&self, artist: &str) -> f32 {
+        self.affinity.get(artist).copied().unwrap_or(0.0)
+    }
+
+    /// What songs and artists add to a song's place in a list.
+    fn liking(&self, t: &Track, artist: &str, now: u64) -> i32 {
+        self.track_points(&t.video_id, now).round().clamp(-40.0, 40.0) as i32 + self.artist_points(artist).round().clamp(-30.0, 30.0) as i32
+    }
+
+    pub fn summary(&self) -> Summary {
+        let mut artists: Vec<(&String, f32)> = self.affinity.iter().map(|(a, n)| (a, n + self.bias.get(a).copied().unwrap_or(0) as f32)).filter(|(_, n)| *n > 0.0).collect();
+        artists.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Summary { tracked: self.tracks.len(), top_artists: artists.into_iter().take(5).map(|(a, _)| self.names.get(a).unwrap_or(a).clone()).collect() }
+    }
+
+    pub fn reset_all(&mut self) {
+        self.tracks.clear();
+        self.affinity.clear();
+        self.bias.clear();
+        self.names.clear();
+    }
+
+    pub fn reset_negative(&mut self) {
+        self.tracks.retain(|_, s| s.points >= 0.0);
+        self.affinity.retain(|_, n| *n >= 0.0);
+        self.bias.retain(|_, n| *n >= 0);
     }
 
     fn add(&mut self, artist: &str, kind: Kind, weight: u32) {
@@ -456,7 +624,7 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
             continue;
         }
         let artist = first_artist(&t.artist);
-        let mut points = base + fit + notes.bias.get(&artist).copied().unwrap_or(0);
+        let mut points = base + fit + notes.bias.get(&artist).copied().unwrap_or(0) + notes.liking(&t, &artist, lately.now);
         if !artist.is_empty() && artist == seed_artist {
             points += 35;
         } else if heard.contains(&artist) {
@@ -545,7 +713,7 @@ pub fn for_you(notes: &Notes, cands: &[Candidate], kind: Kind, n: usize, skip: &
             continue;
         }
         let artist = first_artist(&t.artist);
-        let mut points = c.base + notes.bias.get(&artist).copied().unwrap_or(0);
+        let mut points = c.base + notes.bias.get(&artist).copied().unwrap_or(0) + notes.liking(t, &artist, feed.lately.now);
         if !feed.known.contains(&t.video_id) {
             points += 18;
         }
@@ -674,6 +842,70 @@ mod tests {
         let out = rank_up_next(&mut notes, radio, &seed, &[], &HashSet::new(), &HashSet::new(), &quiet(), 7);
         let ids: Vec<&str> = out.iter().map(|t| t.video_id.as_str()).collect();
         assert_eq!(ids, ["bb", "a"]);
+    }
+
+    #[test]
+    fn song_points_go_to_the_artist_and_bring_their_new_songs_up() {
+        let mut notes = Notes::default();
+        let fav = t("f1", "Old favorite", "Fav");
+        for _ in 0..5 {
+            notes.played(&fav, false, 0);
+            notes.left(&fav, 200.0, 210.0);
+        }
+        // 5 × (10 + 6) = 80 points to the song, 30% of them to its artist.
+        assert_eq!(notes.tracks["f1"].points, 80.0);
+        assert!((notes.artist_points("fav") - 24.0).abs() < 0.01);
+        let seed = t("s", "Seed", "Z");
+        let radio = vec![t("a", "A", "Other"), t("f2", "Not heard yet", "Fav")];
+        let mut lately = quiet();
+        lately.now = 10 * DAY;
+        let out = rank_up_next(&mut notes, radio, &seed, &[], &HashSet::new(), &HashSet::new(), &lately, 7);
+        assert_eq!(out[0].video_id, "f2");
+    }
+
+    #[test]
+    fn a_song_just_played_cools_down_and_points_fade_by_day() {
+        let mut notes = Notes::default();
+        let song = t("x", "X", "A");
+        notes.played(&song, false, 1000);
+        assert!((notes.track_points("x", 1000 + HOUR) - 3.5).abs() < 0.01);
+        assert!((notes.track_points("x", 1000 + DAY) - 9.5).abs() < 0.01);
+        assert!((notes.track_points("x", 1000 + 10 * DAY) - 10.0 * 0.95f32.powi(10)).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_quick_skip_takes_points_and_a_pick_by_hand_clears_them() {
+        let mut notes = Notes::default();
+        let song = t("x", "X", "A");
+        notes.played(&song, false, 0);
+        notes.left(&song, 5.0, 200.0);
+        notes.left(&song, 5.0, 200.0);
+        assert_eq!(notes.tracks["x"].points, -20.0);
+        notes.played(&song, false, 10);
+        assert_eq!(notes.tracks["x"].points, -10.0);
+        notes.played(&song, true, 20);
+        assert_eq!(notes.tracks["x"].points, 10.0);
+        assert!((notes.artist_points("a") - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn resets_wipe_everything_or_only_the_minus_points() {
+        let mut notes = Notes::default();
+        let good = t("g", "G", "Good");
+        let bad = t("b", "B", "Bad");
+        notes.played(&good, false, 0);
+        notes.left(&bad, 1.0, 100.0);
+        notes.bias.insert("bad".into(), -20);
+        notes.bias.insert("good".into(), 25);
+        assert_eq!(notes.summary().top_artists, ["Good"]);
+        notes.reset_negative();
+        assert!(notes.tracks.contains_key("g") && !notes.tracks.contains_key("b"));
+        assert_eq!(notes.artist_points("bad"), 0.0);
+        assert_eq!(notes.bias.get("bad"), None);
+        assert_eq!(notes.bias["good"], 25);
+        notes.reset_all();
+        assert_eq!(notes.summary().tracked, 0);
+        assert!(notes.bias.is_empty() && notes.affinity.is_empty());
     }
 
     #[test]

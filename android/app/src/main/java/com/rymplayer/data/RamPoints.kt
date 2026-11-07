@@ -106,12 +106,73 @@ object RamPoints {
     /** What RyM has learned about artists: how much each kind was seen with them. */
     /** [fixed]: artists the user put in a kind by hand (a song's menu); it wins. */
     /** [bias]: points added to (or taken from) an artist ("Recommend more" / "Don't recommend"); [hidden]: songs never suggested again. */
+    /** [tracks]: each song's points and when it last played; [affinity]: each artist's share of their songs' points; [names]: artists as written. */
     class Notes(
         val artists: MutableMap<String, IntArray> = HashMap(),
         val fixed: MutableMap<String, Kind> = HashMap(),
         val bias: MutableMap<String, Int> = HashMap(),
         val hidden: MutableSet<String> = HashSet(),
+        val tracks: MutableMap<String, Score> = HashMap(),
+        val affinity: MutableMap<String, Float> = HashMap(),
+        val names: MutableMap<String, String> = HashMap(),
     ) {
+        /** [delta] points to the song, and 30% of it to its artist. */
+        private fun give(t: Track, delta: Float) {
+            if (t.videoId.isEmpty() || delta == 0f) return
+            val s = tracks.getOrPut(t.videoId) { Score() }
+            s.points = (s.points + delta).coerceIn(-100f, 100f)
+            val artist = firstArtist(t.artist)
+            if (artist.isNotEmpty()) {
+                names.getOrPut(artist) { t.artist.split(',', '&').first().trim() }
+                affinity[artist] = ((affinity[artist] ?: 0f) + delta * TO_ARTIST).coerceIn(-60f, 60f)
+            }
+        }
+
+        /** The song starts. Picked by hand, its minus points go first (back to 0). */
+        fun played(t: Track, manual: Boolean, now: Long) {
+            if (t.videoId.isEmpty()) return
+            val below = tracks[t.videoId]?.points?.takeIf { it < 0f }
+            if (manual && below != null) give(t, -below)
+            give(t, PLAY)
+            tracks.getValue(t.videoId).last = now
+        }
+
+        /** The song stopped after [listened] of its [length] seconds: a quick skip loses points, hearing it to the end gives some. */
+        fun left(t: Track, listened: Float, length: Float) {
+            if (listened < 30f && (length <= 0f || listened < length * 0.5f)) give(t, SKIP)
+            else if (length > 0f && listened >= length * 0.8f) give(t, FINISH)
+        }
+
+        /** The song's points now: 5% less each day since it played, a third for 6 hours after. */
+        fun trackPoints(id: String, now: Long): Float {
+            val s = tracks[id] ?: return 0f
+            val ago = (now - s.last).coerceAtLeast(0L)
+            var p = s.points * Math.pow(DECAY.toDouble(), ago.toDouble() / DAY).toFloat()
+            if (p > 0f && ago < COOLDOWN_MS) p *= COOLDOWN
+            return p
+        }
+
+        fun artistPoints(artist: String): Float = affinity[artist] ?: 0f
+
+        /** What songs and artists add to a song's place in a list. */
+        fun liking(t: Track, artist: String, now: Long): Int =
+            Math.round(trackPoints(t.videoId, now)).coerceIn(-40, 40) + Math.round(artistPoints(artist)).coerceIn(-30, 30)
+
+        fun summary(): Summary {
+            val top = affinity.map { (a, n) -> a to n + (bias[a] ?: 0) }.filter { it.second > 0f }.sortedByDescending { it.second }.take(5).map { names[it.first] ?: it.first }
+            return Summary(tracks.size, top)
+        }
+
+        fun resetAll() {
+            tracks.clear(); affinity.clear(); bias.clear(); names.clear()
+        }
+
+        fun resetNegative() {
+            tracks.values.removeAll { it.points < 0f }
+            affinity.values.removeAll { it < 0f }
+            bias.values.removeAll { it < 0 }
+        }
+
         private fun add(artist: String, kind: Kind, weight: Int) {
             if (artist.isEmpty()) return
             val seen = artists.getOrPut(artist) { IntArray(5) }
@@ -170,7 +231,52 @@ object RamPoints {
         }
     }
 
+    /** A song's points, and when it last played (ms). */
+    class Score(var points: Float = 0f, var last: Long = 0L)
+
+    /** What the settings show: songs with points, and the artists with the most. */
+    data class Summary(val tracked: Int, val topArtists: List<String>)
+
+    private const val PLAY = 10f
+    private const val FINISH = 6f
+    private const val SKIP = -15f
+    private const val TO_ARTIST = 0.3f
+    private const val COOLDOWN = 0.35f
+    private const val COOLDOWN_MS = 6L * 60 * 60 * 1000
+    private const val DECAY = 0.95f
+    private const val TRACKS_KEPT = 5000
+
+    private fun clean(s: String) = s.replace('\t', ' ').replace('\n', ' ')
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("ram_points", Context.MODE_PRIVATE)
+
+    /** One song gave way to another: the old one's listening time counts, then the new one is played ([manual]: picked by hand). */
+    @Synchronized
+    fun movedOn(ctx: Context, left: Triple<Track, Float, Float>?, next: Track, manual: Boolean, now: Long = System.currentTimeMillis()) {
+        val notes = load(ctx)
+        left?.let { (t, listened, length) -> notes.left(t, listened, length) }
+        notes.played(next, manual, now)
+        save(ctx, notes)
+    }
+
+    @Synchronized
+    fun summary(ctx: Context): Summary = load(ctx).summary()
+
+    /** "Reset all points": every song's and artist's points back to 0 (kinds and hidden songs stay). */
+    @Synchronized
+    fun resetAll(ctx: Context) {
+        val notes = load(ctx)
+        notes.resetAll()
+        save(ctx, notes)
+    }
+
+    /** "Reset negative points only": skipped songs and artists back to 0; favorites stay. */
+    @Synchronized
+    fun resetNegative(ctx: Context) {
+        val notes = load(ctx)
+        notes.resetNegative()
+        save(ctx, notes)
+    }
 
     fun load(ctx: Context): Notes {
         val p = prefs(ctx)
@@ -180,7 +286,20 @@ object RamPoints {
             n.toIntOrNull()?.let { a to it }
         }.toMap(HashMap())
         val hidden = p.getStringSet("hidden", emptySet()).orEmpty().toHashSet()
-        return Notes(base.artists, base.fixed, bias, hidden)
+        val tracks = p.getString("tracks", "").orEmpty().lineSequence().mapNotNull { line ->
+            val parts = line.split('\t').takeIf { it.size == 3 } ?: return@mapNotNull null
+            val points = parts[1].toFloatOrNull() ?: return@mapNotNull null
+            parts[0] to Score(points, parts[2].toLongOrNull() ?: 0L)
+        }.toMap(HashMap())
+        val affinity = HashMap<String, Float>()
+        val names = HashMap<String, String>()
+        p.getString("affinity", "").orEmpty().lineSequence().forEach { line ->
+            val parts = line.split('\t').takeIf { it.size >= 2 } ?: return@forEach
+            val n = parts[1].toFloatOrNull() ?: return@forEach
+            affinity[parts[0]] = n
+            parts.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { names[parts[0]] = it }
+        }
+        return Notes(base.artists, base.fixed, bias, hidden, tracks, affinity, names)
     }
 
     fun save(ctx: Context, notes: Notes) {
@@ -188,6 +307,9 @@ object RamPoints {
             .putString("artists", notes.encode())
             .putString("bias", notes.bias.entries.joinToString("\n") { (a, n) -> a.replace('\t', ' ').replace('\n', ' ') + "\t" + n })
             .putStringSet("hidden", notes.hidden.toSet())
+            .putString("tracks", notes.tracks.entries.sortedByDescending { kotlin.math.abs(it.value.points) }.take(TRACKS_KEPT)
+                .joinToString("\n") { (id, s) -> clean(id) + "\t" + s.points + "\t" + s.last })
+            .putString("affinity", notes.affinity.entries.joinToString("\n") { (a, n) -> clean(a) + "\t" + n + "\t" + clean(notes.names[a].orEmpty()) })
             .apply()
     }
 
@@ -296,7 +418,7 @@ object RamPoints {
             }
             if (!ids.add(t.videoId) || !keys.add(Radio.sameSongKey(t))) continue
             val artist = firstArtist(t.artist)
-            var points = base + fit + (notes.bias[artist] ?: 0)
+            var points = base + fit + (notes.bias[artist] ?: 0) + notes.liking(t, artist, now)
             if (artist.isNotEmpty() && artist == seedArtist) points += 35 else if (artist in heard) points += 10
             if (artist in likedArtists) points += 6
             val s = script(t)
@@ -347,7 +469,7 @@ object RamPoints {
             val k = notes.kindOf(t) ?: c.radioKind ?: Kind.Songs
             if (k != kind || !ids.add(t.videoId) || !keys.add(Radio.sameSongKey(t))) continue
             val artist = firstArtist(t.artist)
-            var points = c.base + (notes.bias[artist] ?: 0)
+            var points = c.base + (notes.bias[artist] ?: 0) + notes.liking(t, artist, now)
             if (t.videoId !in known) points += 18
             val at = playedAt(t.videoId)
             if (at > 0) {

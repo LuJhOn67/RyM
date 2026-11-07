@@ -126,6 +126,10 @@ struct State {
     crossfade_for: u64,
     resume_at: Option<(String, f32)>,
     radio_pending: bool,
+    /// The next song was picked by hand (RaM points: its minus points go).
+    user_pick: bool,
+    /// "Reset all points" pressed once (a second press within 5 s resets).
+    reset_asked: Option<Instant>,
     repeat_one: bool,
     /// Repeat all: at the end of the list it starts over.
     repeat_all: bool,
@@ -377,6 +381,8 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         crossfade_for: 0,
         resume_at: None,
         radio_pending: false,
+        user_pick: false,
+        reset_asked: None,
         repeat_one: false,
         repeat_all: false,
         lyrics: None,
@@ -1178,6 +1184,8 @@ fn fill_settings(st: &Shared) {
         switch("float", "Floating lyrics", "The sung line in a small window above the others", c.lyrics_overlay),
         head("Suggestions (RaM points)"),
         choice("only-kind", "Only this kind", only),
+        button("ram-reset-all", "Reset all points", ram_summary(), "Reset all"),
+        button("ram-reset-neg", "Reset negative points only", t("Skipped songs come back; your favorites stay"), "Reset"),
         head("Alarm"),
         switch("alarm", "Alarm", "Music starts at this time (RyM has to be open)", c.alarm_on),
         field("alarm-time", "Time", "Like 07:30", &c.alarm_time),
@@ -1427,8 +1435,38 @@ fn set_text(st: &Shared, id: &str, text: &str) {
     s.config.save();
 }
 
+/// The RaM points row's words: songs with points, and the top artists.
+fn ram_summary() -> String {
+    let sum = rymplayer::ram_points::summary();
+    if sum.tracked == 0 {
+        return tr("Nothing learned yet").into();
+    }
+    let mut text = format!("{} {}", sum.tracked, tr("songs with points"));
+    if !sum.top_artists.is_empty() {
+        text += &format!(" · {}: {}", tr("Top artists"), sum.top_artists.join(", "));
+    }
+    text
+}
+
 fn press(st: &Shared, id: &str) {
     match id {
+        "ram-reset-all" => {
+            let sure = st.borrow().reset_asked.is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+            if sure {
+                st.borrow_mut().reset_asked = None;
+                rymplayer::ram_points::reset_all();
+                toast(st, tr("All points are back to 0"));
+                fill_settings(st);
+            } else {
+                st.borrow_mut().reset_asked = Some(Instant::now());
+                toast(st, tr("Press again to reset all points"));
+            }
+        }
+        "ram-reset-neg" => {
+            rymplayer::ram_points::reset_negative();
+            toast(st, tr("Negative points are back to 0"));
+            fill_settings(st);
+        }
         "link-dl" => ask_text(st, "link", tr("Download from a link"), tr("Paste a link from YouTube or any site")),
         "check" => check_updates(st, true),
         "ytdlp" => {
@@ -1701,6 +1739,7 @@ fn track_of(st: &Shared, key: &str) -> Option<Track> {
 
 fn play_key(st: &Shared, key: &str) {
     st.borrow_mut().link_quiet_until = None;
+    st.borrow_mut().user_pick = true;
     let Some((kind, rest)) = key.split_once(':') else { return };
     let Ok(i) = rest.parse::<usize>() else { return };
     match kind {
@@ -1747,6 +1786,7 @@ fn open_card(st: &Shared, key: &str) {
     if t.link.is_some() {
         open_link(st, &t);
     } else {
+        st.borrow_mut().user_pick = true;
         feed::opened(&t);
         play_with_radio(st, t);
     }
@@ -2052,6 +2092,13 @@ fn play_at(st: &Shared, i: usize) {
     let (track, id, api) = {
         let mut s = st.borrow_mut();
         let Some(track) = s.q.songs.get(i).cloned() else { return };
+        // RaM points: the song that was playing gets its listening time, then this one its play.
+        let left = s.q.now().cloned().map(|p| {
+            let a = s.audio.as_ref().filter(|a| a.is_loaded());
+            (p, a.map_or(0.0, Audio::position), a.and_then(Audio::duration).unwrap_or(0.0))
+        });
+        let manual = std::mem::take(&mut s.user_pick);
+        rymplayer::ram_points::moved_on(left, track.clone(), manual);
         s.request_id += 1;
         s.q.went_to(i);
         s.played.insert(track.video_id.clone());

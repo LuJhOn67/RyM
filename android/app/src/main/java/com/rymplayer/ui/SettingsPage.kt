@@ -185,6 +185,22 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section(tr("Suggestions (RaM points)")) {
                 TapRow(Icons.Default.Tune, tr("Only this kind"), tr("For you shows only this kind (a Muharram, say) · tap to change"), vm.onlyKind?.let { tr(it.title) } ?: tr("Every kind heard")) { vm.cycleOnlyKind() }
+                androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshRamSummary() }
+                val sum = vm.ramSummary
+                val about = if (sum.tracked == 0) tr("Nothing learned yet") else
+                    "${sum.tracked} ${tr("songs with points")}" + if (sum.topArtists.isEmpty()) "" else " · ${tr("Top artists")}: ${sum.topArtists.joinToString(", ")}"
+                var askReset by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                TapRow(Icons.Default.AutoAwesome, tr("Reset all points"), about, tr("Reset all")) { askReset = true }
+                TapRow(Icons.Default.Tune, tr("Reset negative points only"), tr("Skipped songs come back; your favorites stay"), tr("Reset")) { vm.resetNegativePoints() }
+                if (askReset) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { askReset = false },
+                        title = { androidx.compose.material3.Text(tr("Reset all points")) },
+                        text = { androidx.compose.material3.Text(tr("Every song and artist goes back to 0. Kinds and hidden songs stay.")) },
+                        confirmButton = { androidx.compose.material3.TextButton({ askReset = false; vm.resetAllPoints() }) { androidx.compose.material3.Text(tr("Reset all")) } },
+                        dismissButton = { androidx.compose.material3.TextButton({ askReset = false }) { androidx.compose.material3.Text(tr("Cancel")) } },
+                    )
+                }
             }
             Section("yt-dlp") {
                 SwitchRow(Icons.Default.NewReleases, tr("Nightly builds"), tr("The newest yt-dlp every day (fixes come sooner)"), vm.ytdlpNightly) { vm.toggleYtdlpNightly() }

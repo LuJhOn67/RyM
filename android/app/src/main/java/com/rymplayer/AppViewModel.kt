@@ -177,6 +177,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var onlyKind by mutableStateOf(com.rymplayer.data.RamPoints.onlyKind(app))
         private set
 
+    /** RaM points in the settings: songs with points and the top artists. */
+    var ramSummary by mutableStateOf(com.rymplayer.data.RamPoints.Summary(0, emptyList()))
+        private set
+
+    fun refreshRamSummary() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val s = com.rymplayer.data.RamPoints.summary(getApplication())
+            launch(kotlinx.coroutines.Dispatchers.Main) { ramSummary = s }
+        }
+    }
+
+    fun resetAllPoints() {
+        com.rymplayer.data.RamPoints.resetAll(getApplication())
+        refreshRamSummary()
+        player.message = tr("All points are back to 0")
+    }
+
+    fun resetNegativePoints() {
+        com.rymplayer.data.RamPoints.resetNegative(getApplication())
+        refreshRamSummary()
+        player.message = tr("Negative points are back to 0")
+    }
+
     fun cycleOnlyKind() {
         val all = listOf<com.rymplayer.data.RamPoints.Kind?>(null) + com.rymplayer.data.RamPoints.Kind.entries
         onlyKind = all[(all.indexOf(onlyKind) + 1) % all.size]

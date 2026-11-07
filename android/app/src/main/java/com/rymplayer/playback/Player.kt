@@ -245,8 +245,12 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
      * Plays [list] from [start], keeping the songs played so far (up to the playing one) above
      * it, so Previous goes back to them; the songs that were still to come are dropped.
      */
+    /** The next song was picked by hand (RaM points: its minus points go). */
+    var userPick = false
+
     fun start(list: List<Track>, start: Int) {
         if (list.isEmpty()) return
+        userPick = true
         val keep = (index + 1).coerceIn(0, queue.size)
         while (queue.size > keep) queue.removeAt(queue.lastIndex)
         while (queue.size > HISTORY) queue.removeAt(0)
@@ -307,6 +311,11 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         added = if (i == index + 1) (added - 1).coerceAtLeast(0) else 0
         // Another song than the one left off last time: that one's place no longer counts.
         if (resumeAt?.first != t.videoId) resumeAt = null
+        // RaM points: the song that was playing gets its listening time, then this one its play.
+        val left = current?.let { Triple(it, (controller?.currentPosition ?: 0L) / 1000f, duration) }
+        val manual = userPick.also { userPick = false }
+        val ctx = context
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.movedOn(ctx, left, t, manual) }
         index = i
         playCount++
         played += t.videoId

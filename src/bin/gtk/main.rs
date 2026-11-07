@@ -556,6 +556,8 @@ struct Ui {
     request_id: u64,
     loading: bool,
     radio_pending: bool,
+    /// The next song was picked by hand (RaM points: its minus points go).
+    user_pick: bool,
     audio: Option<Audio>,
     vlc: Option<std::process::Child>,
     lyrics: Option<Lyrics>,
@@ -1364,6 +1366,7 @@ fn build(app: &Application) {
         request_id: 0,
         loading: false,
         radio_pending: false,
+        user_pick: false,
         audio,
         vlc: None,
         lyrics: None,
@@ -2132,6 +2135,41 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     }
     page.append(&setting_row(tr("Equalizer"), tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own (move a band)"), &preset));
     page.append(&bands);
+
+    page.append(&label(tr("Suggestions (RaM points)"), &["shelf"]));
+    let summary = label(&ram_summary(), &["dim", "small"]);
+    summary.set_wrap(true);
+    summary.set_halign(Align::Start);
+    page.append(&summary);
+    let reset_all = Button::with_label(tr("Reset all"));
+    reset_all.add_css_class("ghost");
+    {
+        // Twice to be sure: the first press asks.
+        let asked = Rc::new(std::cell::Cell::new(None::<Instant>));
+        let summary = summary.clone();
+        reset_all.connect_clicked(move |b| {
+            if asked.get().is_some_and(|at| at.elapsed() < Duration::from_secs(5)) {
+                asked.set(None);
+                rymplayer::ram_points::reset_all();
+                b.set_label(tr("Reset all"));
+                summary.set_text(tr("All points are back to 0"));
+            } else {
+                asked.set(Some(Instant::now()));
+                b.set_label(tr("Press again to reset all points"));
+            }
+        });
+    }
+    page.append(&setting_row(tr("Reset all points"), "", &reset_all));
+    let reset_neg = Button::with_label(tr("Reset"));
+    reset_neg.add_css_class("ghost");
+    {
+        let summary = summary.clone();
+        reset_neg.connect_clicked(move |_| {
+            rymplayer::ram_points::reset_negative();
+            summary.set_text(tr("Negative points are back to 0"));
+        });
+    }
+    page.append(&setting_row(tr("Reset negative points only"), tr("Skipped songs come back; your favorites stay"), &reset_neg));
 
     page.append(&label(tr("On this device"), &["shelf"]));
     let folders = gtk::Entry::new();
@@ -3148,6 +3186,19 @@ fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
     page.upcast()
 }
 
+/// The RaM points line in the settings: songs with points, and the top artists.
+fn ram_summary() -> String {
+    let sum = rymplayer::ram_points::summary();
+    if sum.tracked == 0 {
+        return tr("Nothing learned yet").into();
+    }
+    let mut text = format!("{} {}", sum.tracked, tr("songs with points"));
+    if !sum.top_artists.is_empty() {
+        text += &format!(" · {}: {}", tr("Top artists"), sum.top_artists.join(", "));
+    }
+    text
+}
+
 fn setting_row(title: &str, about: &str, control: &impl IsA<gtk::Widget>) -> gtk::Widget {
     let row = gtk::Box::new(Orientation::Horizontal, 16);
     let text = gtk::Box::new(Orientation::Vertical, 3);
@@ -3829,6 +3880,7 @@ fn play_list(ui: &Shared, songs: &[Track], i: usize) {
         return;
     }
     song_page_on_play(ui);
+    ui.borrow_mut().user_pick = true;
     let at = ui.borrow_mut().q.start(songs.to_vec(), i);
     play_at(ui, at);
 }
@@ -3836,6 +3888,7 @@ fn play_list(ui: &Shared, songs: &[Track], i: usize) {
 /// One song, then YouTube Music's radio after it (Up next made for it); what was played stays above.
 fn play_with_radio(ui: &Shared, t: Track) {
     song_page_on_play(ui);
+    ui.borrow_mut().user_pick = true;
     let at = ui.borrow_mut().q.start(vec![t], 0);
     play_at(ui, at);
     continue_with_radio(ui);
@@ -4160,6 +4213,13 @@ fn play_at(ui: &Shared, i: usize) {
     let (track, id, api, in_vlc) = {
         let mut s = ui.borrow_mut();
         let Some(track) = s.q.songs.get(i).cloned() else { return };
+        // RaM points: the song that was playing gets its listening time, then this one its play.
+        let left = s.q.now().cloned().map(|p| {
+            let a = s.audio.as_ref().filter(|a| a.is_loaded());
+            (p, a.map_or(0.0, Audio::position), a.and_then(Audio::duration).unwrap_or(0.0))
+        });
+        let manual = std::mem::take(&mut s.user_pick);
+        rymplayer::ram_points::moved_on(left, track.clone(), manual);
         s.request_id += 1;
         s.q.went_to(i);
         // The panel opens on the lyrics when a song starts (unless closed by hand).
