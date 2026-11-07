@@ -267,7 +267,8 @@ fn main() {
     std::panic::set_hook(Box::new(|info| {
         let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
         let msg = info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned()).unwrap_or_default();
-        log(&format!("CRASH at {at}: {msg}"));
+        let thread = std::thread::current();
+        log(&format!("CRASH at {at} (thread {}): {msg}", thread.name().unwrap_or("unnamed")));
     }));
     if std::env::args().any(|a| a == "--login") {
         login::run();
@@ -298,6 +299,11 @@ fn main() {
     let st = build(&ui, config);
     STATE.with(|s| *s.borrow_mut() = Some(st.clone()));
     start(&st);
+    // A check of the quit path: quits by itself after so many seconds.
+    if let Some(secs) = args.iter().position(|a| a == "--quit-after").and_then(|i| args.get(i + 1)).and_then(|s| s.parse::<u64>().ok()) {
+        let st = st.clone();
+        slint::Timer::single_shot(Duration::from_secs(secs), move || quit(&st));
+    }
     let files: Vec<Track> = args.iter().skip(1).map(std::path::PathBuf::from).filter(|p| p.is_file()).map(|p| rymplayer::local::track(&p)).collect();
     if !files.is_empty() {
         play_list(&st, files, 0);
@@ -318,6 +324,26 @@ fn main() {
     let _ = slint::run_event_loop_until_quit();
     save_session(&st);
     rymplayer::stats::flush();
+    shut_down(st);
+}
+
+/// Closes the sound, the media keys, the tray icon and the small windows now, while their threads
+/// still run. Left to the end of the process (the state lives in a thread-local), Windows has
+/// already stopped those threads, and the sound player waiting for its own panicked ("threads
+/// should not terminate unexpectedly") on every quit.
+fn shut_down(st: Shared) {
+    STATE.with(|s| s.borrow_mut().take());
+    if let Ok(mut s) = st.try_borrow_mut() {
+        if let Some(a) = s.audio.as_mut() {
+            a.stop();
+        }
+        s.audio = None;
+        s.media = None;
+        s.tray = None;
+        s.mini = None;
+        s.float = None;
+    }
+    drop(st);
 }
 
 fn models() -> Models {
