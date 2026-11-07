@@ -662,8 +662,11 @@ mod tests {
         c.change(Setting::Lyrics, -1);
         c.change(Setting::Lyrics, -1);
         assert_eq!(c.lyrics, LyricsPlace::Hidden);
+        // Back from the first: the last one (the window apps' color themes come after "Mono").
         c.change(Setting::Theme, -1);
-        assert_eq!(c.theme().name, "Mono");
+        assert_eq!(c.theme().name, "Tactical Olive");
+        assert_eq!(all_themes()[THEMES.len() - 1].name, "Mono");
+        assert_eq!(all_themes().len(), THEMES.len() + 11);
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.lyrics, LyricsPlace::Hidden);
         // Old or partial files still load.
