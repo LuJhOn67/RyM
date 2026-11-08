@@ -57,6 +57,8 @@ enum Ev {
     Lyrics(String, Option<Lyrics>),
     Translated(String, String, Vec<String>),
     Radio(anyhow::Result<Vec<Track>>),
+    /// An album, playlist or mix's songs, to play (0), play next (1) or add to the queue (2).
+    LinkSongs(u8, String, anyhow::Result<Vec<Track>>),
     Similar(String, anyhow::Result<Vec<Track>>),
     SameArtist(String, anyhow::Result<Vec<Track>>),
     ArtistFound(String, anyhow::Result<Option<String>>),
@@ -2407,9 +2409,14 @@ fn play_key(st: &Shared, key: &str) {
             play_list(st, songs, at);
         }
         // A search result, a similar song or one of the artist's: it plays, then songs like it.
+        // An album, playlist or mix: its songs play.
         _ => {
             if let Some(t) = track_of(st, key) {
-                play_with_radio(st, t);
+                if t.link.is_some() {
+                    link_songs(st, &t, 0);
+                } else {
+                    play_with_radio(st, t);
+                }
             }
         }
     }
@@ -2559,6 +2566,7 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
             }
             toast(st, &format!("{}: {}", tr("Won't be suggested"), t.title));
         }
+        "next" | "add" if t.link.is_some() => link_songs(st, &t, if action == "next" { 1 } else { 2 }),
         "next" => {
             st.borrow_mut().q.play_next(t.clone());
             render_queue(st);
@@ -2739,6 +2747,21 @@ fn play_list(st: &Shared, songs: Vec<Track>, i: usize) {
     play_at(st, at);
 }
 
+/// An album, playlist or mix's songs, fetched, then played (0), put next (1) or added (2).
+fn link_songs(st: &Shared, t: &Track, what: u8) {
+    let Some(api) = st.borrow().api.clone() else { return };
+    feed::opened(t);
+    let title = t.title.clone();
+    let load: std::pin::Pin<Box<dyn Future<Output = anyhow::Result<Vec<Track>>> + Send>> = match t.link.clone() {
+        Some(Link::Album(id)) => Box::pin(api.album_tracks(id)),
+        Some(Link::Playlist(id)) => Box::pin(api.playlist_all(id, 200)),
+        Some(Link::Mix(id)) => Box::pin(api.mix_tracks(id)),
+        None => return,
+    };
+    toast(st, &format!("{} \"{}\"…", tr("Loading"), title));
+    post(async move { Ev::LinkSongs(what, title, load.await) });
+}
+
 fn play_with_radio(st: &Shared, t: Track) {
     let at = st.borrow_mut().q.start(vec![t], 0);
     play_at(st, at);
@@ -2746,6 +2769,27 @@ fn play_with_radio(st: &Shared, t: Track) {
 }
 
 fn play_at(st: &Shared, i: usize) {
+    let unplayable = st.borrow().q.songs.get(i).is_some_and(|t| t.video_id.is_empty());
+    if unplayable {
+        let t = {
+            let mut s = st.borrow_mut();
+            let t = s.q.songs.remove(i);
+            // The queue's places after it move up by one.
+            match s.q.current {
+                Some(c) if c == i => s.q.current = i.checked_sub(1),
+                Some(c) if c > i => s.q.current = Some(c - 1),
+                _ => {}
+            }
+            t
+        };
+        render_queue(st);
+        if t.link.is_some() {
+            link_songs(st, &t, 1);
+        } else if i < st.borrow().q.songs.len() {
+            play_at(st, i);
+        }
+        return;
+    }
     let (track, id, api) = {
         let mut s = st.borrow_mut();
         let Some(track) = s.q.songs.get(i).cloned() else { return };
@@ -4188,6 +4232,45 @@ fn handle(st: &Shared, ev: Ev) {
                 show_lyrics(st, Some(l));
             }
         }
+        Ev::LinkSongs(what, title, result) => match result {
+            Ok(songs) => {
+                let songs: Vec<Track> = songs.into_iter().filter(|t| !t.video_id.is_empty() && t.link.is_none()).collect();
+                if songs.is_empty() {
+                    toast(st, &format!("{}: {title}", tr("No songs in")));
+                    return;
+                }
+                match what {
+                    0 => play_list(st, songs, 0),
+                    // Nothing in the queue yet: they just play.
+                    1 if st.borrow().q.current.is_none() => play_list(st, songs, 0),
+                    1 => {
+                        {
+                            let mut s = st.borrow_mut();
+                            for t in songs.into_iter().rev() {
+                                s.q.play_next(t);
+                            }
+                        }
+                        render_queue(st);
+                        toast(st, &format!("{}: {title}", tr("Plays next")));
+                    }
+                    _ => {
+                        let mut start = false;
+                        {
+                            let mut s = st.borrow_mut();
+                            for t in songs {
+                                start |= s.q.add(t);
+                            }
+                        }
+                        render_queue(st);
+                        if start && let Some(c) = st.borrow().q.current {
+                            play_at(st, c);
+                        }
+                        toast(st, &format!("{}: {title}", tr("Added to queue")));
+                    }
+                }
+            }
+            Err(e) => toast(st, &format!("{}: {e}", title)),
+        },
         Ev::Radio(result) => {
             st.borrow_mut().radio_pending = false;
             let Ok(tracks) = result else { return };
