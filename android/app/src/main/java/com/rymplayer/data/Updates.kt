@@ -49,25 +49,45 @@ object Updates {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val dir = java.io.File(ctx.cacheDir, "updates").apply { mkdirs() }
             val out = java.io.File(dir, "RyM-update.apk")
+            out.delete()
             val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
-            client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { resp ->
-                if (!resp.isSuccessful) error("GitHub answered ${resp.code}")
-                val body = resp.body ?: error("empty download")
-                val total = body.contentLength().toFloat()
-                body.byteStream().use { input ->
-                    out.outputStream().use { output ->
-                        val buf = ByteArray(64 * 1024)
-                        var done = 0L
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            output.write(buf, 0, n)
-                            done += n
-                            if (total > 0) progress((done / total).coerceAtMost(1f))
+            // A cut connection gave half an APK, and Android said the update didn't fit: it goes
+            // on from where it stopped (up to 4 tries), and only a whole file is handed over.
+            var total = -1L
+            var tries = 0
+            while (true) {
+                val have = out.length()
+                if (total > 0 && have >= total) break
+                tries++
+                val req = okhttp3.Request.Builder().url(url).apply { if (have > 0) header("Range", "bytes=$have-") }.build()
+                val ok = runCatching {
+                    client.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) error("GitHub answered ${resp.code}")
+                        val body = resp.body ?: error("empty download")
+                        // 206: the rest; 200: the whole file again (the server ignored the range).
+                        val resumed = resp.code == 206 && have > 0
+                        if (!resumed) out.delete()
+                        val base = if (resumed) have else 0L
+                        if (body.contentLength() > 0) total = base + body.contentLength()
+                        body.byteStream().use { input ->
+                            java.io.FileOutputStream(out, resumed).use { output ->
+                                val buf = ByteArray(64 * 1024)
+                                var done = base
+                                while (true) {
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    output.write(buf, 0, n)
+                                    done += n
+                                    if (total > 0) progress((done.toFloat() / total).coerceAtMost(1f))
+                                }
+                            }
                         }
                     }
                 }
+                if (ok.isSuccess && (total <= 0 || out.length() >= total)) break
+                if (tries >= 4) error(ok.exceptionOrNull()?.message ?: "the download stopped before the end")
             }
+            if (total > 0 && out.length() != total) error("the download stopped before the end")
             out
         }
 

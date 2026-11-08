@@ -451,6 +451,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 .getOrNull()
             updateProgress = null
             if (file == null) return@launch
+            // Signed differently from the app on the phone, Android only says it doesn't fit: say why.
+            if (!sameSigner(ctx, file)) {
+                status = tr("This update is signed differently from the RyM on this phone: uninstall RyM, then install the new APK from the release page")
+                return@launch
+            }
             update = null
             val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", file)
             runCatching {
@@ -462,6 +467,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }.onFailure { status = "${tr("Couldn't update")}: ${it.message}" }
         }
     }
+
+    /** The APK at [file] is signed by the same key as the installed app (when it can't be read: assume so). */
+    private fun sameSigner(ctx: Application, file: java.io.File): Boolean = runCatching {
+        val pm = ctx.packageManager
+        val flags = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        val new = pm.getPackageArchiveInfo(file.path, flags)?.signingInfo?.apkContentsSigners ?: return true
+        val mine = pm.getPackageInfo(ctx.packageName, flags).signingInfo?.apkContentsSigners ?: return true
+        new.map { it.toCharsString() }.toSet() == mine.map { it.toCharsString() }.toSet()
+    }.getOrDefault(true)
 
     fun checkUpdates(asked: Boolean) {
         if (checking) return

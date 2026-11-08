@@ -111,6 +111,15 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      - name: The signing key (the same as the PC's, so updates install over earlier versions)
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            mkdir -p ~/.android
+            echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          fi
+
       - name: Tests and APK
         run: |
           chmod +x gradlew

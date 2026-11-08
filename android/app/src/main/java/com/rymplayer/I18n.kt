@@ -150,6 +150,7 @@ object I18n {
         "Points reset: the day you picked came" to "النقاط تصفّرت: إجا اليوم اللي اخترته",
         "Points reset: a week passed" to "النقاط تصفّرت: مر أسبوع",
         "Colors" to "الألوان",
+        "This update is signed differently from the RyM on this phone: uninstall RyM, then install the new APK from the release page" to "هذا التحديث موقّع بمفتاح غير مفتاح RyM اللي بالتلفون: احذف RyM وبعدين نصّب الـ APK الجديد من صفحة الإصدار",
         "Prefer lossless (FLAC)" to "فضّل الجودة الكاملة (FLAC)",
         "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there" to "يدوّر على الأغنية كـ FLAC بأرشيف الإنترنت أول (مجاني وقانوني)، ويوتيوب إذا ما لگاها",
         "Animation frame rate" to "سرعة رسم الحركات",
