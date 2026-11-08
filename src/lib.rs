@@ -21,6 +21,7 @@ pub mod lyrics;
 pub mod memory;
 pub mod page_cache;
 pub mod plugins;
+pub mod power;
 pub mod queue;
 pub mod radio;
 pub mod romaji;

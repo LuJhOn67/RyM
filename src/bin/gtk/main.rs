@@ -654,6 +654,9 @@ struct Ui {
     extras_key: Option<(bool, bool, String)>,
     /// When the scheduled points reset was last looked at.
     reset_checked: Option<Instant>,
+    /// Battery saver or a low battery, looked at every 30 s (animations stop then).
+    saving: bool,
+    saving_at: Option<Instant>,
     /// The next song was picked by hand (RaM points: its minus points go).
     user_pick: bool,
     audio: Option<Audio>,
@@ -1495,6 +1498,8 @@ fn build(app: &Application) {
         bass_peak: 0.05,
         extras_key: None,
         reset_checked: None,
+        saving: false,
+        saving_at: None,
         user_pick: false,
         audio,
         vlc: None,
@@ -2379,7 +2384,32 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
             s.config.save();
         });
     }
-    page.append(&setting_row(tr("Other music folders"), tr("Besides your Music folder; separate them with ;"), &folders));
+    // The system's folder window: the folder picked joins the list.
+    let add_folder = Button::with_label(tr("Add a folder"));
+    add_folder.add_css_class("ghost");
+    {
+        let ui = ui.clone();
+        let folders = folders.clone();
+        add_folder.connect_clicked(move |_| {
+            let dialog = gtk::FileDialog::builder().title(tr("Pick a music folder")).modal(true).build();
+            let window = ui.borrow().w.window.clone();
+            let folders = folders.clone();
+            dialog.select_folder(Some(&window), None::<&gtk::gio::Cancellable>, move |picked| {
+                let Some(dir) = picked.ok().and_then(|f| f.path()) else { return };
+                let dir = dir.to_string_lossy().to_string();
+                let mut list: Vec<String> = folders.text().split(';').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
+                if !list.contains(&dir) {
+                    list.push(dir);
+                    // The box's own handler saves it.
+                    folders.set_text(&list.join("; "));
+                }
+            });
+        });
+    }
+    let folder_row = gtk::Box::new(Orientation::Horizontal, 8);
+    folder_row.append(&folders);
+    folder_row.append(&add_folder);
+    page.append(&setting_row(tr("Other music folders"), tr("Besides your Music folder; separate them with ;"), &folder_row));
 
     page.append(&label("Discord", &["shelf"]));
     let app_id = gtk::Entry::new();
@@ -3503,6 +3533,21 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Colors"), "", &colors));
+    // Animations' frames a second.
+    const FPS: [u32; 7] = [24, 30, 60, 120, 144, 240, 0];
+    let fps_names: Vec<String> = FPS.iter().map(|f| if *f == 0 { tr("As fast as the screen").to_string() } else { format!("{f} FPS") }).collect();
+    let fps_refs: Vec<&str> = fps_names.iter().map(String::as_str).collect();
+    let fps = gtk::DropDown::from_strings(&fps_refs);
+    fps.set_selected(FPS.iter().position(|f| *f == config.fps_cap).unwrap_or(2) as u32);
+    {
+        let ui = ui.clone();
+        fps.connect_selected_notify(move |d| {
+            let mut s = ui.borrow_mut();
+            s.config.fps_cap = FPS[(d.selected() as usize).min(FPS.len() - 1)];
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Animation frame rate"), "", &fps));
     for (title, about, on, set) in [
         (tr("Liquid Aurora"), tr("The cover's colors move behind everything with the bass"), config.aurora, (|c: &mut Config, on| c.aurora = on) as fn(&mut Config, bool)),
         (tr("Vinyl record"), tr("The cover turns like a record: faster with Nightcore, slower with Slowed"), config.vinyl, |c: &mut Config, on| c.vinyl = on),
@@ -4830,6 +4875,13 @@ fn tick(ui: &Shared) {
         live.energy.set((bass / s.bass_peak).powf(1.5).clamp(0.0, 1.0) as f64);
         let level = |x: f32| ((20.0 * x.max(1e-5).log10() + 30.0) / 30.0).clamp(0.0, 1.0) as f64;
         live.vu.set((level(left), level(right)));
+        // The animations move only with the window in front and shown, and no battery saver.
+        if s.saving_at.is_none_or(|at| at.elapsed() > Duration::from_secs(30)) {
+            s.saving_at = Some(Instant::now());
+            s.saving = rymplayer::power::saving();
+        }
+        let shown = s.w.window.is_active() && !s.w.window.is_suspended();
+        fx_view::set_eco(shown && !s.saving, s.config.fps_cap);
     }
     // Listening stats: time while playing, written once a minute.
     let since = s.listened_at.elapsed();

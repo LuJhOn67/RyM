@@ -1,5 +1,7 @@
 package com.rymplayer
 
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.unit.dp
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -73,7 +75,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val model: AppViewModel = viewModel()
-            RymTheme(model.ytmTheme, model.colors) { RymApp(model) }
+            RymTheme(model.ytmTheme, model.colors) {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+                    RymApp(model)
+                    if (model.perfBadge) {
+                        com.rymplayer.ui.PerfBadge(
+                            androidx.compose.ui.Modifier.align(androidx.compose.ui.Alignment.TopEnd)
+                                .then(androidx.compose.ui.Modifier.statusBarsPadding()).then(androidx.compose.ui.Modifier.padding(8.dp)),
+                        )
+                    }
+                }
+            }
         }
         showUpdateFrom(intent)
         // Not again when the screen turns (the same intent comes back with the saved state).

@@ -250,6 +250,8 @@ fun SettingsPage(vm: AppViewModel) {
                 SwitchRow(Icons.Default.GraphicEq, tr("Vinyl record"), tr("The cover turns like a record: faster with Nightcore, slower with Slowed"), vm.vinyl) { vm.toggleVinyl() }
                 TapRow(Icons.Default.Download, tr("Import colors"), tr("Copy a theme's JSON (from the PC's export), then tap here"), tr("Import")) { vm.importTheme() }
                 TapRow(Icons.Default.SwapHoriz, tr("Export colors"), tr("Copies these colors as JSON"), tr("Export")) { vm.exportTheme() }
+                TapRow(Icons.Default.Tune, tr("Animation frame rate"), tr("Animations stop on battery saver or under 20% · tap to change"), if (vm.fpsCap == 0) tr("As fast as the screen") else "${vm.fpsCap} FPS") { vm.cycleFps() }
+                SwitchRow(Icons.Default.Tune, tr("Performance monitor"), tr("Frames a second, frame time and memory in a corner"), vm.perfBadge) { vm.togglePerfBadge() }
             }
             Section(tr("Sound")) {
                 val snd = vm.sound

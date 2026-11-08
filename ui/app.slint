@@ -187,6 +187,12 @@ export global App {
     in property <string> sleep-text;
     // The playing speed as the button by the heart shows it ("1×", "Nightcore").
     in property <string> speed-text: "1×";
+    // The animations' clock (ms), moved at the chosen frame rate only while something animates
+    // (playing, the window in front, no battery saver): still otherwise, so nothing is redrawn.
+    in property <float> clock;
+    // The performance badge.
+    in property <bool> perf-on;
+    in property <string> perf-text;
 
     // ---- the pages
     // 0 now playing (Up next), 1 search, 2 library, 3 home, 4 settings, 5 a list, 6 stats
@@ -353,7 +359,7 @@ component Aurora inherits Rectangle {
     property <float> e: Theme.energy;
     animate e { duration: 140ms; easing: ease-out; }
     // A slow drift while music plays (still when paused: nothing is redrawn then).
-    property <float> t: App.playing ? animation-tick() / 1ms / 6000 : 0;
+    property <float> t: App.clock / 6000;
     for blob[i] in [
         { c: Theme.a1, x: 0.18, y: 0.22, s: 0.8 },
         { c: Theme.a2, x: 0.84, y: 0.2, s: 0.7 },
@@ -403,7 +409,7 @@ component Backdrop inherits Rectangle {
     if Theme.has-pattern: Image {
         property <length> tile: Theme.p.pattern.height * 1px;
         // Rain runs down and ash drifts down; the other patterns stay.
-        y: Theme.falling && App.playing ? Math.mod(animation-tick() / 1ms * Theme.p.fall, Theme.p.pattern.height) * 1px - self.tile : 0;
+        y: Theme.falling ? Math.mod(App.clock * Theme.p.fall, Theme.p.pattern.height) * 1px - self.tile : 0;
         width: 100%;
         height: parent.height + self.tile;
         source: Theme.p.pattern;
@@ -423,19 +429,19 @@ component Vinyl inherits Rectangle {
     property <float> rate: Theme.spin-rate;
     property <bool> spinning: App.playing && !App.loading;
     property <float> base: 0;
-    property <duration> from: 0ms;
-    property <float> turn: spinning ? base + (animation-tick() - from) / 1s * rate : base;
+    property <float> from: 0;
+    property <float> turn: spinning ? base + (App.clock - from) / 1000 * rate : base;
     changed spinning => {
         if (spinning) {
-            from = animation-tick();
+            from = App.clock;
         } else {
-            base = Math.mod(base + (animation-tick() - from) / 1s * rate, 360);
+            base = Math.mod(base + (App.clock - from) / 1000 * rate, 360);
         }
     }
     changed rate => {
         if (spinning) {
-            base = Math.mod(base + (animation-tick() - from) / 1s * rate, 360);
-            from = animation-tick();
+            base = Math.mod(base + (App.clock - from) / 1000 * rate, 360);
+            from = App.clock;
         }
     }
     disc := Rectangle {
@@ -2313,6 +2319,22 @@ export component AppWindow inherits Window {
                     Button { text: App.tr("Keep in background"); strong: true; clicked => { App.close-choice(true, card.remember); } }
                 }
             }
+        }
+    }
+    // The performance badge: frames a second, frame time, memory.
+    if App.perf-on: Rectangle {
+        x: parent.width - self.width - 12px;
+        y: 10px;
+        width: ptext.preferred-width + 16px;
+        height: ptext.preferred-height + 8px;
+        border-radius: 6px;
+        background: #000000b0;
+        ptext := Text {
+            text: App.perf-text;
+            font-size: 12px;
+            color: #e8e8e8;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
     // A yes/no question with its explanation (turning on the weekly reset).

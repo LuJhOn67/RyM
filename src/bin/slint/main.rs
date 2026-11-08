@@ -35,6 +35,8 @@ const COVERS_KEPT: usize = 400;
 const QUEUE_SHOWN: usize = 60;
 
 enum Ev {
+    /// The folder picked in the system's folder window (None: closed without one).
+    FolderPicked(Option<std::path::PathBuf>),
     Auth(bool, anyhow::Result<Api>),
     Account(anyhow::Result<Account>),
     Avatar(anyhow::Result<Vec<u8>>),
@@ -136,6 +138,18 @@ struct State {
     confirm_for: String,
     /// When the scheduled points reset was last looked at.
     reset_checked: Option<Instant>,
+    /// The animations' clock: its timer (running only while something animates), its frame
+    /// interval, when it started; frames counted and their average time (the badge).
+    clock_timer: slint::Timer,
+    clock_every: Option<Duration>,
+    clock_start: Instant,
+    frames: u32,
+    frame_ms: f32,
+    last_frame: Option<Instant>,
+    perf_at: Instant,
+    /// Battery saver or a low battery, looked at every 30 s.
+    saving: bool,
+    saving_at: Option<Instant>,
     repeat_one: bool,
     /// Repeat all: at the end of the list it starts over.
     repeat_all: bool,
@@ -235,6 +249,8 @@ const SLEEP_CHOICES: [u32; 7] = [0, 15, 30, 45, 60, 90, u32::MAX];
 
 thread_local! {
     static STATE: RefCell<Option<Shared>> = const { RefCell::new(None) };
+    /// The window is in front (focused) and shown (not minimized or covered), from winit.
+    static WINDOW_UP: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((true, false)) };
 }
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -300,6 +316,18 @@ fn main() {
         log(&format!("skia renderer not available: {e}"));
     }
     let ui = AppWindow::new().expect("window");
+    {
+        // Animations stop while the window isn't in front or is minimized / covered.
+        use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
+        ui.window().on_winit_window_event(|_, ev| {
+            match ev {
+                WindowEvent::Focused(f) => WINDOW_UP.with(|w| w.set((*f, w.get().1))),
+                WindowEvent::Occluded(o) => WINDOW_UP.with(|w| w.set((w.get().0, *o))),
+                _ => {}
+            }
+            EventResult::Propagate
+        });
+    }
     let st = build(&ui, config);
     STATE.with(|s| *s.borrow_mut() = Some(st.clone()));
     start(&st);
@@ -421,6 +449,15 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         reset_asked: None,
         confirm_for: String::new(),
         reset_checked: None,
+        clock_timer: slint::Timer::default(),
+        clock_every: None,
+        clock_start: Instant::now(),
+        frames: 0,
+        frame_ms: 0.0,
+        last_frame: None,
+        perf_at: Instant::now(),
+        saving: false,
+        saving_at: None,
         repeat_one: false,
         repeat_all: false,
         lyrics: None,
@@ -1211,6 +1248,8 @@ fn fill_settings(st: &Shared) {
         switch("aurora", "Liquid Aurora", "The cover's colors move behind everything with the bass", c.aurora),
         switch("vinyl", "Vinyl record", "The cover turns like a record: faster with Nightcore, slower with Slowed", c.vinyl),
         choice("glass-blur", "Glass blur", format!("{}", c.glass_blur.round())),
+        choice("fps", "Animation frame rate", if c.fps_cap == 0 { t("As fast as the screen") } else { format!("{} FPS", c.fps_cap) }),
+        switch("perf", "Performance monitor", "Frames a second, frame time and memory in a corner", c.perf_badge),
         button("theme-export", "Export colors", t("Saves these colors as a .json file in Downloads"), "Export"),
         button("theme-import", "Import colors", t("A .json theme file (its path), or the JSON itself"), "Import"),
         choice("zoom", "App size", format!("{}%", (c.ui_zoom * 100.0).round())),
@@ -1227,6 +1266,7 @@ fn fill_settings(st: &Shared) {
         choice("sleep", "Sleep timer", sleep),
         head("On this device"),
         field("local-folders", "Other music folders", "Besides your Music folder; separate them with ;", &c.local_folders.join("; ")),
+        button("local-add", "Add a folder", t("Pick a folder with songs; it joins the list above"), "Add"),
         head("Lyrics"),
         choice("lyrics-size", "Lyrics size", format!("{} px", c.lyrics_font)),
         switch("translate", "Translate Japanese lyrics", "English under each Japanese line", c.lyrics_translation),
@@ -1299,6 +1339,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
         match id {
             "accent" => c.accent_from_cover = on,
             "aurora" => c.aurora = on,
+            "perf" => c.perf_badge = on,
             // Turned on only after the warning (see `ask_weekly_reset`).
             "ram-weekly" if !on => c.ram_weekly_reset = false,
             "ram-weekly" => {}
@@ -1398,6 +1439,13 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let name = names[cycle(at, names.len())].clone();
             set_colors(st, &name);
             return;
+        }
+        "fps" => {
+            const STEPS: [u32; 7] = [24, 30, 60, 120, 144, 240, 0];
+            let mut s = st.borrow_mut();
+            let at = STEPS.iter().position(|f| *f == s.config.fps_cap).unwrap_or(2);
+            s.config.fps_cap = STEPS[cycle(at, STEPS.len())];
+            s.config.save();
         }
         "glass-blur" => {
             {
@@ -1538,6 +1586,80 @@ fn set_text(st: &Shared, id: &str, text: &str) {
     s.config.save();
 }
 
+/// One clock for every animation (rain and ash, Liquid Aurora's drift, the record): it moves at
+/// the chosen frame rate only while something animates, the song plays, the window is in front
+/// and shown, and there's no battery saver or low battery. Otherwise it stops: 0 frames.
+fn animations(st: &Shared) {
+    let (playing, wants, cap, perf) = {
+        let mut s = st.borrow_mut();
+        if s.saving_at.is_none_or(|at| at.elapsed() > Duration::from_secs(30)) {
+            s.saving_at = Some(Instant::now());
+            s.saving = rymplayer::power::saving();
+        }
+        let playing = s.audio.as_ref().is_some_and(Audio::is_playing);
+        let wants = s.ui.upgrade().is_some_and(|ui| {
+            let t = ui.global::<Theme>();
+            t.get_falling() || t.get_aurora() || t.get_vinyl()
+        });
+        (playing, wants, s.config.fps_cap, s.config.perf_badge)
+    };
+    let (front, covered) = WINDOW_UP.with(|w| w.get());
+    let saving = st.borrow().saving;
+    let run = playing && wants && front && !covered && !saving;
+    let every = run.then(|| Duration::from_micros(if cap == 0 { 4_000 } else { 1_000_000 / cap as u64 }));
+    if st.borrow().clock_every != every {
+        let mut s = st.borrow_mut();
+        s.clock_every = every;
+        s.last_frame = None;
+        match every {
+            Some(d) => {
+                let st2 = st.clone();
+                s.clock_timer.start(slint::TimerMode::Repeated, d, move || clock_tick(&st2));
+            }
+            None => s.clock_timer.stop(),
+        }
+    }
+    // The badge, once a second.
+    with_app(st, |a| a.set_perf_on(perf));
+    if perf && st.borrow().perf_at.elapsed() >= Duration::from_secs(1) {
+        let text = {
+            let mut s = st.borrow_mut();
+            let secs = s.perf_at.elapsed().as_secs_f32();
+            let fps = s.frames as f32 / secs;
+            s.frames = 0;
+            s.perf_at = Instant::now();
+            let why = if !playing {
+                tr("paused")
+            } else if saving {
+                tr("battery saver")
+            } else if !front || covered {
+                tr("window not in front")
+            } else {
+                ""
+            };
+            let frames = if run { format!("{fps:.0} FPS · {:.1} ms", s.frame_ms) } else { format!("0 FPS · {why}") };
+            format!("{frames} · {:.0} MB", rymplayer::power::ram_mb())
+        };
+        with_app(st, |a| a.set_perf_text(text.into()));
+    }
+}
+
+fn clock_tick(st: &Shared) {
+    let ms = {
+        let mut s = st.borrow_mut();
+        let now = Instant::now();
+        if let Some(last) = s.last_frame {
+            let took = now.duration_since(last).as_secs_f32() * 1000.0;
+            s.frame_ms = if s.frame_ms == 0.0 { took } else { s.frame_ms * 0.9 + took * 0.1 };
+        }
+        s.last_frame = Some(now);
+        s.frames += 1;
+        // Wraps every ~2.3 hours (a float keeps whole milliseconds that far).
+        (s.clock_start.elapsed().as_millis() % 8_388_608) as f32
+    };
+    with_app(st, |a| a.set_clock(ms));
+}
+
 /// The weekly reset is turned on only after its warning.
 fn ask_weekly_reset(st: &Shared) {
     st.borrow_mut().confirm_for = "ram-weekly".into();
@@ -1613,6 +1735,11 @@ fn press(st: &Shared, id: &str) {
                 st.borrow_mut().reset_asked = Some(Instant::now());
                 toast(st, tr("Press again to reset all points"));
             }
+        }
+        // The system's folder window, off the window's thread (it waits for the user).
+        "local-add" => {
+            let title = tr("Pick a music folder");
+            std::thread::spawn(move || send(Ev::FolderPicked(rfd::FileDialog::new().set_title(title).pick_folder())));
         }
         "theme-export" => export_colors(st),
         "theme-import" => ask_text(st, "theme", tr("Import colors"), tr("A .json theme file (its path), or the JSON itself")),
@@ -2541,6 +2668,7 @@ fn tick(st: &Shared) {
     mini_sync(st);
     extras(st);
     scheduled_reset(st);
+    animations(st);
     let mut s = st.borrow_mut();
     let Some((pos, dur, loaded, playing, finished)) = s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_loaded(), a.is_playing(), a.finished())) else { return };
     if let Some(a) = &mut s.audio {
@@ -3518,6 +3646,19 @@ fn handle(st: &Shared, ev: Ev) {
             refresh_hearts(st);
         }
         Ev::Liked(Err(_)) => {}
+        Ev::FolderPicked(Some(dir)) => {
+            {
+                let mut s = st.borrow_mut();
+                let dir = dir.to_string_lossy().to_string();
+                if !s.config.local_folders.contains(&dir) {
+                    s.config.local_folders.push(dir);
+                    s.config.save();
+                }
+            }
+            toast(st, tr("Folder added"));
+            fill_settings(st);
+        }
+        Ev::FolderPicked(None) => {}
         Ev::List(id, result) => {
             if st.borrow().list_id != id {
                 return;

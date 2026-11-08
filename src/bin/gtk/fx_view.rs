@@ -68,15 +68,34 @@ pub fn cover_lights(texture: &gdk::Texture) -> Option<[(f64, f64, f64); 4]> {
     }
 }
 
-/// Redraws `area` every frame while `moving()` says so; `step` gets the seconds since the last.
+thread_local! {
+    /// Animations may move (the window in front and shown, no battery saver), and their frames
+    /// a second (0: as fast as the screen). Set by the app.
+    static ECO: Cell<(bool, u32)> = const { Cell::new((true, 60)) };
+}
+
+/// The app's say on the animations: whether they may move, and how many frames a second.
+pub fn set_eco(allowed: bool, fps: u32) {
+    ECO.with(|e| e.set((allowed, fps)));
+}
+
+/// Redraws `area` while `moving()` says so and the app allows it, at most at the chosen frames a
+/// second; `step` gets the seconds since the last drawn frame.
 fn animate(area: &gtk::DrawingArea, moving: impl Fn() -> bool + 'static, step: impl Fn(f64) + 'static) {
     let last = Cell::new(0i64);
+    let waited = Cell::new(0.0f64);
     area.add_tick_callback(move |a, clock| {
         let now = clock.frame_time();
         let before = last.replace(now);
-        if before > 0 && moving() {
-            step(((now - before) as f64 / 1e6).min(0.1));
-            a.queue_draw();
+        let (allowed, fps) = ECO.with(|e| e.get());
+        if before > 0 && allowed && moving() {
+            waited.set(waited.get() + (now - before) as f64 / 1e6);
+            if fps == 0 || waited.get() >= 1.0 / fps as f64 {
+                step(waited.replace(0.0).min(0.1));
+                a.queue_draw();
+            }
+        } else {
+            waited.set(0.0);
         }
         glib::ControlFlow::Continue
     });

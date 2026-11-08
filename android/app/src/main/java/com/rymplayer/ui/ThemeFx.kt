@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import androidx.compose.foundation.background
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -46,6 +47,17 @@ import kotlin.math.log10
 import kotlin.math.min
 import kotlin.math.sin
 
+/** Animations stop on battery saver or a low battery (set by the app). */
+var animPaused by androidx.compose.runtime.mutableStateOf(false)
+
+/** Animations' frames a second (0: as fast as the screen). */
+var animFps by androidx.compose.runtime.mutableIntStateOf(60)
+
+/** Waits out the rest of a frame at the chosen frames a second. */
+private suspend fun frameGap() {
+    if (animFps > 0) kotlinx.coroutines.delay(1000L / animFps)
+}
+
 /** A drawing only once its size is real (0 or NaN right after unlocking drew stray lines). */
 private fun ready(s: androidx.compose.ui.geometry.Size) = s.width.isFinite() && s.height.isFinite() && s.width > 1f && s.height > 1f
 
@@ -80,9 +92,9 @@ fun rememberLevels(active: Boolean): Triple<Float, Float, Float> {
     var bass by remember { mutableFloatStateOf(0f) }
     var left by remember { mutableFloatStateOf(0f) }
     var right by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(active) {
+    LaunchedEffect(active, animPaused) {
         var peak = 0.05f
-        if (!active) { bass = 0f; left = 0f; right = 0f; return@LaunchedEffect }
+        if (!active || animPaused) { bass = 0f; left = 0f; right = 0f; return@LaunchedEffect }
         while (true) {
             val l = com.rymplayer.playback.Automix.Levels
             peak = maxOf(peak * 0.995f, l.bass, 0.01f)
@@ -101,9 +113,12 @@ fun rememberLevels(active: Boolean): Triple<Float, Float, Float> {
 fun Aurora(lights: List<Color>, energy: Float, playing: Boolean, dark: Boolean, modifier: Modifier = Modifier) {
     val e by animateFloatAsState(energy, tween(140), label = "aurora")
     var t by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(playing) {
+    LaunchedEffect(playing, animPaused, animFps) {
         var last = 0L
-        while (playing) withFrameNanos { now -> if (last > 0) t += (now - last) / 1e9f / 6f; last = now }
+        while (playing && !animPaused) {
+            withFrameNanos { now -> if (last > 0) t += (now - last) / 1e9f / 6f; last = now }
+            frameGap()
+        }
     }
     Canvas(modifier.fillMaxSize()) {
         if (!ready(size)) return@Canvas
@@ -121,9 +136,12 @@ fun Aurora(lights: List<Color>, energy: Float, playing: Boolean, dark: Boolean, 
 @Composable
 fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, modifier: Modifier = Modifier, muted: Boolean = false) {
     var angle by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(playing, speed) {
+    LaunchedEffect(playing, speed, animPaused, animFps) {
         var last = 0L
-        while (playing) withFrameNanos { now -> if (last > 0) angle = (angle + (now - last) / 1e9f * 200f * speed) % 360f; last = now }
+        while (playing && !animPaused) {
+            withFrameNanos { now -> if (last > 0) angle = (angle + (now - last) / 1e9f * 200f * speed) % 360f; last = now }
+            frameGap()
+        }
     }
     Box(modifier.size(side), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -141,6 +159,42 @@ fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, 
             drawCircle(Brush.linearGradient(0.28f to Color.Transparent, 0.46f to Color.White.copy(alpha = 0.09f), 0.55f to Color.Transparent, 0.82f to Color.White.copy(alpha = 0.05f), 0.9f to Color.Transparent, start = Offset.Zero, end = Offset(size.width, size.height)), r)
         }
     }
+}
+
+/** The performance badge: frames a second, frame time and memory (it keeps frames coming while shown). */
+@Composable
+fun PerfBadge(modifier: Modifier = Modifier) {
+    var fps by remember { mutableFloatStateOf(0f) }
+    var ms by remember { mutableFloatStateOf(0f) }
+    var ram by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var frames = 0
+        var start = 0L
+        var last = 0L
+        while (true) withFrameNanos { now ->
+            if (start == 0L) start = now
+            if (last > 0) {
+                val d = (now - last) / 1e6f
+                ms = if (ms == 0f) d else ms * 0.9f + d * 0.1f
+            }
+            last = now
+            frames++
+            if (now - start >= 1_000_000_000L) {
+                fps = frames * 1e9f / (now - start)
+                frames = 0
+                start = now
+                val rt = Runtime.getRuntime()
+                ram = ((rt.totalMemory() - rt.freeMemory()) + android.os.Debug.getNativeHeapAllocatedSize()) / 1048576f
+            }
+        }
+    }
+    val text = fps.toInt().toString() + " FPS · " + String.format(java.util.Locale.US, "%.1f", ms) + " ms · " + ram.toInt() + " MB" + (if (animPaused) " · eco" else "")
+    androidx.compose.material3.Text(
+        text,
+        color = Color(0xFFE8E8E8),
+        fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp),
+        modifier = modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(Color(0xB0000000)).padding(horizontal = 8.dp, vertical = 4.dp),
+    )
 }
 
 /** A slow, heavy glow in the accent that beats with the bass (Remorse). */

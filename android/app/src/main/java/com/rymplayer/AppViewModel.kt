@@ -301,6 +301,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         choosePalette(names[(names.indexOf(palette).coerceAtLeast(0) + 1) % names.size])
     }
 
+    /** Animations' frames a second (0: as fast as the screen) and the performance badge. */
+    var fpsCap by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("fps_cap", 60).also { com.rymplayer.ui.animFps = it })
+        private set
+    var perfBadge by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("perf_badge", false))
+        private set
+
+    fun cycleFps() {
+        val steps = listOf(24, 30, 60, 120, 144, 240, 0)
+        fpsCap = steps[(steps.indexOf(fpsCap).coerceAtLeast(0) + 1) % steps.size]
+        com.rymplayer.ui.animFps = fpsCap
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putInt("fps_cap", fpsCap).apply()
+    }
+
+    fun togglePerfBadge() {
+        perfBadge = !perfBadge
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("perf_badge", perfBadge).apply()
+    }
+
+    /** Battery saver, or under 20% and not charging: animations stop (looked at every 30 s while RyM is in front). */
+    fun refreshEco() {
+        val ctx = getApplication<Application>()
+        val power = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val battery = ctx.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+        val level = battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        com.rymplayer.ui.animPaused = power.isPowerSaveMode || (level in 0..19 && !battery.isCharging)
+    }
+
+    private val ecoWatch = viewModelScope.launch {
+        while (true) {
+            if (player.visible) refreshEco()
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
+
     /** Liquid Aurora (the cover's colors moving with the bass) and the cover as a spinning record. */
     var aurora by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("aurora", false))
         private set
@@ -888,6 +922,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** App on screen: liked songs are re-read every two minutes (and right away). */
     fun onForeground() {
         player.visible = true
+        refreshEco()
         checkScheduledReset()
         // Seamless Music: opening RyM here takes the PC's music (if it's playing there).
         player.takeFromPc()
