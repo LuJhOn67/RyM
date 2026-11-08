@@ -138,6 +138,24 @@ private fun SwitchRow(icon: ImageVector, title: String, about: String, on: Boole
 }
 
 /** One setting that shows its value and changes (or opens something) on tap. */
+/** A calendar to pick the reset day; "Clear" takes the day away. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ResetDatePicker(current: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val start = runCatching { java.time.LocalDate.parse(current) }.getOrNull() ?: java.time.LocalDate.now().plusDays(7)
+    val state = androidx.compose.material3.rememberDatePickerState(initialSelectedDateMillis = start.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli())
+    androidx.compose.material3.DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            androidx.compose.material3.TextButton({
+                val ms = state.selectedDateMillis
+                if (ms != null) onPick(java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()) else onDismiss()
+            }) { androidx.compose.material3.Text(tr("OK")) }
+        },
+        dismissButton = { androidx.compose.material3.TextButton({ onPick("") }) { androidx.compose.material3.Text(tr("Clear")) } },
+    ) { androidx.compose.material3.DatePicker(state) }
+}
+
 @Composable
 private fun TapRow(icon: ImageVector, title: String, about: String, value: String = "", onClick: () -> Unit) {
     ListItem(
@@ -194,6 +212,22 @@ fun SettingsPage(vm: AppViewModel) {
                 var askReset by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
                 TapRow(Icons.Default.AutoAwesome, tr("Reset all points"), about, tr("Reset all")) { askReset = true }
                 TapRow(Icons.Default.Tune, tr("Reset negative points only"), tr("Skipped songs come back; your favorites stay"), tr("Reset")) { vm.resetNegativePoints() }
+                var pickDate by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                TapRow(Icons.Default.Tune, tr("Reset on a date"), tr("On that day all points go back to 0 · tap to pick"), vm.ramResetDate.ifEmpty { tr("None") }) { pickDate = true }
+                if (pickDate) ResetDatePicker(vm.ramResetDate, { pickDate = false }) { vm.chooseResetDate(it); pickDate = false }
+                var askWeekly by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                SwitchRow(Icons.Default.Tune, tr("Weekly reset"), tr("Every 7 days all points go back to 0 (off unless you turn it on)"), vm.ramWeeklyReset) {
+                    if (vm.ramWeeklyReset) vm.chooseWeeklyReset(false) else askWeekly = true
+                }
+                if (askWeekly) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { askWeekly = false },
+                        title = { androidx.compose.material3.Text(tr("Turn on the weekly reset?")) },
+                        text = { androidx.compose.material3.Text(tr("Every 7 days, all the points RyM learned from what you play go back to 0, and the suggestions start learning again from scratch. Your likes, playlists and history stay. You can still reset by hand or pick a date instead.")) },
+                        confirmButton = { androidx.compose.material3.TextButton({ askWeekly = false; vm.chooseWeeklyReset(true) }) { androidx.compose.material3.Text(tr("Turn on")) } },
+                        dismissButton = { androidx.compose.material3.TextButton({ askWeekly = false }) { androidx.compose.material3.Text(tr("Cancel")) } },
+                    )
+                }
                 if (askReset) {
                     androidx.compose.material3.AlertDialog(
                         onDismissRequest = { askReset = false },

@@ -270,6 +270,45 @@ object RamPoints {
         save(ctx, notes)
     }
 
+    private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** Why the points reset by themselves now, if they do: the picked day ("date") or a week ("week", only when turned on). */
+    fun resetDue(date: String, weekly: Boolean, lastReset: Long, now: Long, today: String): String? = when {
+        date.isNotEmpty() && today >= date -> "date"
+        weekly && now - lastReset >= WEEK_MS -> "week"
+        else -> null
+    }
+
+    fun today(): String = java.time.LocalDate.now().toString()
+
+    /** The day the points reset by themselves ("2026-12-31"), or "" for none. */
+    fun resetDate(ctx: Context): String = prefs(ctx).getString("reset_date", "").orEmpty()
+
+    fun setResetDate(ctx: Context, date: String) {
+        prefs(ctx).edit().putString("reset_date", date).apply()
+    }
+
+    /** The weekly reset: off unless the user turns it on (after a warning). */
+    fun weeklyReset(ctx: Context): Boolean = prefs(ctx).getBoolean("weekly_reset", false)
+
+    fun setWeeklyReset(ctx: Context, on: Boolean) {
+        // The first reset comes a week after turning it on.
+        prefs(ctx).edit().putBoolean("weekly_reset", on).putLong("last_reset", System.currentTimeMillis()).apply()
+    }
+
+    /** The reset the user scheduled, when it's due: resets and says why ("date" / "week"), else null. */
+    @Synchronized
+    fun scheduledReset(ctx: Context): String? {
+        val p = prefs(ctx)
+        val due = resetDue(resetDate(ctx), weeklyReset(ctx), p.getLong("last_reset", 0L), System.currentTimeMillis(), today()) ?: return null
+        val notes = load(ctx)
+        notes.resetAll()
+        save(ctx, notes)
+        p.edit().putLong("last_reset", System.currentTimeMillis()).apply()
+        if (due == "date") setResetDate(ctx, "")
+        return due
+    }
+
     /** "Reset negative points only": skipped songs and artists back to 0; favorites stay. */
     @Synchronized
     fun resetNegative(ctx: Context) {

@@ -263,6 +263,35 @@ pub fn reset_all() {
     notes.save();
 }
 
+/// A week, for the weekly reset.
+const WEEK: u64 = 7 * 24 * 60 * 60;
+
+/// A reset date as written in the settings ("2026-12-31", spaces around are fine); `None` when it
+/// isn't a real date.
+pub fn reset_date(text: &str) -> Option<String> {
+    chrono::NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d").ok().map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+/// Today's date where the user is, as the settings write dates.
+pub fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// Why the points reset by themselves now, if they do: the day the user picked has come, or a
+/// week has passed since the last reset with the weekly reset on (it's off unless turned on).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Due {
+    Date,
+    Week,
+}
+
+pub fn reset_due(date: &str, weekly: bool, last_reset: u64, now: u64, today: &str) -> Option<Due> {
+    if !date.is_empty() && today >= date {
+        return Some(Due::Date);
+    }
+    (weekly && now.saturating_sub(last_reset) >= WEEK).then_some(Due::Week)
+}
+
 /// "Reset negative points only": skipped songs and artists back to 0; favorites stay.
 pub fn reset_negative() {
     let _one = FILE.lock();
@@ -906,6 +935,25 @@ mod tests {
         notes.reset_all();
         assert_eq!(notes.summary().tracked, 0);
         assert!(notes.bias.is_empty() && notes.affinity.is_empty());
+    }
+
+    #[test]
+    fn resets_come_on_the_picked_day_or_every_week_only_when_asked() {
+        let day = 24 * 60 * 60;
+        // No date, weekly off: never by itself.
+        assert_eq!(reset_due("", false, 0, 365 * day, "2027-01-01"), None);
+        // The picked day: not before, on it and after.
+        assert_eq!(reset_due("2026-12-31", false, 0, 0, "2026-12-30"), None);
+        assert_eq!(reset_due("2026-12-31", false, 0, 0, "2026-12-31"), Some(Due::Date));
+        assert_eq!(reset_due("2026-12-31", false, 0, 0, "2027-01-02"), Some(Due::Date));
+        // Weekly: seven days after the last reset.
+        assert_eq!(reset_due("", true, 10 * day, 16 * day, "2027-01-01"), None);
+        assert_eq!(reset_due("", true, 10 * day, 17 * day, "2027-01-01"), Some(Due::Week));
+        // Dates as written in the settings.
+        assert_eq!(reset_date(" 2026-12-31 ").as_deref(), Some("2026-12-31"));
+        assert_eq!(reset_date("2026-2-3").as_deref(), Some("2026-02-03"));
+        assert_eq!(reset_date("2026-02-30"), None);
+        assert_eq!(reset_date("tomorrow"), None);
     }
 
     #[test]

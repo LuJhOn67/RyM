@@ -65,6 +65,17 @@ class RamPointsTest {
     }
 
     @Test
+    fun resetsComeOnThePickedDayOrEveryWeekOnlyWhenAsked() {
+        val day = 24L * 3600_000
+        assertEquals(null, RamPoints.resetDue("", false, 0L, 365 * day, "2027-01-01"))
+        assertEquals(null, RamPoints.resetDue("2026-12-31", false, 0L, 0L, "2026-12-30"))
+        assertEquals("date", RamPoints.resetDue("2026-12-31", false, 0L, 0L, "2026-12-31"))
+        assertEquals("date", RamPoints.resetDue("2026-12-31", false, 0L, 0L, "2027-01-02"))
+        assertEquals(null, RamPoints.resetDue("", true, 10 * day, 16 * day, "2027-01-01"))
+        assertEquals("week", RamPoints.resetDue("", true, 10 * day, 17 * day, "2027-01-01"))
+    }
+
+    @Test
     fun wordsTellTheKind() {
         assertEquals(RamPoints.Kind.Husseini, RamPoints.wordKind(t("a", "لطمية يا حسين", "باسم الكربلائي")))
         assertEquals(RamPoints.Kind.Quran, RamPoints.wordKind(t("a", "سورة الكهف", "مشاري العفاسي")))

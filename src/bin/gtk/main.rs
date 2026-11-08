@@ -643,6 +643,8 @@ struct Ui {
     /// Liquid Aurora: the loudest bass lately; the theme extras last shown (vinyl, aurora, colors).
     bass_peak: f32,
     extras_key: Option<(bool, bool, String)>,
+    /// When the scheduled points reset was last looked at.
+    reset_checked: Option<Instant>,
     /// The next song was picked by hand (RaM points: its minus points go).
     user_pick: bool,
     audio: Option<Audio>,
@@ -1483,6 +1485,7 @@ fn build(app: &Application) {
         radio_pending: false,
         bass_peak: 0.05,
         extras_key: None,
+        reset_checked: None,
         user_pick: false,
         audio,
         vlc: None,
@@ -2287,6 +2290,72 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
         });
     }
     page.append(&setting_row(tr("Reset negative points only"), tr("Skipped songs come back; your favorites stay"), &reset_neg));
+    // A day the points reset by themselves (empty: none).
+    let date = gtk::Entry::new();
+    date.set_text(&config.ram_reset_date);
+    date.set_placeholder_text(Some("2026-12-31"));
+    date.set_width_chars(12);
+    {
+        let ui = ui.clone();
+        date.connect_changed(move |e| {
+            let text = e.text();
+            let mut s = ui.borrow_mut();
+            if text.trim().is_empty() {
+                s.config.ram_reset_date.clear();
+            } else if let Some(d) = rymplayer::ram_points::reset_date(&text) {
+                s.config.ram_reset_date = d;
+            } else {
+                e.add_css_class("error");
+                return;
+            }
+            e.remove_css_class("error");
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Reset on a date"), tr("Like 2026-12-31; empty: no date. On that day all points go back to 0"), &date));
+    // Every week: off unless turned on, and only after the warning.
+    let weekly = gtk::Switch::new();
+    weekly.set_active(config.ram_weekly_reset);
+    weekly.set_valign(Align::Center);
+    {
+        let ui = ui.clone();
+        weekly.connect_active_notify(move |w| {
+            let on = w.is_active();
+            if on == ui.borrow().config.ram_weekly_reset {
+                return;
+            }
+            if !on {
+                let mut s = ui.borrow_mut();
+                s.config.ram_weekly_reset = false;
+                s.config.save();
+                return;
+            }
+            w.set_active(false);
+            let dialog = gtk::AlertDialog::builder()
+                .modal(true)
+                .message(tr("Turn on the weekly reset?"))
+                .detail(tr("Every 7 days, all the points RyM learned from what you play go back to 0, and the suggestions start learning again from scratch. Your likes, playlists and history stay. You can still reset by hand or pick a date instead."))
+                .buttons([tr("Cancel"), tr("Turn on")])
+                .cancel_button(0)
+                .default_button(1)
+                .build();
+            let window = ui.borrow().w.window.clone();
+            let (ui, w) = (ui.clone(), w.clone());
+            dialog.choose(Some(&window), None::<&gtk::gio::Cancellable>, move |answer| {
+                if answer.is_ok_and(|i| i == 1) {
+                    {
+                        let mut s = ui.borrow_mut();
+                        s.config.ram_weekly_reset = true;
+                        // The first reset comes a week from now.
+                        s.config.ram_last_reset = rymplayer::updates::now();
+                        s.config.save();
+                    }
+                    w.set_active(true);
+                }
+            });
+        });
+    }
+    page.append(&setting_row(tr("Weekly reset"), tr("Every 7 days all points go back to 0 (off unless you turn it on)"), &weekly));
 
     page.append(&label(tr("On this device"), &["shelf"]));
     let folders = gtk::Entry::new();
@@ -3301,6 +3370,30 @@ fn library_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
     }
     page.append(&grid);
     page.upcast()
+}
+
+/// The reset the user scheduled (a day, or every week), when it's due; looked at once a minute.
+fn scheduled_reset(ui: &Shared) {
+    let due = {
+        let mut s = ui.borrow_mut();
+        if s.reset_checked.is_some_and(|at| at.elapsed() < Duration::from_secs(60)) {
+            return;
+        }
+        s.reset_checked = Some(Instant::now());
+        let c = &s.config;
+        rymplayer::ram_points::reset_due(&c.ram_reset_date, c.ram_weekly_reset, c.ram_last_reset, rymplayer::updates::now(), &rymplayer::ram_points::today())
+    };
+    let Some(due) = due else { return };
+    rymplayer::ram_points::reset_all();
+    {
+        let mut s = ui.borrow_mut();
+        s.config.ram_last_reset = rymplayer::updates::now();
+        if due == rymplayer::ram_points::Due::Date {
+            s.config.ram_reset_date.clear();
+        }
+        s.config.save();
+    }
+    toast(ui, if due == rymplayer::ram_points::Due::Date { tr("Points reset: the day you picked came") } else { tr("Points reset: a week passed") });
 }
 
 /// The RaM points line in the settings: songs with points, and the top artists.
@@ -4703,6 +4796,7 @@ fn glide(scroll: &gtk::ScrolledWindow, target: f64) {
 }
 
 fn tick(ui: &Shared) {
+    scheduled_reset(ui);
     let mut s = ui.borrow_mut();
     let Some((pos, dur, loaded, playing, finished)) =
         s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_loaded(), a.is_playing(), a.finished()))

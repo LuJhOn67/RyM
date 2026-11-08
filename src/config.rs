@@ -113,6 +113,15 @@ pub struct Config {
     /// The user's own theme (imported from a `.json` file).
     #[serde(default)]
     pub custom_theme: Option<crate::themes::Theme>,
+    /// RaM points reset by themselves on this day ("2026-12-31"; empty: no day picked).
+    #[serde(default)]
+    pub ram_reset_date: String,
+    /// RaM points reset every week (off unless the user turns it on, after a warning).
+    #[serde(default)]
+    pub ram_weekly_reset: bool,
+    /// When the points last reset by themselves (seconds since 1970).
+    #[serde(default)]
+    pub ram_last_reset: u64,
     /// Liquid Aurora: the cover's colors move behind everything with the bass.
     #[serde(default)]
     pub aurora: bool,
@@ -300,6 +309,9 @@ impl Default for Config {
             ui_zoom: 0.85,
             only_kind: String::new(),
             accent_from_cover: false,
+            ram_reset_date: String::new(),
+            ram_weekly_reset: false,
+            ram_last_reset: 0,
             palette: String::new(),
             custom_theme: None,
             aurora: false,

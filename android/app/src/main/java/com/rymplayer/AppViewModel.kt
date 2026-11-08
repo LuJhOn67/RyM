@@ -188,6 +188,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The day the points reset by themselves ("" = none), and the weekly reset (off unless turned on). */
+    var ramResetDate by mutableStateOf(com.rymplayer.data.RamPoints.resetDate(app))
+        private set
+    var ramWeeklyReset by mutableStateOf(com.rymplayer.data.RamPoints.weeklyReset(app))
+        private set
+
+    fun chooseResetDate(date: String) {
+        ramResetDate = date
+        com.rymplayer.data.RamPoints.setResetDate(getApplication(), date)
+    }
+
+    fun chooseWeeklyReset(on: Boolean) {
+        ramWeeklyReset = on
+        com.rymplayer.data.RamPoints.setWeeklyReset(getApplication(), on)
+    }
+
+    /** The reset the user scheduled, when it's due (looked at when RyM comes to the front). */
+    fun checkScheduledReset() {
+        val why = com.rymplayer.data.RamPoints.scheduledReset(getApplication()) ?: return
+        ramResetDate = com.rymplayer.data.RamPoints.resetDate(getApplication())
+        refreshRamSummary()
+        player.message = tr(if (why == "date") "Points reset: the day you picked came" else "Points reset: a week passed")
+    }
+
     fun resetAllPoints() {
         com.rymplayer.data.RamPoints.resetAll(getApplication())
         refreshRamSummary()
@@ -864,6 +888,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** App on screen: liked songs are re-read every two minutes (and right away). */
     fun onForeground() {
         player.visible = true
+        checkScheduledReset()
         // Seamless Music: opening RyM here takes the PC's music (if it's playing there).
         player.takeFromPc()
         // RyM Link: the account's key, so a PC signed in to it can take the music over.

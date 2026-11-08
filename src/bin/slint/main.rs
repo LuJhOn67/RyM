@@ -132,6 +132,10 @@ struct State {
     bass_peak: f32,
     /// "Reset all points" pressed once (a second press within 5 s resets).
     reset_asked: Option<Instant>,
+    /// What the yes/no question is about ("ram-weekly").
+    confirm_for: String,
+    /// When the scheduled points reset was last looked at.
+    reset_checked: Option<Instant>,
     repeat_one: bool,
     /// Repeat all: at the end of the list it starts over.
     repeat_all: bool,
@@ -415,6 +419,8 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         user_pick: false,
         bass_peak: 0.05,
         reset_asked: None,
+        confirm_for: String::new(),
+        reset_checked: None,
         repeat_one: false,
         repeat_all: false,
         lyrics: None,
@@ -549,6 +555,10 @@ fn wire(ui: &AppWindow, st: &Shared) {
     }));
     app.on_share(w(open_share));
     app.on_copy_link(w(copy_link));
+    {
+        let st = st.clone();
+        app.on_confirm_done(move |yes| confirm_done(&st, yes));
+    }
     {
         let st = st.clone();
         app.on_prompt_done(move |ok| prompt_done(&st, ok));
@@ -1226,6 +1236,8 @@ fn fill_settings(st: &Shared) {
         choice("only-kind", "Only this kind", only),
         button("ram-reset-all", "Reset all points", ram_summary(), "Reset all"),
         button("ram-reset-neg", "Reset negative points only", t("Skipped songs come back; your favorites stay"), "Reset"),
+        field("ram-reset-date", "Reset on a date", "Like 2026-12-31; empty: no date. On that day all points go back to 0", &c.ram_reset_date),
+        switch("ram-weekly", "Weekly reset", "Every 7 days all points go back to 0 (off unless you turn it on)", c.ram_weekly_reset),
         head("Alarm"),
         switch("alarm", "Alarm", "Music starts at this time (RyM has to be open)", c.alarm_on),
         field("alarm-time", "Time", "Like 07:30", &c.alarm_time),
@@ -1287,6 +1299,9 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
         match id {
             "accent" => c.accent_from_cover = on,
             "aurora" => c.aurora = on,
+            // Turned on only after the warning (see `ask_weekly_reset`).
+            "ram-weekly" if !on => c.ram_weekly_reset = false,
+            "ram-weekly" => {}
             "vinyl" => c.vinyl = on,
             "visualizer" => c.visualizer = on,
             "arabic" => c.arabic = on,
@@ -1337,6 +1352,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             show_now(st);
         }
         "discord" if !on => rymplayer::discord::show("", rymplayer::discord::Show::Off),
+        "ram-weekly" if on => ask_weekly_reset(st),
         "aurora" => {
             if let Some(ui) = st.borrow().ui.upgrade() {
                 ui.global::<Theme>().set_aurora(on);
@@ -1504,10 +1520,71 @@ fn set_text(st: &Shared, id: &str, text: &str) {
         "discord-id" => c.discord_app_id = text,
         "lastfm-key" => c.lastfm_key = text,
         "lastfm-secret" => c.lastfm_secret = text,
+        "ram-reset-date" => {
+            if text.is_empty() {
+                c.ram_reset_date.clear();
+            } else if let Some(d) = rymplayer::ram_points::reset_date(&text) {
+                c.ram_reset_date = d;
+            } else {
+                drop(s);
+                toast(st, tr("Write the date like 2026-12-31"));
+                fill_settings(st);
+                return;
+            }
+        }
         "local-folders" => c.local_folders = text.split(';').map(|f| f.trim().trim_matches('"').to_string()).filter(|f| !f.is_empty()).collect(),
         _ => return,
     }
     s.config.save();
+}
+
+/// The weekly reset is turned on only after its warning.
+fn ask_weekly_reset(st: &Shared) {
+    st.borrow_mut().confirm_for = "ram-weekly".into();
+    with_app(st, |a| {
+        a.set_confirm_title(tr("Turn on the weekly reset?").into());
+        a.set_confirm_text(tr("Every 7 days, all the points RyM learned from what you play go back to 0, and the suggestions start learning again from scratch. Your likes, playlists and history stay. You can still reset by hand or pick a date instead.").into());
+        a.set_confirm_yes(tr("Turn on").into());
+        a.set_confirm_open(true);
+    });
+}
+
+fn confirm_done(st: &Shared, yes: bool) {
+    with_app(st, |a| a.set_confirm_open(false));
+    let what = std::mem::take(&mut st.borrow_mut().confirm_for);
+    if yes && what == "ram-weekly" {
+        let mut s = st.borrow_mut();
+        s.config.ram_weekly_reset = true;
+        // The first reset comes a week from now.
+        s.config.ram_last_reset = rymplayer::updates::now();
+        s.config.save();
+    }
+    fill_settings(st);
+}
+
+/// The reset the user scheduled (a day, or every week), when it's due; looked at once a minute.
+fn scheduled_reset(st: &Shared) {
+    let due = {
+        let mut s = st.borrow_mut();
+        if s.reset_checked.is_some_and(|at| at.elapsed() < Duration::from_secs(60)) {
+            return;
+        }
+        s.reset_checked = Some(Instant::now());
+        let c = &s.config;
+        rymplayer::ram_points::reset_due(&c.ram_reset_date, c.ram_weekly_reset, c.ram_last_reset, rymplayer::updates::now(), &rymplayer::ram_points::today())
+    };
+    let Some(due) = due else { return };
+    rymplayer::ram_points::reset_all();
+    {
+        let mut s = st.borrow_mut();
+        s.config.ram_last_reset = rymplayer::updates::now();
+        if due == rymplayer::ram_points::Due::Date {
+            s.config.ram_reset_date.clear();
+        }
+        s.config.save();
+    }
+    toast(st, if due == rymplayer::ram_points::Due::Date { tr("Points reset: the day you picked came") } else { tr("Points reset: a week passed") });
+    fill_settings(st);
 }
 
 /// The RaM points row's words: songs with points, and the top artists.
@@ -2460,6 +2537,7 @@ fn tick(st: &Shared) {
     media_sync(st);
     mini_sync(st);
     extras(st);
+    scheduled_reset(st);
     let mut s = st.borrow_mut();
     let Some((pos, dur, loaded, playing, finished)) = s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_loaded(), a.is_playing(), a.finished())) else { return };
     if let Some(a) = &mut s.audio {

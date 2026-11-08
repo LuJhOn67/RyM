@@ -267,6 +267,12 @@ export global App {
     callback next-theme();
     callback set-speed(string);
     callback close-choice(bool, bool);
+    // A yes/no question with an explanation (turning on the weekly reset).
+    in-out property <bool> confirm-open;
+    in property <string> confirm-title;
+    in property <string> confirm-text;
+    in property <string> confirm-yes;
+    callback confirm-done(bool);
     callback prompt-done(bool);
     callback peer-choice(bool);
 }
@@ -2252,6 +2258,31 @@ export component AppWindow inherits Window {
                     alignment: LayoutAlignment.end;
                     Button { text: App.tr("Close RyM"); clicked => { App.close-choice(false, card.remember); } }
                     Button { text: App.tr("Keep in background"); strong: true; clicked => { App.close-choice(true, card.remember); } }
+                }
+            }
+        }
+    }
+    // A yes/no question with its explanation (turning on the weekly reset).
+    if App.confirm-open: Rectangle {
+        background: #00000090;
+        TouchArea { }
+        Rectangle {
+            width: min(root.width - 40px, 480px);
+            height: ccol.preferred-height;
+            border-radius: (18px) * Theme.round;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            ccol := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: App.confirm-title; font-size: 21px; font-weight: 700; color: Theme.text; wrap: word-wrap; horizontal-alignment: Ui.start; }
+                Text { text: App.confirm-text; font-size: 15px; color: Theme.dim; wrap: word-wrap; horizontal-alignment: Ui.start; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: LayoutAlignment.end;
+                    Button { text: App.tr("Cancel"); clicked => { App.confirm-done(false); } }
+                    Button { text: App.confirm-yes; strong: true; clicked => { App.confirm-done(true); } }
                 }
             }
         }

@@ -29,7 +29,7 @@ jobs:
       # .cargo/config.toml points CMake at the Windows install; the system one here.
       CMAKE: cmake
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Libraries
         run: |
@@ -65,7 +65,7 @@ jobs:
           cp ~/RyM-linux-x86_64.tar.gz ~/appimage/RyM-x86_64.AppImage out/
           cp target/release/RyM-Slint out/RyM-Slint-linux-x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RyM-linux-x86_64
           path: out/
@@ -75,7 +75,7 @@ jobs:
     env:
       CMAKE: cmake
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -89,7 +89,7 @@ jobs:
           cargo build --release --bin RyM-Slint --features slint-ui
           cargo build --release --bin RyM
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RyM-windows
           path: |
@@ -102,21 +102,21 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Tests and APK
         run: |
           chmod +x gradlew
           ./gradlew testReleaseUnitTest assembleRelease
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RyM-android
           path: android/app/build/outputs/apk/release/*.apk
@@ -128,7 +128,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: art
 
