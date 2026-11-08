@@ -745,28 +745,10 @@ fn since_start() -> u128 {
     STARTED.get().map_or(0, |t| t.elapsed().as_millis())
 }
 
-/// Linux: the Japanese font that comes with RyM (fonts beside the program, or in the
-/// AppImage), so Japanese isn't drawn as boxes on systems without a CJK font.
-#[cfg(target_os = "linux")]
-fn add_bundled_fonts() {
-    #[link(name = "fontconfig")]
-    unsafe extern "C" {
-        fn FcConfigAppFontAddDir(config: *mut std::ffi::c_void, dir: *const std::ffi::c_char) -> i32;
-    }
-    let beside = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("fonts")));
-    let in_appimage = std::env::var_os("APPDIR").map(|a| std::path::PathBuf::from(a).join("usr/share/rym/fonts"));
-    for dir in [beside, in_appimage].into_iter().flatten().filter(|d| d.is_dir()) {
-        if let Ok(c) = std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
-            // SAFETY: a null config means the current one; the string lives through the call.
-            unsafe { FcConfigAppFontAddDir(std::ptr::null_mut(), c.as_ptr()) };
-        }
-    }
-}
-
 fn main() {
     STARTED.get_or_init(Instant::now);
-    #[cfg(target_os = "linux")]
-    add_bundled_fonts();
+    // Linux: the Japanese and dot-digit fonts that come with RyM.
+    rymplayer::fonts::add_bundled();
     // The window app has no console: a crash's message and place go to rym-gtk.log.
     std::panic::set_hook(Box::new(|info| {
         let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();

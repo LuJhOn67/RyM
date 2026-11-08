@@ -258,6 +258,8 @@ export global App {
     callback next();
     callback previous();
     callback seek(float);
+    // ← →: back or forward by the step in the settings (seconds; negative goes back).
+    callback skip-by(int);
     callback set-volume(float);
     callback like-now();
     callback repeat();
@@ -2284,6 +2286,25 @@ export component AppWindow inherits Window {
             if (e.text == " " && App.page != 1) {
                 App.toggle-play();
                 return accept;
+            }
+            // Away from the search box: ← → skip back and forward, ↑ ↓ the volume.
+            if (App.page != 1 && !e.modifiers.control) {
+                if (e.text == Key.LeftArrow) {
+                    App.skip-by(-1);
+                    return accept;
+                }
+                if (e.text == Key.RightArrow) {
+                    App.skip-by(1);
+                    return accept;
+                }
+                if (e.text == Key.UpArrow) {
+                    App.set-volume(min(1, App.volume + 0.05));
+                    return accept;
+                }
+                if (e.text == Key.DownArrow) {
+                    App.set-volume(max(0, App.volume - 0.05));
+                    return accept;
+                }
             }
             if (e.modifiers.control && (e.text == "=" || e.text == "+")) {
                 App.zoom(Ui.zoom + 0.05);

@@ -4,7 +4,10 @@ set -e
 cd ~
 rm -rf RyM-linux && mkdir RyM-linux
 cp ~/RyM/target/release/RymPlayer-GTK ~/RyM/target/release/RyM RyM-linux/
+# RyM Slint (the same window app as on Windows), when it was built.
+[ -f ~/RyM/target/release/RyM-Slint ] && cp ~/RyM/target/release/RyM-Slint RyM-linux/
 strip RyM-linux/RymPlayer-GTK RyM-linux/RyM
+[ -f RyM-linux/RyM-Slint ] && strip RyM-linux/RyM-Slint
 cp ~/RyM/assets/icons/rym-gui.png RyM-linux/rym.png
 # A Japanese font goes with it (systems without a CJK font drew Japanese as boxes).
 mkdir -p ~/fonts-cache

@@ -182,6 +182,17 @@ pub async fn install(url: &str, progress: impl Fn(f32) + Send + 'static) -> Resu
             }
         } else if data.starts_with(b"MZ") {
             replace(&exe, &data)?;
+        } else if data.starts_with(b"\x7fELF") {
+            // Linux: the new AppImage in place of the one running (its own path: the program
+            // inside it is on a read-only mount), or of the program itself.
+            let target = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from).unwrap_or_else(|| exe.clone());
+            replace(&target, &data)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
+            }
+            return Ok(target);
         } else {
             return Err(anyhow!("the download isn't a program or a zip"));
         }

@@ -113,6 +113,9 @@ pub struct Config {
     /// The user's own theme (imported from a `.json` file).
     #[serde(default)]
     pub custom_theme: Option<crate::themes::Theme>,
+    /// The ← → keys skip this many seconds (5 to 30).
+    #[serde(default = "seek_step")]
+    pub seek_step: u32,
     /// Windows 11's glass behind the window: 0 off, 1 Mica (the wallpaper's colors), 2 Acrylic
     /// (what's behind the window, blurred).
     #[serde(default)]
@@ -322,6 +325,7 @@ impl Default for Config {
             ui_zoom: 0.85,
             only_kind: String::new(),
             accent_from_cover: false,
+            seek_step: seek_step(),
             window_glass: 0,
             prefer_lossless: false,
             fps_cap: fps_cap(),
@@ -710,4 +714,8 @@ fn glass_blur() -> f32 {
 
 fn fps_cap() -> u32 {
     60
+}
+
+fn seek_step() -> u32 {
+    5
 }

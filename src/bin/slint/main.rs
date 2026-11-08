@@ -24,6 +24,7 @@ use rymplayer::queue::Queue;
 use rymplayer::{cookie_path, feed, fmt_time, login, parse_duration, stream};
 use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
+#[cfg_attr(not(windows), allow(dead_code))]
 const MINI_TITLE: &str = "RyM mini player";
 /// Covers asked for at these sizes (pixels): rows, cards, and the big one.
 const ROW_PX: u32 = 120;
@@ -312,6 +313,8 @@ fn main() {
         return;
     }
     rymplayer::updates::clean_old();
+    // Linux: the Japanese and dot-digit fonts that come with RyM (beside it or in its AppImage).
+    rymplayer::fonts::add_bundled();
     let config = Config::load();
     rymplayer::i18n::set_arabic(config.arabic);
     rymplayer::fx::set(config.fx());
@@ -672,6 +675,18 @@ fn wire(ui: &AppWindow, st: &Shared) {
         app.on_seek(move |secs| {
             if let Some(a) = &st.borrow().audio {
                 a.seek(secs.max(0.0));
+            }
+        });
+    }
+    {
+        // ← →: the step from the settings, back or forward, within the song.
+        let st = st.clone();
+        app.on_skip_by(move |dir| {
+            let s = st.borrow();
+            if let Some(a) = s.audio.as_ref().filter(|a| a.is_loaded()) {
+                let step = s.config.seek_step as f32 * dir.signum() as f32;
+                let end = a.duration().unwrap_or(f32::MAX);
+                a.seek((a.position() + step).clamp(0.0, (end - 1.0).max(0.0)));
             }
         });
     }
@@ -1272,6 +1287,7 @@ fn fill_settings(st: &Shared) {
         switch("vinyl", "Vinyl record", "The cover turns like a record: faster with Nightcore, slower with Slowed", c.vinyl),
         choice("glass-blur", "Glass blur", format!("{}", c.glass_blur.round())),
         choice("window-glass", "Windows glass", t(["Off", "Mica", "Acrylic"][c.window_glass.min(2) as usize])),
+        choice("seek-step", "Arrow keys skip", format!("{} s", c.seek_step)),
         choice("fps", "Animation frame rate", if c.fps_cap == 0 { t("As fast as the screen") } else { format!("{} FPS", c.fps_cap) }),
         switch("perf", "Performance monitor", "Frames a second, frame time and memory in a corner", c.perf_badge),
         switch("lossless", "Prefer lossless (FLAC)", "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there", c.prefer_lossless),
@@ -1468,6 +1484,13 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let name = names[cycle(at, names.len())].clone();
             set_colors(st, &name);
             return;
+        }
+        "seek-step" => {
+            const STEPS: [u32; 4] = [5, 10, 15, 30];
+            let mut s = st.borrow_mut();
+            let at = STEPS.iter().position(|f| *f == s.config.seek_step).unwrap_or(0);
+            s.config.seek_step = STEPS[cycle(at, STEPS.len())];
+            s.config.save();
         }
         "window-glass" => {
             let kind = {
@@ -4140,10 +4163,11 @@ fn handle(st: &Shared, ev: Ev) {
         Ev::Downloaded(Err(e)) => toast(st, &format!("{}: {e}", tr("Download failed"))),
         Ev::Update(result, asked) => match result {
             Ok(Some(r)) => {
-                let url = r.download_for("RyM-Slint.exe");
+                // The release's file for this system: the .exe on Windows, the AppImage on Linux.
+                let url = r.download_for(if cfg!(windows) { "RyM-Slint.exe" } else { "RyM-Slint-x86_64.AppImage" });
                 set_update_text(st, format!("RyM {} — {}", r.version, tr("downloading…")));
                 toast(st, &format!("RyM {} — {}", r.version, tr("downloading…")));
-                if url.ends_with(".exe") {
+                if url.ends_with(".exe") || url.ends_with(".AppImage") {
                     post(async move { Ev::Installed(rymplayer::updates::install(&url, |_| {}).await) });
                 } else {
                     let _ = rymplayer::updates::open_link(&url);

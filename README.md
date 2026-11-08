@@ -119,7 +119,8 @@ Get the files from [Releases](../../releases/latest):
 | `RyM-Slint.exe` | Windows: run it (one file) |
 | `RyM.exe` | Windows: the terminal app (in Windows Terminal) |
 | `RyM-Android-<version>.apk` | Android: install it on the phone |
-| `RyM-x86_64.AppImage` | Linux: `chmod +x RyM-x86_64.AppImage`, then run it |
+| `RyM-Slint-x86_64.AppImage` | Linux: RyM Slint, the same window app as on Windows (`chmod +x`, then run it) |
+| `RyM-x86_64.AppImage` | Linux: RyM GTK (`chmod +x RyM-x86_64.AppImage`, then run it) |
 | `RyM-linux-x86_64.tar.gz` | Linux: the same apps unpacked, on the system's GTK 4 (see its README.txt) |
 
 **Linux:** the AppImage carries GTK 4 and the fonts it needs (Japanese included). It needs FUSE 2
@@ -135,7 +136,7 @@ Settings, sign-in data and the song cache live in `%LOCALAPPDATA%\RymPlayer` (Wi
 
 ## Keys
 
-**RyM Slint:** `Space` play/pause, `Ctrl` `+` / `-` / `0` app size, `Ctrl+T` next theme.
+**RyM Slint:** `Space` play/pause, `←` `→` skip back/forward (5 s; 10, 15 or 30 in Settings), `↑` `↓` volume, `Ctrl` `+` / `-` / `0` app size, `Ctrl+T` next theme.
 
 **Terminal:**
 
