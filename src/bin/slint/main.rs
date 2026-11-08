@@ -1705,7 +1705,10 @@ fn animations(st: &Shared) {
     };
     let (front, covered) = WINDOW_UP.with(|w| w.get());
     let saving = st.borrow().saving;
-    let run = playing && wants && front && !covered && !saving;
+    // Not in front but still showing (another window has the focus): it keeps moving; minimized
+    // or covered: it stops.
+    let _ = front;
+    let run = playing && wants && !covered && !saving;
     let every = run.then(|| Duration::from_micros(if cap == 0 { 4_000 } else { 1_000_000 / cap as u64 }));
     if st.borrow().clock_every != every {
         let mut s = st.borrow_mut();
@@ -1737,10 +1740,12 @@ fn animations(st: &Shared) {
             s.perf_at = Instant::now();
             let why = if !playing {
                 tr("paused")
+            } else if !wants {
+                tr("nothing moves in these colors")
             } else if saving {
                 tr("battery saver")
-            } else if !front || covered {
-                tr("window not in front")
+            } else if covered {
+                tr("window hidden")
             } else {
                 ""
             };
@@ -1861,7 +1866,10 @@ fn clock_tick(st: &Shared) {
         let s = st.borrow();
         current_colors(&s.config).filter(|t| t.fall() > 0.0).map(|t| t.style == rymplayer::themes::Style::Ash)
     };
-    if let (Some(ash), Some(ui)) = (falling, st.borrow().ui.upgrade()) {
+    // The window first, its borrow let go: held through the block, the state's borrow below
+    // panicked ("RefCell already borrowed") on every frame of rain or ash.
+    let window = st.borrow().ui.upgrade();
+    if let (Some(ash), Some(ui)) = (falling, window) {
         let win = ui.window();
         let scale = win.scale_factor().max(0.1);
         let size = (win.size().width as f32 / scale, win.size().height as f32 / scale);

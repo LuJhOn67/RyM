@@ -4891,7 +4891,8 @@ fn tick(ui: &Shared) {
             s.saving_at = Some(Instant::now());
             s.saving = rymplayer::power::saving();
         }
-        let shown = s.w.window.is_active() && !s.w.window.is_suspended();
+        // Minimized or hidden stops it; another window having the focus doesn't.
+        let shown = !s.w.window.is_suspended() && s.w.window.is_visible();
         fx_view::set_eco(shown && !s.saving, s.config.fps_cap);
     }
     // Listening stats: time while playing, written once a minute.

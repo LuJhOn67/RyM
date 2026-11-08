@@ -220,6 +220,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "paused" => "واگف",
         "battery saver" => "توفير البطارية",
         "window not in front" => "النافذة مو بالواجهة",
+        "window hidden" => "النافذة مخفية",
+        "nothing moves in these colors" => "ماكو شي يتحرك بهالألوان",
         "Reset on a date" => "تصفير بتاريخ",
         "Like 2026-12-31; empty: no date. On that day all points go back to 0" => "مثل 2026-12-31، وفارغ يعني بلا تاريخ. بذاك اليوم كل النقاط ترجع صفر",
         "Write the date like 2026-12-31" => "اكتب التاريخ بهذا الشكل 2026-12-31",

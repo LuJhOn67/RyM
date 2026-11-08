@@ -55,7 +55,9 @@ mod imp {
             return false;
         }
         // 1: battery saver on. 0 on the line: on battery; 255: unknown percent.
-        s.system_status_flag == 1 || (s.ac_line_status == 0 && s.battery_life_percent < 20)
+        // On battery only: Windows 11's Energy saver can be on with the charger in (or on a
+        // desktop), and the animations stopped there for nothing.
+        s.ac_line_status == 0 && (s.system_status_flag == 1 || s.battery_life_percent < 20)
     }
 
     pub fn ram_mb() -> f32 {
