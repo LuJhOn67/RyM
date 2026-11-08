@@ -1,5 +1,7 @@
 package com.rymplayer.ui
 
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.foundation.background
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.core.animateFloatAsState
@@ -158,6 +160,128 @@ fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, 
             drawCircle(Color(0xFF0C0C0D), r * 0.0175f)
             drawCircle(Brush.linearGradient(0.28f to Color.Transparent, 0.46f to Color.White.copy(alpha = 0.09f), 0.55f to Color.Transparent, 0.82f to Color.White.copy(alpha = 0.05f), 0.9f to Color.Transparent, start = Offset.Zero, end = Offset(size.width, size.height)), r)
         }
+    }
+}
+
+/** Where the mini player is on screen: rain and ash land on its top edge (empty when it isn't shown). */
+var miniBar by androidx.compose.runtime.mutableStateOf(androidx.compose.ui.geometry.Rect.Zero)
+
+/** At most this many particles: drops first, the rest free for splashes. */
+private const val POOL = 120
+
+/**
+ * Rain or ash falling over the app (Lo-Fi Rain, Remorse). A drop that reaches the mini player's top
+ * edge bursts into 2–3 droplets that bounce up a little (more with the bass), land and slide off its
+ * ends; the bass speeds the drops. One fixed array, nothing allocated per frame, one draw call; it
+ * stops while paused, on battery saver and when the phone is locked.
+ */
+@Composable
+fun FallingParticles(style: String, color: Color, playing: Boolean, bass: Float) {
+    if (style != "rain" && style != "ash") return
+    val ash = style == "ash"
+    val active = playing && !animPaused
+    // Each particle: x, y, vx, vy, life (−1: a drop; > 0: a droplet's seconds left; 0: free).
+    val pool = remember { FloatArray(POOL * 5) }
+    val lines = remember { FloatArray(POOL * 4) }
+    val paint = remember { android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { strokeCap = android.graphics.Paint.Cap.ROUND } }
+    var frame by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    var area by remember { androidx.compose.runtime.mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    val beat = androidx.compose.runtime.rememberUpdatedState(bass)
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    LaunchedEffect(active, area, ash) {
+        if (!active || area.width == 0) return@LaunchedEffect
+        val rnd = java.util.Random()
+        val (w, h) = area.width.toFloat() to area.height.toFloat()
+        val drops = if (ash) 50 else 75
+        val fall = if (ash) h * 0.06f else h * 0.9f
+        for (i in 0 until POOL) {
+            val o = i * 5
+            if (i < drops) {
+                pool[o] = rnd.nextFloat() * w; pool[o + 1] = rnd.nextFloat() * h
+                pool[o + 2] = if (ash) 0f else -0.04f * fall; pool[o + 3] = fall * (0.8f + rnd.nextFloat() * 0.4f); pool[o + 4] = -1f
+            } else pool[o + 4] = 0f
+        }
+        val gravity = 1400f * density / 3f
+        var last = 0L
+        var t = 0f
+        while (true) {
+            withFrameNanos { now ->
+                val dt = if (last == 0L) 0f else ((now - last) / 1e9f).coerceAtMost(0.05f)
+                last = now
+                t += dt
+                val b = beat.value.coerceIn(0f, 1f)
+                val bar = miniBar
+                for (i in 0 until POOL) {
+                    val o = i * 5
+                    val life = pool[o + 4]
+                    if (life == 0f) continue
+                    val y0 = pool[o + 1]
+                    if (life < 0f) {
+                        // A drop: the bass makes it fall faster; ash drifts from side to side.
+                        val vx = if (ash) kotlin.math.sin(t * 0.8f + i) * 12f * density else pool[o + 2]
+                        pool[o] += vx * dt
+                        pool[o + 1] += pool[o + 3] * (1f + b * if (ash) 0.5f else 0.8f) * dt
+                        val y = pool[o + 1]
+                        val hit = bar != androidx.compose.ui.geometry.Rect.Zero && y0 < bar.top && y >= bar.top && pool[o] in bar.left..bar.right
+                        if (hit) {
+                            // Bursts into 2–3 droplets on the bar's edge.
+                            var made = 0
+                            val want = 2 + rnd.nextInt(2)
+                            for (j in 0 until POOL) {
+                                if (made == want) break
+                                val q = j * 5
+                                if (pool[q + 4] != 0f) continue
+                                pool[q] = pool[o]; pool[q + 1] = bar.top - 1f
+                                pool[q + 2] = (if (rnd.nextBoolean()) 1 else -1) * (20f + rnd.nextFloat() * 50f) * density
+                                pool[q + 3] = -(25f + rnd.nextFloat() * 35f) * (1f + b * 1.5f) * density
+                                pool[q + 4] = 1.6f
+                                made++
+                            }
+                        }
+                        if (hit || y > h) {
+                            pool[o] = rnd.nextFloat() * w
+                            pool[o + 1] = -rnd.nextFloat() * h * 0.15f
+                        }
+                    } else {
+                        // A droplet: up, back down onto the bar, slides to its end and falls off.
+                        val onBar = bar != androidx.compose.ui.geometry.Rect.Zero && pool[o] in bar.left..bar.right
+                        pool[o + 3] += gravity * dt
+                        pool[o] += pool[o + 2] * dt
+                        pool[o + 1] += pool[o + 3] * dt
+                        if (onBar && pool[o + 3] > 0f && y0 <= bar.top && pool[o + 1] >= bar.top) {
+                            pool[o + 1] = bar.top - 1f
+                            pool[o + 3] = 0f
+                            pool[o + 2] *= 1.01f
+                        }
+                        pool[o + 4] = life - dt
+                        if (pool[o + 4] <= 0f || pool[o + 1] > h) pool[o + 4] = 0f
+                    }
+                }
+                frame = now
+            }
+            frameGap()
+        }
+    }
+    Canvas(Modifier.fillMaxSize().onSizeChanged { area = it }) {
+        if (frame == 0L || !ready(size)) return@Canvas
+        var n = 0
+        for (i in 0 until POOL) {
+            val o = i * 5
+            val life = pool[o + 4]
+            if (life == 0f) continue
+            val x = pool[o]
+            val y = pool[o + 1]
+            if (life < 0f && !ash) {
+                // A raindrop: a short streak along its fall.
+                lines[n++] = x; lines[n++] = y; lines[n++] = x - pool[o + 2] * 0.015f; lines[n++] = y - 14f * density
+            } else {
+                // Ash and droplets: a dot (a zero-length line with a round cap).
+                lines[n++] = x; lines[n++] = y; lines[n++] = x; lines[n++] = y + 0.01f
+            }
+        }
+        paint.color = color.copy(alpha = if (ash) 0.55f else 0.5f).toArgb()
+        paint.strokeWidth = (if (ash) 2.4f else 1.4f) * density
+        drawContext.canvas.nativeCanvas.drawLines(lines, 0, n, paint)
     }
 }
 

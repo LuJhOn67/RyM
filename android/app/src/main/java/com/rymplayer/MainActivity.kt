@@ -1,5 +1,7 @@
 package com.rymplayer
 
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.unit.dp
 import android.Manifest
@@ -78,6 +80,11 @@ class MainActivity : ComponentActivity() {
             RymTheme(model.ytmTheme, model.colors) {
                 androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                     RymApp(model)
+                    // Rain and ash over the app (Lo-Fi Rain, Remorse), landing on the mini player.
+                    model.colors?.let { c ->
+                        val (bass, _, _) = com.rymplayer.ui.rememberLevels(model.player.playing && model.player.visible && (c.style == "rain" || c.style == "ash"))
+                        com.rymplayer.ui.FallingParticles(c.style, androidx.compose.ui.graphics.Color(com.rymplayer.data.Themes.argb(if (c.style == "ash") c.text else c.accent2) ?: -1), model.player.playing && model.player.visible, bass)
+                    }
                     if (model.perfBadge) {
                         com.rymplayer.ui.PerfBadge(
                             androidx.compose.ui.Modifier.align(androidx.compose.ui.Alignment.TopEnd)
@@ -158,7 +165,10 @@ private fun Main(vm: AppViewModel) {
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
                 Column {
-                    MiniPlayer(vm, tint)
+                    // Its top edge is where rain and ash land (FallingParticles).
+                    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.onGloballyPositioned { com.rymplayer.ui.miniBar = if (vm.player.current == null) androidx.compose.ui.geometry.Rect.Zero else it.boundsInRoot() }) {
+                        MiniPlayer(vm, tint)
+                    }
                     // RyM YTM: a black bar, the chosen tab in white without a pill behind it.
                     NavigationBar(containerColor = if (vm.colors != null) MaterialTheme.colorScheme.surfaceVariant else if (vm.ytmTheme) Color.Black else Color(0xFF111114)) {
                         val tabs = listOf(Triple(Screen.Home, tr("Home"), Icons.Default.Home), Triple(Screen.Search, tr("Search"), Icons.Default.Search), Triple(Screen.Library, tr("Library"), Icons.Default.LibraryMusic))
