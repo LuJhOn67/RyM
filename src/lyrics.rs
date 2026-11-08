@@ -22,7 +22,14 @@ pub struct Lyrics {
     /// English under each line (Japanese songs), the same count as the lines shown; empty: none.
     #[serde(default)]
     pub translation: Vec<String>,
+    /// Each synced line's words with when they're sung (the same order as `synced`; a line's list
+    /// is empty when the source gave no word timing). Empty: no word timing at all.
+    #[serde(default)]
+    pub words: Vec<Words>,
 }
+
+/// One line's words: (start seconds, the word with the space after it).
+pub type Words = Vec<(f32, String)>;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,9 +41,9 @@ struct LrcLibEntry {
 
 impl LrcLibEntry {
     fn into_lyrics(self) -> Lyrics {
-        let synced = self.synced_lyrics.as_deref().map(parse_lrc).unwrap_or_default();
+        let (synced, words) = self.synced_lyrics.as_deref().map(parse_lrc_words).unwrap_or_default();
         let plain = self.plain_lyrics.unwrap_or_default().lines().map(String::from).collect();
-        Lyrics { synced, plain, source: "LRCLIB".into(), translation: Vec::new() }
+        Lyrics { synced, plain, source: "LRCLIB".into(), translation: Vec::new(), words }
     }
 }
 
@@ -465,38 +472,185 @@ fn best_hit(hits: Vec<LrcLibEntry>, duration: Option<f32>) -> Option<Lyrics> {
 pub fn from_youtube_music(text: &str, source: &str) -> Option<Lyrics> {
     let plain: Vec<String> = text.lines().map(String::from).collect();
     let source = if source.is_empty() { "YouTube Music".to_string() } else { source.replace("Source: ", "") };
-    let l = Lyrics { synced: Vec::new(), plain, source, translation: Vec::new() };
+    let l = Lyrics { synced: Vec::new(), plain, source, translation: Vec::new(), words: Vec::new() };
     l.is_usable().then_some(l)
 }
 
 /// Parses `[mm:ss.xx] text` lines; lines can carry several timestamps.
 pub fn parse_lrc(src: &str) -> Vec<(f32, String)> {
-    let mut out = Vec::new();
+    parse_lrc_words(src).0
+}
+
+/// "mm:ss.xx" as seconds.
+fn clock_secs(tag: &str) -> Option<f32> {
+    let (m, s) = tag.split_once(':')?;
+    Some(m.trim().parse::<f32>().ok()? * 60.0 + s.trim().parse::<f32>().ok()?)
+}
+
+/// LRC, with Enhanced LRC's word times when it has them (`[00:12.30]<00:12.30>Word <00:12.80>next`):
+/// the lines (word tags taken out of their text) and each line's words (empty without tags).
+pub fn parse_lrc_words(src: &str) -> (Vec<(f32, String)>, Vec<Words>) {
+    let mut out: Vec<(f32, String, Words)> = Vec::new();
     for line in src.lines() {
         let mut rest = line.trim();
         let mut times = Vec::new();
         while let Some(stripped) = rest.strip_prefix('[') {
             let Some(end) = stripped.find(']') else { break };
-            let tag = &stripped[..end];
-            if let Some((m, s)) = tag.split_once(':')
-                && let (Ok(m), Ok(s)) = (m.parse::<f32>(), s.parse::<f32>())
-            {
-                times.push(m * 60.0 + s);
+            if let Some(t) = clock_secs(&stripped[..end]) {
+                times.push(t);
             }
             rest = &stripped[end + 1..];
         }
+        // Word tags: <mm:ss.xx> before each word.
+        let mut words = Words::new();
+        let mut text = String::new();
+        let mut cur = rest;
+        while let Some(open) = cur.find('<') {
+            let Some(close) = cur[open..].find('>').map(|c| open + c) else { break };
+            let Some(t) = clock_secs(&cur[open + 1..close]) else { break };
+            text.push_str(&cur[..open]);
+            if let Some(last) = words.last_mut() {
+                last.1.push_str(&cur[..open]);
+            }
+            words.push((t, String::new()));
+            cur = &cur[close + 1..];
+        }
+        text.push_str(cur);
+        if let Some(last) = words.last_mut() {
+            last.1.push_str(cur);
+        }
+        words.retain(|(_, w)| !w.is_empty());
+        let text = if words.is_empty() { rest.trim().to_string() } else { text.trim().to_string() };
         for t in times {
-            out.push((t, rest.trim().to_string()));
+            out.push((t, text.clone(), words.clone()));
         }
     }
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    out
+    let words = if out.iter().any(|l| !l.2.is_empty()) { out.iter().map(|l| l.2.clone()).collect() } else { Vec::new() };
+    (out.into_iter().map(|(t, s, _)| (t, s)).collect(), words)
+}
+
+/// NetEase's YRC (`[start_ms,dur_ms](word_ms,dur_ms,0)word(…)word`) and KuGou's KRC
+/// (`[start_ms,dur_ms]<offset_ms,dur_ms,0>word…`, offsets from the line's start): the lines and
+/// their words. Other lines (JSON credits, `[ar:…]` tags) are skipped.
+pub fn parse_timed_words(src: &str) -> (Vec<(f32, String)>, Vec<Words>) {
+    let mut lines = Vec::new();
+    let mut words = Vec::new();
+    for line in src.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix('[') else { continue };
+        let Some(end) = rest.find(']') else { continue };
+        let Some((start, _)) = rest[..end].split_once(',') else { continue };
+        let Ok(start) = start.trim().parse::<f32>() else { continue };
+        let mut cur = &rest[end + 1..];
+        let mut ws = Words::new();
+        // A word: (…) in YRC, <…> in KRC, then its text up to the next one.
+        while let Some(open) = cur.find(['(', '<']) {
+            let close_ch = if cur.as_bytes()[open] == b'(' { ')' } else { '>' };
+            let Some(close) = cur[open..].find(close_ch).map(|c| open + c) else { break };
+            let mut nums = cur[open + 1..close].split(',').map(|n| n.trim().parse::<f32>());
+            let Some(Ok(at)) = nums.next() else { break };
+            let at = if close_ch == '>' { start + at } else { at };
+            let after = &cur[close + 1..];
+            let next = after.find(['(', '<']).unwrap_or(after.len());
+            let text = &after[..next];
+            if !text.is_empty() {
+                ws.push((at / 1000.0, text.to_string()));
+            }
+            cur = &after[next..];
+        }
+        if ws.is_empty() {
+            continue;
+        }
+        lines.push((start / 1000.0, ws.iter().map(|(_, w)| w.as_str()).collect::<String>().trim().to_string()));
+        words.push(ws);
+    }
+    (lines, words)
+}
+
+/// KuGou's KRC file as KuGou sends it (after base64): "krc1", then XOR-scrambled zlib text.
+pub fn decode_krc(raw: &[u8]) -> Option<String> {
+    const KEY: [u8; 16] = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
+    let body = raw.strip_prefix(b"krc1")?;
+    let plain: Vec<u8> = body.iter().enumerate().map(|(i, b)| b ^ KEY[i % KEY.len()]).collect();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut flate2::read::ZlibDecoder::new(&plain[..]), &mut text).ok()?;
+    Some(text.trim_start_matches('\u{feff}').to_string())
+}
+
+/// The sung line split at `pos` seconds for the word-by-word fill: what's been sung (whole words,
+/// then the letters of the word being sung, as far as its time has gone) and what's left.
+/// `line_end`: when the next line starts.
+pub fn sung_split(words: &[(f32, String)], line_end: f32, pos: f32) -> (String, String) {
+    let mut sung = String::new();
+    let mut left = String::new();
+    for (i, (start, word)) in words.iter().enumerate() {
+        let end = words.get(i + 1).map_or(line_end, |w| w.0).max(*start + 0.05);
+        if pos >= end {
+            sung.push_str(word);
+        } else if pos <= *start {
+            left.push_str(word);
+        } else {
+            let chars: Vec<char> = word.chars().collect();
+            let lit = ((pos - start) / (end - start) * chars.len() as f32).round() as usize;
+            sung.extend(&chars[..lit.min(chars.len())]);
+            left.extend(&chars[lit.min(chars.len())..]);
+        }
+    }
+    (sung, left)
 }
 
 /// Index of the line being sung at `pos` seconds.
 pub fn current_line(synced: &[(f32, String)], pos: f32) -> Option<usize> {
     let idx = synced.partition_point(|(t, _)| *t <= pos);
     idx.checked_sub(1)
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::*;
+
+    #[test]
+    fn enhanced_lrc_gives_words_and_clean_lines() {
+        let (lines, words) = parse_lrc_words("[00:01.00]<00:01.00>Hello <00:01.50>dear <00:02.00>world\n[00:03.00]plain line");
+        assert_eq!(lines, [(1.0, "Hello dear world".to_string()), (3.0, "plain line".to_string())]);
+        assert_eq!(words[0], [(1.0, "Hello ".to_string()), (1.5, "dear ".to_string()), (2.0, "world".to_string())]);
+        assert!(words[1].is_empty());
+        // No word tags: no words at all.
+        assert!(parse_lrc_words("[00:01.00]just a line").1.is_empty());
+    }
+
+    #[test]
+    fn yrc_and_krc_give_words() {
+        let (l, w) = parse_timed_words("{\"t\":0,\"c\":[]}\n[16210,3460](16210,670,0)Hello (16880,410,0)world");
+        assert_eq!(l, [(16.21, "Hello world".to_string())]);
+        assert_eq!(w[0], [(16.21, "Hello ".to_string()), (16.88, "world".to_string())]);
+        let (l, w) = parse_timed_words("[ar:Someone]\n[1000,2000]<0,500,0>こん<500,500,0>にちは");
+        assert_eq!(l, [(1.0, "こんにちは".to_string())]);
+        assert_eq!(w[0], [(1.0, "こん".to_string()), (1.5, "にちは".to_string())]);
+    }
+
+    #[test]
+    fn the_sung_part_grows_letter_by_letter() {
+        let words = vec![(1.0, "Hello ".to_string()), (2.0, "world".to_string())];
+        assert_eq!(sung_split(&words, 3.0, 0.5), (String::new(), "Hello world".to_string()));
+        assert_eq!(sung_split(&words, 3.0, 2.0), ("Hello ".to_string(), "world".to_string()));
+        assert_eq!(sung_split(&words, 3.0, 2.6), ("Hello wor".to_string(), "ld".to_string()));
+        assert_eq!(sung_split(&words, 3.0, 9.0), ("Hello world".to_string(), String::new()));
+    }
+
+    #[test]
+    fn krc_unscrambles() {
+        use std::io::Write;
+        const KEY: [u8; 16] = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all("[1000,2000]<0,500,0>hi".as_bytes()).unwrap();
+        let packed = z.finish().unwrap();
+        let mut raw = b"krc1".to_vec();
+        raw.extend(packed.iter().enumerate().map(|(i, b)| b ^ KEY[i % KEY.len()]));
+        assert_eq!(decode_krc(&raw).as_deref(), Some("[1000,2000]<0,500,0>hi"));
+        assert_eq!(decode_krc(b"nope"), None);
+    }
 }
 
 #[cfg(test)]
@@ -527,8 +681,8 @@ mod distinct_tests {
     #[test]
     fn other_timings_stay_and_lrclib_is_numbered() {
         let words: Vec<String> = ["one", "two", "three", "four"].map(String::from).to_vec();
-        let timed = |shift: f32| Lyrics { synced: words.iter().enumerate().map(|(i, w)| (i as f32 * 2.0 + shift, w.clone())).collect(), plain: words.clone(), source: "LRCLIB".into(), translation: Vec::new() };
-        let plain = Lyrics { synced: Vec::new(), plain: words.clone(), source: "lyrics.ovh".into(), translation: Vec::new() };
+        let timed = |shift: f32| Lyrics { synced: words.iter().enumerate().map(|(i, w)| (i as f32 * 2.0 + shift, w.clone())).collect(), plain: words.clone(), source: "LRCLIB".into(), translation: Vec::new(), words: Vec::new() };
+        let plain = Lyrics { synced: Vec::new(), plain: words.clone(), source: "lyrics.ovh".into(), translation: Vec::new(), words: Vec::new() };
         let ytm = Lyrics { source: "YouTube Music".into(), ..plain.clone() };
         let out = distinct([timed(0.0), timed(0.0), timed(1.5), plain, ytm]);
         assert_eq!(out.iter().map(|l| l.source.as_str()).collect::<Vec<_>>(), ["LRCLIB", "LRCLIB 2", "lyrics.ovh"]);

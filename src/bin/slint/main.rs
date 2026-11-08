@@ -2878,6 +2878,23 @@ fn tick(st: &Shared) {
             }
         }
     }
+    // Word by word: the sung line's sung part and what's left (sources with word times).
+    if synced && line >= 0 {
+        let i = line as usize;
+        let split = s.lyrics.as_ref().and_then(|l| {
+            let words = l.words.get(i).filter(|w| !w.is_empty())?;
+            let end = l.synced.get(i + 1).map_or(words.last().map_or(pos, |w| w.0) + 3.0, |n| n.0);
+            Some(rymplayer::lyrics::sung_split(words, end, pos))
+        });
+        if let Some((sung, left)) = split
+            && let Some(mut row) = s.m.lyrics.row_data(i)
+            && (row.sung.as_str() != sung || row.left.as_str() != left)
+        {
+            row.sung = sung.into();
+            row.left = left.into();
+            s.m.lyrics.set_row_data(i, row);
+        }
+    }
     if let Some(ui) = s.ui.upgrade() {
         let a = ui.global::<App>();
         a.set_position(pos);
@@ -3316,7 +3333,7 @@ fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
     let rows: Vec<LyricLine> = lines
         .into_iter()
         .enumerate()
-        .map(|(i, text)| LyricLine { rtl: rymplayer::i18n::is_rtl(&text), text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 } })
+        .map(|(i, text)| LyricLine { rtl: rymplayer::i18n::is_rtl(&text), text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 }, ..Default::default() })
         .collect();
     let note = if l.synced.is_empty() { format!("{} · {} {}", tr("These lyrics aren't synced to the song"), tr("Lyrics from"), l.source) } else { format!("{} {}", tr("Lyrics from"), l.source) };
     let wants = translate && l.translation.is_empty() && rymplayer::lyrics::is_japanese(&l);
@@ -4399,10 +4416,10 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     app.set_sources(ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from("LRCLIB"), SharedString::from("NetEase"), SharedString::from("YouTube Music")]))));
     app.set_source_at(1);
     app.set_lyrics(ModelRc::from(Rc::new(VecModel::from(vec![
-        LyricLine { rtl: false, text: "夜に駆ける".into(), tr: "Racing into the night".into(), ro: "Yoru ni kakeru".into(), state: 2 },
-        LyricLine { rtl: false, text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1 },
-        LyricLine { rtl: false, text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0 },
-        LyricLine { rtl: true, text: "يا حسين يا مظلوم".into(), tr: "".into(), ro: "".into(), state: 0 },
+        LyricLine { rtl: false, text: "夜に駆ける".into(), tr: "Racing into the night".into(), ro: "Yoru ni kakeru".into(), state: 2, ..Default::default() },
+        LyricLine { rtl: false, text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1, sung: "沈むように".into(), left: "溶けてゆくように".into() },
+        LyricLine { rtl: false, text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0, ..Default::default() },
+        LyricLine { rtl: true, text: "يا حسين يا مظلوم".into(), tr: "".into(), ro: "".into(), state: 0, ..Default::default() },
     ]))));
     ui.show().expect("show");
     window.set_size(slint::PhysicalSize::new(w, h));

@@ -107,12 +107,26 @@ pub fn clean(mut l: Lyrics, t: &Track) -> Lyrics {
         let header = !title.is_empty() && !artist.is_empty() && n.contains(&title) && n.contains(&artist);
         !credit && !header
     };
+    // The word times go with their lines.
+    if l.words.len() == l.synced.len() && !l.words.is_empty() {
+        let kept: Vec<bool> = l.synced.iter().map(|(_, s)| keep(s)).collect();
+        let mut at = 0;
+        l.words.retain(|_| {
+            at += 1;
+            kept[at - 1]
+        });
+    } else {
+        l.words.clear();
+    }
     l.synced.retain(|(_, s)| keep(s));
     l.plain.retain(|s| keep(s));
     // A first line naming the artist with a dash ("Artist -<Title>"): a header, title misspelled.
     let header = |s: &str| !artist.is_empty() && norm(s).contains(&artist) && s.contains('-');
     if l.synced.first().is_some_and(|(_, s)| header(s)) {
         l.synced.remove(0);
+        if !l.words.is_empty() {
+            l.words.remove(0);
+        }
         if l.plain.first().is_some_and(|s| header(s)) {
             l.plain.remove(0);
         }
@@ -135,12 +149,21 @@ pub async fn netease(t: Track) -> Result<Option<Lyrics>> {
     }) else {
         return Ok(None);
     };
-    let mut url = reqwest::Url::parse("https://music.163.com/api/song/lyric")?;
-    url.query_pairs_mut().append_pair("id", &id.to_string()).append_pair("lv", "1").append_pair("kv", "1").append_pair("tv", "-1");
+    // v1 also sends the word-timed lyrics (YRC) when NetEase has them.
+    let mut url = reqwest::Url::parse("https://music.163.com/api/song/lyric/v1")?;
+    url.query_pairs_mut().append_pair("id", &id.to_string()).append_pair("lv", "1").append_pair("kv", "1").append_pair("tv", "-1").append_pair("yv", "1");
     let lrc = json(url, Some("https://music.163.com/")).await?;
-    let synced = parse_lrc(lrc["lrc"]["lyric"].as_str().unwrap_or_default());
+    let mut synced = parse_lrc(lrc["lrc"]["lyric"].as_str().unwrap_or_default());
+    let (timed, words) = crate::lyrics::parse_timed_words(lrc["yrc"]["lyric"].as_str().unwrap_or_default());
+    // The word-timed lines when they're the whole song (not a few lines of it).
+    let words = if !timed.is_empty() && timed.len() * 10 >= synced.len() * 6 {
+        synced = timed;
+        words
+    } else {
+        Vec::new()
+    };
     let plain = synced.iter().map(|(_, s)| s.clone()).collect();
-    let mut l = clean(Lyrics { synced, plain, source: NETEASE.into(), translation: Vec::new() }, &t);
+    let mut l = clean(Lyrics { synced, plain, source: NETEASE.into(), translation: Vec::new(), words }, &t);
     // Its own translation (often Chinese): kept when it's English, line by line by time.
     let tr = parse_lrc(lrc["tlyric"]["lyric"].as_str().unwrap_or_default());
     if crate::lyrics::is_english(tr.iter().map(|(_, s)| s.as_str())) {
@@ -178,19 +201,34 @@ pub async fn kugou(t: Track) -> Result<Option<Lyrics>> {
     let (Some(id), Some(key)) = (c["id"].as_str().map(String::from).or_else(|| c["id"].as_u64().map(|n| n.to_string())), c["accesskey"].as_str()) else {
         return Ok(None);
     };
-    let mut url = reqwest::Url::parse("https://lyrics.kugou.com/download")?;
-    url.query_pairs_mut()
-        .append_pair("ver", "1")
-        .append_pair("client", "pc")
-        .append_pair("id", &id)
-        .append_pair("accesskey", key)
-        .append_pair("fmt", "lrc")
-        .append_pair("charset", "utf8");
-    let file = json(url, None).await?;
+    let download = |fmt: &str| {
+        let mut url = reqwest::Url::parse("https://lyrics.kugou.com/download").expect("url");
+        url.query_pairs_mut()
+            .append_pair("ver", "1")
+            .append_pair("client", "pc")
+            .append_pair("id", &id)
+            .append_pair("accesskey", key)
+            .append_pair("fmt", fmt)
+            .append_pair("charset", "utf8");
+        json(url, None)
+    };
+    // KRC: word by word (scrambled and packed); plain LRC when it isn't there or can't be read.
+    if let Ok(file) = download("krc").await
+        && let Some(text) = base64(file["content"].as_str().unwrap_or_default()).and_then(|raw| crate::lyrics::decode_krc(&raw))
+    {
+        let (synced, words) = crate::lyrics::parse_timed_words(&text);
+        if !synced.is_empty() {
+            let plain = synced.iter().map(|(_, s)| s.clone()).collect();
+            if let Some(l) = usable(clean(Lyrics { synced, plain, source: KUGOU.into(), translation: Vec::new(), words }, &t)) {
+                return Ok(Some(l));
+            }
+        }
+    }
+    let file = download("lrc").await?;
     let text = String::from_utf8_lossy(&base64(file["content"].as_str().unwrap_or_default()).ok_or_else(|| anyhow!("KuGou: bad lyrics file"))?).into_owned();
     let synced = parse_lrc(&text);
     let plain = synced.iter().map(|(_, s)| s.clone()).collect();
-    Ok(usable(clean(Lyrics { synced, plain, source: KUGOU.into(), translation: Vec::new() }, &t)))
+    Ok(usable(clean(Lyrics { synced, plain, source: KUGOU.into(), translation: Vec::new(), words: Vec::new() }, &t)))
 }
 
 /// Genius's lyrics (plain: Genius has no timing), from the song's page.
@@ -209,7 +247,7 @@ pub async fn genius(t: Track) -> Result<Option<Lyrics>> {
     let Some(page) = hit else { return Ok(None) };
     let html = client().get(page).send().await?.error_for_status()?.text().await?;
     let plain = genius_lines(&html);
-    Ok(usable(clean(Lyrics { synced: Vec::new(), plain, source: GENIUS.into(), translation: Vec::new() }, &t)))
+    Ok(usable(clean(Lyrics { synced: Vec::new(), plain, source: GENIUS.into(), translation: Vec::new(), words: Vec::new() }, &t)))
 }
 
 /// The text of the page's lyrics containers, line by line (their nested headers left out).
@@ -355,7 +393,7 @@ mod tests {
     fn credits_and_header_lines_go() {
         let song = t("The Less I Know The Better", "Tame Impala", "3:38");
         let lrc = "[00:00.00] 作词 : Kevin Parker\n[00:01.00]作曲：Kevin\n[00:02.00]The Less I Know The Better - Tame Impala\n[00:12.47]Written by：Kevin Parke\n[00:25.05]Someone said they left together\n[00:29.18]I ran out the door to get her";
-        let l = clean(Lyrics { synced: parse_lrc(lrc), plain: Vec::new(), source: NETEASE.into(), translation: Vec::new() }, &song);
+        let l = clean(Lyrics { synced: parse_lrc(lrc), plain: Vec::new(), source: NETEASE.into(), translation: Vec::new(), words: Vec::new() }, &song);
         assert_eq!(l.synced.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>(), ["Someone said they left together", "I ran out the door to get her"]);
         assert!(same_song(&song, "The Less I Know The Better (Explicit)", Some(218.9)));
         assert!(!same_song(&song, "The Less I Know The Better", Some(370.0)));
@@ -368,6 +406,25 @@ mod tests {
         let html = r#"<div data-lyrics-container="true" class="a"><div data-exclude-from-selection="true">185 Contributors<div>x</div></div>[Verse 1]<br/>Someone said &amp; <i>left</i><br/>I ran</div><p>no</p><div data-lyrics-container="true">Last line</div>"#;
         assert_eq!(genius_lines(html), ["[Verse 1]", "Someone said & left", "I ran", "Last line"]);
         assert_eq!(base64("aGVsbG8gd29ybGQ=").unwrap(), b"hello world");
+    }
+
+    /// Word times from NetEase (YRC) and KuGou (KRC), lined up with their lines.
+    #[tokio::test]
+    #[ignore]
+    async fn live_word_times() {
+        // NetEase (YRC) and KuGou (KRC) give word times for well-known songs.
+        for song in [t("Blinding Lights", "The Weeknd", "3:20"), t("夜に駆ける", "YOASOBI", "4:21")] {
+            for (name, l) in [("netease", netease(song.clone()).await), ("kugou", kugou(song.clone()).await)] {
+                let l = l.ok().flatten();
+                let lines = l.as_ref().map_or(0, |l| l.synced.len());
+                let timed = l.as_ref().map_or(0, |l| l.words.iter().filter(|w| !w.is_empty()).count());
+                let first = l.as_ref().and_then(|l| l.words.iter().find(|w| !w.is_empty()).cloned()).unwrap_or_default();
+                println!("{} / {name}: {lines} lines, {timed} with word times, first: {first:?}", song.title);
+                if let Some(l) = &l {
+                    assert!(l.words.is_empty() || l.words.len() == l.synced.len(), "words and lines out of step");
+                }
+            }
+        }
     }
 
     /// The three providers for a well-known song (line counts only).

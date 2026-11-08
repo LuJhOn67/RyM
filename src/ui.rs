@@ -699,6 +699,7 @@ mod tests {
             plain: vec![],
             source: "LRCLIB".into(),
             translation: vec![],
+            words: vec![],
         });
         a.pos = 6.0;
         a

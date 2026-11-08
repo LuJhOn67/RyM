@@ -42,6 +42,9 @@ export struct LyricLine {
     rtl: bool,
     // 0 to come, 1 sung now, 2 sung
     state: int,
+    // Word by word (sources with word times): what's been sung of this line, and what's left.
+    sung: string,
+    left: string,
 }
 
 export struct Suggest {
@@ -1063,8 +1066,10 @@ component Lyrics inherits Rectangle {
                         root.glide-to = round(max(flick.height - flick.content-height, min(0px, -self.y + flick.height / 3)) / 1px) * 1px;
                     }
                 }
-                Rectangle {
+                lbox := Rectangle {
                     height: line.preferred-height;
+                    // The sung line filling word by word, letter by letter, when its source has word times.
+                    property <bool> by-word: l.state == 1 && (l.sung != "" || l.left != "");
                     line := Text {
                         width: parent.width;
                         text: l.text;
@@ -1074,8 +1079,14 @@ component Lyrics inherits Rectangle {
                         wrap: word-wrap;
                         horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                         // To come: see-through; sung now: white; sung: a little white left.
-                        color: Theme.text.with-alpha(l.state == 1 ? 1 : (l.state == 2 ? 0.55 : 0.3));
+                        color: lbox.by-word ? transparent : Theme.text.with-alpha(l.state == 1 ? 1 : (l.state == 2 ? 0.55 : 0.3));
                         animate color { duration: 350ms; easing: ease-out; }
+                    }
+                    if lbox.by-word: StyledText {
+                        width: parent.width;
+                        text: @markdown("<font color='\{Theme.text}'>\{l.sung}</font><font color='\{Theme.text.with-alpha(0.32)}'>\{l.left}</font>");
+                        default-font-size: line.font-size;
+                        horizontal-alignment: line.horizontal-alignment;
                     }
                     TouchArea {
                         mouse-cursor: pointer;
