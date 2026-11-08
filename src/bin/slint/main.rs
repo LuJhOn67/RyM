@@ -1728,6 +1728,7 @@ fn pal_of(t: &rymplayer::themes::Theme) -> Pal {
         fall: t.fall(),
         vignette: t.vignette,
         heartbeat: t.heartbeat,
+        cut: t.cut,
         pattern: t.tile().map(to_image).unwrap_or_default(),
     }
 }

@@ -77,6 +77,8 @@ pub struct Theme {
     pub vignette: bool,
     /// A slow, heavy glow in the accent that beats with the bass.
     pub heartbeat: bool,
+    /// Corners cut at 45 degrees, with a glowing line along the cut (Cyber HUD).
+    pub cut: bool,
 }
 
 impl Default for Theme {
@@ -103,6 +105,7 @@ impl Default for Theme {
             muted: false,
             vignette: false,
             heartbeat: false,
+            cut: false,
         }
     }
 }
@@ -137,7 +140,7 @@ pub fn presets() -> Vec<Theme> {
         Theme { glow: true, ..theme("Stellar Neon", true, ["#070b1a", "#0e1530", "#e8f6ff", "#8fa3c7", "#bfefff", "#00e1ff", "#ffc857", "#1c2a4d", "#00e1ff40"], Stars, 0.8) },
         Theme { dot_clock: true, ..theme("Dot Matrix", true, ["#000000", "#111111", "#f2f2f2", "#8c8c8c", "#f2f2f2", "#d71921", "#ff5a60", "#2a2a2a", "#2a2a2a"], Dots, 1.0) },
         Theme { vu: true, ..theme("Hi-Fi Rack", true, ["#1a1b1d", "#2a2c2f", "#e9e4d8", "#a39d90", "#d8d2c4", "#ffb000", "#ffd27a", "#3a3c40", "#45484d"], Metal, 0.35) },
-        Theme { glow: true, ..theme("Cyber HUD", true, ["#0a0a12", "#14141f", "#f5f5f5", "#9aa0b4", "#00f0ff", "#fcee09", "#00f0ff", "#23233a", "#00f0ff55"], Hud, 0.0) },
+        Theme { glow: true, cut: true, ..theme("Cyber HUD", true, ["#0a0a12", "#14141f", "#f5f5f5", "#9aa0b4", "#00f0ff", "#fcee09", "#00f0ff", "#23233a", "#00f0ff55"], Hud, 0.0) },
         theme("Lo-Fi Rain", true, ["#1a1530", "#251e42", "#f3e9ff", "#b3a6d6", "#e8dcff", "#ffb347", "#ffd59a", "#3a2f63", "#4a3d7a80"], Rain, 1.0),
         Theme { glass: 0.35, ..theme("Aqua Glass", false, ["#dff6ff", "#ffffffb0", "#073b4c", "#2f6f80", "#0b6e8a", "#00b894", "#48dbfb", "#a8e6f0", "#ffffffcc"], Aqua, 1.0) },
         theme("Manga Ink", false, ["#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"], Halftone, 0.0),

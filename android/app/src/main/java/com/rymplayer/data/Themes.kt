@@ -33,6 +33,8 @@ object Themes {
         val muted: Boolean = false,
         val vignette: Boolean = false,
         val heartbeat: Boolean = false,
+        /** Corners cut at 45 degrees (Cyber HUD). */
+        val cut: Boolean = false,
     ) {
         fun toJson(): String = JSONObject().apply {
             put("name", name); put("dark", dark)
@@ -40,7 +42,7 @@ object Themes {
             put("accent", accent); put("accent2", accent2); put("bar", bar); put("border", border)
             put("style", style); put("round", round.toDouble()); put("glow", glow); put("cover_border", coverBorder)
             put("glass", glass.toDouble()); put("dot_clock", dotClock); put("vu", vu)
-            put("muted", muted); put("vignette", vignette); put("heartbeat", heartbeat)
+            put("muted", muted); put("vignette", vignette); put("heartbeat", heartbeat); put("cut", cut)
         }.toString(2)
     }
 
@@ -55,7 +57,7 @@ object Themes {
         t("Stellar Neon", true, listOf("#070b1a", "#0e1530", "#e8f6ff", "#8fa3c7", "#bfefff", "#00e1ff", "#ffc857", "#1c2a4d", "#00e1ff40"), "stars", 0.8f).copy(glow = true),
         t("Dot Matrix", true, listOf("#000000", "#111111", "#f2f2f2", "#8c8c8c", "#f2f2f2", "#d71921", "#ff5a60", "#2a2a2a", "#2a2a2a"), "dots", 1f).copy(dotClock = true),
         t("Hi-Fi Rack", true, listOf("#1a1b1d", "#2a2c2f", "#e9e4d8", "#a39d90", "#d8d2c4", "#ffb000", "#ffd27a", "#3a3c40", "#45484d"), "metal", 0.35f).copy(vu = true),
-        t("Cyber HUD", true, listOf("#0a0a12", "#14141f", "#f5f5f5", "#9aa0b4", "#00f0ff", "#fcee09", "#00f0ff", "#23233a", "#00f0ff55"), "hud", 0f).copy(glow = true),
+        t("Cyber HUD", true, listOf("#0a0a12", "#14141f", "#f5f5f5", "#9aa0b4", "#00f0ff", "#fcee09", "#00f0ff", "#23233a", "#00f0ff55"), "hud", 0f).copy(glow = true, cut = true),
         t("Lo-Fi Rain", true, listOf("#1a1530", "#251e42", "#f3e9ff", "#b3a6d6", "#e8dcff", "#ffb347", "#ffd59a", "#3a2f63", "#4a3d7a80"), "rain", 1f),
         t("Aqua Glass", false, listOf("#dff6ff", "#ffffffb0", "#073b4c", "#2f6f80", "#0b6e8a", "#00b894", "#48dbfb", "#a8e6f0", "#ffffffcc"), "aqua", 1f).copy(glass = 0.35f),
         t("Manga Ink", false, listOf("#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"), "halftone", 0f),
@@ -98,6 +100,7 @@ object Themes {
             glass = o.optDouble("glass", 0.0).toFloat().coerceIn(0f, 1f),
             dotClock = o.optBoolean("dot_clock", false), vu = o.optBoolean("vu", false),
             muted = o.optBoolean("muted", false), vignette = o.optBoolean("vignette", false), heartbeat = o.optBoolean("heartbeat", false),
+            cut = o.optBoolean("cut", false),
         )
         for ((field, value) in listOf("bg" to t.bg, "raised" to t.raised, "text" to t.text, "dim" to t.dim, "icon" to t.icon, "accent" to t.accent, "accent2" to t.accent2, "bar" to t.bar, "border" to t.border)) {
             if (argb(value) == null) throw IllegalArgumentException("$field: \"$value\" is not a color like #12ab34")

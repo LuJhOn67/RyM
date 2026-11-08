@@ -110,7 +110,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
     )
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = themeShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = CardColor),
     ) { Column { content() } }
 }

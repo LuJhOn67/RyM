@@ -234,7 +234,7 @@ fun FullPlayer(vm: AppViewModel, coverTint: Color) {
                     if (vm.vinyl) {
                         Vinyl(t.thumb, side, p.playing && !p.loading, vm.sound.speed, if (colors?.glow == true) accent else null, Modifier.clickable { panel = Panel.Lyrics }, muted = colors?.muted == true)
                     } else {
-                        val shape = RoundedCornerShape(16.dp * (colors?.round ?: 1f))
+                        val shape = if (colors?.cut == true) androidx.compose.foundation.shape.CutCornerShape(side * 0.12f) else RoundedCornerShape(16.dp * (colors?.round ?: 1f))
                         Box(
                             Modifier.scale(scale)
                                 .shadow(if (colors?.glow == true) 36.dp else 24.dp, shape, ambientColor = if (colors?.glow == true) accent else Color.Black, spotColor = if (colors?.glow == true) accent else Color.Black)

@@ -95,6 +95,13 @@ val Dim = Color(0xFFAAAAAA)
 /** The color theme's background (Settings > Colors); null: the app's own. */
 var themeBg by androidx.compose.runtime.mutableStateOf<Color?>(null)
 
+/** Cyber HUD: corners cut at 45 degrees instead of rounded. */
+var themeCut by androidx.compose.runtime.mutableStateOf(false)
+
+/** A theme's corner: cut at 45 degrees on Cyber HUD, rounded otherwise. */
+fun themeShape(corner: Dp): androidx.compose.ui.graphics.Shape =
+    if (themeCut) androidx.compose.foundation.shape.CutCornerShape(corner.coerceAtLeast(8.dp)) else RoundedCornerShape(corner)
+
 /** The pages' background: the color theme's, else near black, or pure black in RyM YTM. */
 fun pageColor(ytm: Boolean) = themeBg ?: if (ytm) Color.Black else Color(0xFF0B0B0D)
 
@@ -134,7 +141,10 @@ private fun patternBrush(t: com.rymplayer.data.Themes.Theme, s: Float): androidx
 
 @Composable
 fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = null, content: @Composable () -> Unit) {
-    androidx.compose.runtime.SideEffect { themeBg = colors?.let { hex(it.bg) } }
+    androidx.compose.runtime.SideEffect {
+        themeBg = colors?.let { hex(it.bg) }
+        themeCut = colors?.cut == true
+    }
     val scheme = if (colors == null) darkColorScheme(
         primary = if (ytm) Color(0xFFFF3048) else Accent,
         background = if (ytm) Color.Black else Color(0xFF0B0B0D),
@@ -170,7 +180,7 @@ fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = nu
 /** Cover art with a rounded corner and a note placeholder while it loads. */
 @Composable
 fun Cover(url: String?, size: Dp, px: Int, corner: Dp = 8.dp, modifier: Modifier = Modifier, muted: Boolean = false) {
-    val shape = RoundedCornerShape(corner)
+    val shape = if (themeCut && corner > 0.dp) androidx.compose.foundation.shape.CutCornerShape(size * 0.12f) else RoundedCornerShape(corner)
     SubcomposeAsyncImage(
         model = ImageRequest.Builder(LocalContext.current).data(thumbSized(url, px)).crossfade(250).build(),
         contentDescription = null,
