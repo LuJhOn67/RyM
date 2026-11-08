@@ -82,6 +82,7 @@ class PlaybackService : MediaSessionService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        Streams.loadSource(this)
         for (i in 0..1) players[i] = build(i)
         Sound.listen(this, soundChanged)
         applySound()

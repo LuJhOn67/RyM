@@ -159,6 +159,13 @@ struct State {
     rain_path: String,
     rain_time: f32,
     bass_now: f32,
+    /// The pulse (Liquid Aurora, the heartbeat) and the needles: what the sound says now, and what
+    /// the window shows, eased toward it on the animations' clock (a Slint animation on them
+    /// redrew the whole window at the screen's own rate, past the frame rate chosen).
+    energy_to: f32,
+    energy: f32,
+    vu_to: (f32, f32),
+    vu: (f32, f32),
     repeat_one: bool,
     /// Repeat all: at the end of the list it starts over.
     repeat_all: bool,
@@ -260,6 +267,15 @@ thread_local! {
     static STATE: RefCell<Option<Shared>> = const { RefCell::new(None) };
     /// The window is in front (focused) and shown (not minimized or covered), from winit.
     static WINDOW_UP: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((true, false)) };
+    /// The window is hidden in the tray (RyM plays on in the background).
+    static IN_TRAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Nobody sees the window: hidden in the tray, minimized, or covered. Then every effect stops and
+/// the window isn't told the position, the lyrics or the levels (the sound and the small windows
+/// go on); it's all brought up to date when the window comes back.
+fn unseen(ui: Option<&AppWindow>) -> bool {
+    WINDOW_UP.with(|w| w.get().1) || IN_TRAY.with(|t| t.get()) || ui.is_some_and(|ui| ui.window().is_minimized())
 }
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -484,6 +500,10 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         rain_path: String::with_capacity(RAIN_POOL * 32),
         rain_time: 0.0,
         bass_now: 0.0,
+        energy_to: 0.0,
+        energy: 0.0,
+        vu_to: (0.0, 0.0),
+        vu: (0.0, 0.0),
         repeat_one: false,
         repeat_all: false,
         lyrics: None,
@@ -1697,18 +1717,18 @@ fn animations(st: &Shared) {
             s.saving = rymplayer::power::saving();
         }
         let playing = s.audio.as_ref().is_some_and(Audio::is_playing);
-        let wants = s.ui.upgrade().is_some_and(|ui| {
+        let window = s.ui.upgrade();
+        let wants = window.as_ref().is_some_and(|ui| {
             let t = ui.global::<Theme>();
-            t.get_falling() || t.get_aurora() || t.get_vinyl()
+            t.get_falling() || t.get_aurora() || t.get_vinyl() || t.get_heartbeat() || t.get_vu()
         });
-        (playing, wants, s.config.fps_cap, s.config.perf_badge)
+        (playing, wants && !unseen(window.as_ref()), s.config.fps_cap, s.config.perf_badge)
     };
-    let (front, covered) = WINDOW_UP.with(|w| w.get());
+    let covered = unseen(st.borrow().ui.upgrade().as_ref());
     let saving = st.borrow().saving;
-    // Not in front but still showing (another window has the focus): it keeps moving; minimized
-    // or covered: it stops.
-    let _ = front;
-    let run = playing && wants && !covered && !saving;
+    // Not in front but still showing (another window has the focus): it keeps moving; minimized,
+    // covered or in the tray: it stops.
+    let run = playing && wants && !saving;
     let every = run.then(|| Duration::from_micros(if cap == 0 { 4_000 } else { 1_000_000 / cap as u64 }));
     if st.borrow().clock_every != every {
         let mut s = st.borrow_mut();
@@ -1740,6 +1760,8 @@ fn animations(st: &Shared) {
             s.perf_at = Instant::now();
             let why = if !playing {
                 tr("paused")
+            } else if covered {
+                tr("window hidden")
             } else if !wants {
                 tr("nothing moves in these colors")
             } else if saving {
@@ -1884,6 +1906,28 @@ fn clock_tick(st: &Shared) {
         };
         ui.global::<App>().set_drops_ash(ash);
         ui.global::<App>().set_drops(text);
+    }
+    // The pulse and the needles ease toward the sound (quick for the needles, slow for the heartbeat).
+    let window = st.borrow().ui.upgrade();
+    if let Some(ui) = window {
+        let mut s = st.borrow_mut();
+        let dt = s.last_frame.map_or(0.0, |l| l.elapsed().as_secs_f32().min(0.1));
+        let theme = ui.global::<Theme>();
+        let ease = |shown: f32, to: f32, secs: f32| shown + (to - shown) * (1.0 - (-dt / secs).exp());
+        let slow = if theme.get_heartbeat() { 0.22 } else { 0.05 };
+        let e = ease(s.energy, s.energy_to, slow);
+        if (e - s.energy).abs() > 0.001 {
+            s.energy = e;
+            theme.set_energy(e);
+        }
+        if theme.get_vu() {
+            let vu = (ease(s.vu.0, s.vu_to.0, 0.03), ease(s.vu.1, s.vu_to.1, 0.03));
+            if vu != s.vu {
+                s.vu = vu;
+                theme.set_vu_l(vu.0);
+                theme.set_vu_r(vu.1);
+            }
+        }
     }
     let ms = {
         let mut s = st.borrow_mut();
@@ -2954,6 +2998,11 @@ fn tick(st: &Shared) {
         play_at(st, n);
         return;
     }
+    // Nobody sees the window: only the end of the song is looked at below; what it showed is
+    // forgotten, so all of it is told again when it comes back.
+    if unseen(s.ui.upgrade().as_ref()) {
+        s.shown = (!playing, u32::MAX, u32::MAX, -2);
+    } else {
     // The window is told only what changed.
     let sec = pos as u32;
     let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, pos)).map_or(-1, |l| l as i32);
@@ -3008,6 +3057,7 @@ fn tick(st: &Shared) {
         if line != old.3 {
             a.set_lyric_line(line);
         }
+    }
     }
     if loaded && finished && s.q.current.is_some() && s.ended_for != s.request_id {
         s.ended_for = s.request_id;
@@ -3074,7 +3124,10 @@ fn extras(st: &Shared) {
     }
     // The moving wave: the last second's loudness, one bar per 20 ms.
     let id = s.q.now().map(|t| t.video_id.clone()).unwrap_or_default();
-    if s.config.visualizer && playing {
+    let away = unseen(ui.as_ref());
+    if away {
+        // Nothing of the window moves.
+    } else if s.config.visualizer && playing {
         let loud = s.audio.as_ref().map(|a| a.loudness(1.02)).unwrap_or_default();
         if loud.len() >= 102 {
             let bars: Vec<f32> = loud.chunks(2).map(|c| (c[0] + c.get(1).copied().unwrap_or(c[0])) / 2.0).collect();
@@ -3083,7 +3136,15 @@ fn extras(st: &Shared) {
             let peak = s.wave_peak;
             let wave: Vec<f32> = bars.iter().take(51).map(|b| (b / peak).sqrt().clamp(0.08, 1.0)).collect();
             if let Some(ui) = &ui {
-                ui.global::<App>().set_wave(ModelRc::from(Rc::new(VecModel::from(wave))));
+                // The same bars changed in place (a new list each tick made them all again).
+                let model = ui.global::<App>().get_wave();
+                if s.wave_live && model.row_count() == wave.len() {
+                    for (i, h) in wave.into_iter().enumerate() {
+                        model.set_row_data(i, h);
+                    }
+                } else {
+                    ui.global::<App>().set_wave(ModelRc::from(Rc::new(VecModel::from(wave))));
+                }
             }
             s.wave_live = true;
         }
@@ -3094,28 +3155,40 @@ fn extras(st: &Shared) {
         }
     }
     // Liquid Aurora pulses with the bass; the needle meters follow left and right.
-    if let Some(ui) = &ui {
+    if let Some(ui) = ui.as_ref().filter(|_| !away) {
         let theme = ui.global::<Theme>();
+        let clock = s.clock_every.is_some();
         // The heartbeat (Remorse) beats with the bass like Liquid Aurora.
         let (aurora, vu) = (theme.get_aurora() || theme.get_heartbeat() || theme.get_falling(), theme.get_vu());
         if aurora || vu {
             let (bass, left, right) = if playing { s.audio.as_ref().map(Audio::bands).unwrap_or_default() } else { (0.0, 0.0, 0.0) };
             if aurora {
                 s.bass_peak = (s.bass_peak * 0.995).max(bass).max(0.01);
-                theme.set_energy((bass / s.bass_peak).powf(1.5).clamp(0.0, 1.0));
+                s.energy_to = (bass / s.bass_peak).powf(1.5).clamp(0.0, 1.0);
             }
             s.bass_now = (bass / s.bass_peak.max(0.01)).clamp(0.0, 1.0);
             if vu {
                 let level = |x: f32| ((20.0 * x.max(1e-5).log10() + 30.0) / 30.0).clamp(0.0, 1.0);
-                theme.set_vu_l(level(left));
-                theme.set_vu_r(level(right));
+                s.vu_to = (level(left), level(right));
+            }
+            // No clock (paused, battery saver): straight there, once.
+            if !clock {
+                if aurora && s.energy != s.energy_to {
+                    s.energy = s.energy_to;
+                    theme.set_energy(s.energy);
+                }
+                if vu && s.vu != s.vu_to {
+                    s.vu = s.vu_to;
+                    theme.set_vu_l(s.vu.0);
+                    theme.set_vu_r(s.vu.1);
+                }
             }
         }
     }
     // The karaoke and the floating lyrics: the sung line, how far into it, and the next one.
     if let Some(l) = s.lyrics.as_ref().filter(|l| !l.synced.is_empty()) {
         let line = rymplayer::lyrics::current_line(&l.synced, pos);
-        if let (Some(i), Some(ui)) = (line, &ui) {
+        if let (Some(i), Some(ui), false) = (line, &ui, away) {
             let start = l.synced[i].0;
             let end = l.synced.get(i + 1).map_or(start + 5.0, |n| n.0);
             ui.global::<App>().set_line_progress(((pos - start) / (end - start).max(0.3)).clamp(0.0, 1.0));
@@ -3680,16 +3753,23 @@ fn close_requested(st: &Shared) -> slint::CloseRequestResponse {
 
 fn to_tray(st: &Shared) {
     start_tray(st);
-    if let Some(ui) = st.borrow().ui.upgrade() {
+    IN_TRAY.with(|t| t.set(true));
+    let window = st.borrow().ui.upgrade();
+    if let Some(ui) = window {
         let _ = ui.hide();
     }
+    // The effects stop now, not at the next tick.
+    animations(st);
 }
 
 fn show_window(st: &Shared) {
-    if let Some(ui) = st.borrow().ui.upgrade() {
+    IN_TRAY.with(|t| t.set(false));
+    let window = st.borrow().ui.upgrade();
+    if let Some(ui) = window {
         let _ = ui.show();
         ui.window().set_minimized(false);
     }
+    animations(st);
 }
 
 fn quit(st: &Shared) {

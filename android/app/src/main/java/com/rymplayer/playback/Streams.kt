@@ -73,11 +73,28 @@ object Streams {
     /** The signed-in cookie (set by the app), for yt-dlp when YouTube refuses the quick ways. */
     @Volatile var cookie: String? = null
 
+    /** Where song links come from (Settings, like the PC): 0 the quick ways, yt-dlp when YouTube
+     *  refuses them; 1 yt-dlp only; 2 the quick ways only. */
+    @Volatile var source = 0
+        private set
+    @Volatile private var appContext: Context? = null
+
+    fun useSource(ctx: Context, which: Int) {
+        appContext = ctx.applicationContext
+        if (source != which) links.clear()
+        source = which
+    }
+
+    /** The source saved in Settings (the player's service starts it too, without the app's screen). */
+    fun loadSource(ctx: Context) = useSource(ctx, ctx.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("audio_source", 0))
+
     suspend fun playable(ctx: Context, videoId: String): String {
         cachedFile(ctx, videoId)?.let { return Uri.fromFile(it).toString() }
         if (com.rymplayer.data.SoundCloud.isSoundCloud(videoId)) return com.rymplayer.data.SoundCloud.streamUrl(ctx, videoId)
         return kotlinx.coroutines.withContext(Dispatchers.IO) {
             runCatching { cachedLink(videoId).url }.getOrElse { refused ->
+                // The quick ways only: no yt-dlp.
+                if (source == 2) throw IllegalStateException(refused.message ?: "no audio link")
                 // Some songs YouTube won't give the visionOS app ("This video is not available"):
                 // yt-dlp with your account gets them, slower, into the cache.
                 android.util.Log.w("RyM", "quick ways refused $videoId (${refused.message}), trying yt-dlp")
@@ -133,14 +150,17 @@ object Streams {
         synchronized(pending.computeIfAbsent(videoId) { Any() }) {
             fresh()?.let { return it }
             val started = System.currentTimeMillis()
-            val fast = runCatching { fastLink(videoId) }
+            val viaYtDlp = source == 1
+            val fast = if (viaYtDlp) null else runCatching { fastLink(videoId) }
                 .onFailure { android.util.Log.w("RyM", "quick lookup failed for $videoId: ${it.message}") }
                 .getOrNull()
-            val (url, ext) = fast ?: runCatching { link(videoId) }.getOrElse {
+            val (url, ext) = fast ?: runCatching {
+                if (viaYtDlp) com.rymplayer.data.YtDlp.youtubeLink(checkNotNull(appContext) { "not ready" }, videoId, cookie) else link(videoId)
+            }.getOrElse {
                 android.util.Log.w("RyM", "no audio link for $videoId", it)
                 throw IllegalStateException(it.message ?: it.javaClass.simpleName)
             }
-            val how = if (fast != null) "quick" else "full NewPipe"
+            val how = if (viaYtDlp) "yt-dlp" else if (fast != null) "quick" else "full NewPipe"
             android.util.Log.w("RyM", "timing: link $videoId took ${System.currentTimeMillis() - started} ms ($how, $ext)")
             return Link(url, ext, System.currentTimeMillis() + 60 * 60 * 1000L).also { links[videoId] = it }
         }

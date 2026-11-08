@@ -369,7 +369,6 @@ component Cover inherits Rectangle {
 // Liquid Aurora: the cover's four colors as soft lights, bigger and brighter with the bass.
 component Aurora inherits Rectangle {
     property <float> e: Theme.energy;
-    animate e { duration: 140ms; easing: ease-out; }
     // A slow drift while music plays (still when paused: nothing is redrawn then).
     property <float> t: App.clock / 6000;
     for blob[i] in [
@@ -391,7 +390,6 @@ component Aurora inherits Rectangle {
 // A slow, heavy glow in the accent, beating with the bass (Remorse).
 component Heartbeat inherits Rectangle {
     property <float> e: Theme.energy;
-    animate e { duration: 650ms; easing: ease-out; }
     Rectangle {
         width: min(parent.width, parent.height) * (0.85 + root.e * 0.3);
         height: self.width;
@@ -515,7 +513,6 @@ component VuMeter inherits Rectangle {
     in property <float> level;
     in property <string> label;
     property <float> l: level;
-    animate l { duration: 90ms; easing: ease-out; }
     border-radius: 6px * Ui.k * Theme.round;
     border-width: 2px * Ui.k;
     border-color: #0d0d0d;
@@ -937,7 +934,6 @@ component Wave inherits Rectangle {
         background: self.at <= root.played
             ? Theme.wave-from.mix(Theme.wave-to, 1 - self.at / max(0.01, root.played))
             : Theme.bar;
-        animate height { duration: 90ms; }
     }
     TouchArea {
         mouse-cursor: pointer;

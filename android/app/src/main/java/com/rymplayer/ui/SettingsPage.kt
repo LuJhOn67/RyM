@@ -183,6 +183,12 @@ fun SettingsPage(vm: AppViewModel) {
                 TapRow(Icons.Default.Language, tr("Language"), tr("The words in the app"), if (I18n.arabic) "العربية" else "English") { vm.toggleArabic() }
             }
             Section(tr("Playback and quality")) {
+                TapRow(
+                    Icons.Default.SettingsEthernet, tr("Audio source"),
+                    tr("InnerTube + yt-dlp: fast, and yt-dlp takes over when YouTube refuses. yt-dlp: slower start, Premium gets 256 kbps. InnerTube: straight from YouTube only · tap to change"),
+                    listOf("InnerTube + yt-dlp", "yt-dlp", "InnerTube")[vm.audioSource.coerceIn(0, 2)],
+                ) { vm.cycleSource() }
+                Divider()
                 SwitchRow(Icons.Default.Download, tr("Best download quality"), tr("yt-dlp with your account, 256 kbps for Premium, slower"), vm.downloadBest) { vm.toggleDownloadQuality() }
                 Divider()
                 TapRow(Icons.Default.SettingsEthernet, tr("Download connections"), tr("How many at once (1-16); more use more of your line · tap to change"), "${vm.connections}") { vm.nextConnections() }

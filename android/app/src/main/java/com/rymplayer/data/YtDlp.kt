@@ -111,6 +111,17 @@ object YtDlp {
         return YoutubeDL.getInstance().execute(request, "rym-list").out
     }
 
+    /** A YouTube song's sound link and its kind (webm or m4a), through yt-dlp with your account. Blocking. */
+    fun youtubeLink(ctx: Context, videoId: String, cookie: String?): Pair<String, String> {
+        prepare(ctx)
+        val info = YoutubeDL.getInstance().getInfo(YoutubeDLRequest("https://music.youtube.com/watch?v=$videoId").apply {
+            addOption("-f", "774/251/141/140/bestaudio")
+            addOption("--no-playlist")
+            if (!cookie.isNullOrBlank()) addOption("--cookies", cookieFile(ctx, cookie).absolutePath)
+        })
+        return checkNotNull(info.url) { "yt-dlp gave no link" } to (info.ext ?: "webm")
+    }
+
     /** A song's direct link on any site yt-dlp knows (best sound). Blocking. */
     fun link(ctx: Context, url: String): String {
         prepare(ctx)

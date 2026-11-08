@@ -311,6 +311,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("prefer_lossless", preferLossless).apply()
     }
 
+    /** Where song links come from: 0 InnerTube + yt-dlp, 1 yt-dlp, 2 InnerTube (as on the PC). */
+    var audioSource by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("audio_source", 0).also { com.rymplayer.playback.Streams.useSource(app, it) })
+        private set
+
+    fun cycleSource() {
+        audioSource = (audioSource + 1) % 3
+        com.rymplayer.playback.Streams.useSource(getApplication(), audioSource)
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putInt("audio_source", audioSource).apply()
+    }
+
     /** Animations' frames a second (0: as fast as the screen) and the performance badge. */
     var fpsCap by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("fps_cap", 60).also { com.rymplayer.ui.animFps = it })
         private set

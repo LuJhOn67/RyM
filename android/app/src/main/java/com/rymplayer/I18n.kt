@@ -154,6 +154,8 @@ object I18n {
         "Prefer lossless (FLAC)" to "فضّل الجودة الكاملة (FLAC)",
         "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there" to "يدوّر على الأغنية كـ FLAC بأرشيف الإنترنت أول (مجاني وقانوني)، ويوتيوب إذا ما لگاها",
         "Animation frame rate" to "سرعة رسم الحركات",
+        "Audio source" to "مصدر الصوت",
+        "InnerTube + yt-dlp: fast, and yt-dlp takes over when YouTube refuses. yt-dlp: slower start, Premium gets 256 kbps. InnerTube: straight from YouTube only · tap to change" to "InnerTube + yt-dlp: سريع، وyt-dlp يتولى إذا رفض يوتيوب. yt-dlp: يبدي أبطأ، وPremium بجودة 256 kbps. InnerTube: من يوتيوب مباشرة بس · اضغط للتغيير",
         "As fast as the screen" to "بسرعة الشاشة",
         "Animations stop on battery saver or under 20% · tap to change" to "الحركات توگف بتوفير البطارية أو تحت 20% · اضغط حتى تغيّر",
         "Performance monitor" to "مراقب الأداء",
