@@ -190,6 +190,9 @@ export global App {
     // The animations' clock (ms), moved at the chosen frame rate only while something animates
     // (playing, the window in front, no battery saver): still otherwise, so nothing is redrawn.
     in property <float> clock;
+    // Rain or ash falling over the window: every particle in one path (drawn at once), from Rust.
+    in property <string> drops;
+    in property <bool> drops-ash;
     // The performance badge.
     in property <bool> perf-on;
     in property <string> perf-text;
@@ -2320,6 +2323,17 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+    // Rain and ash (Lo-Fi Rain, Remorse), landing on RyM Wide's player bar.
+    if App.drops != "": Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        commands: App.drops;
+        stroke: App.drops-ash ? Theme.text.with-alpha(0.5) : Theme.wave-from.with-alpha(0.55);
+        stroke-width: App.drops-ash ? 2.4px : 1.4px;
+        stroke-line-cap: round;
     }
     // The performance badge: frames a second, frame time, memory.
     if App.perf-on: Rectangle {

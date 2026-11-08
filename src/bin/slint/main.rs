@@ -150,6 +150,14 @@ struct State {
     /// Battery saver or a low battery, looked at every 30 s.
     saving: bool,
     saving_at: Option<Instant>,
+    /// Rain or ash: every particle as x, y, vx, vy, life (−1 a drop, > 0 a droplet's seconds
+    /// left, 0 free), in one array made once; the window's size it was made for; the path text
+    /// (kept, cleared and refilled each frame); the bass now.
+    rain: Vec<f32>,
+    rain_size: (f32, f32),
+    rain_path: String,
+    rain_time: f32,
+    bass_now: f32,
     repeat_one: bool,
     /// Repeat all: at the end of the list it starts over.
     repeat_all: bool,
@@ -458,6 +466,11 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         perf_at: Instant::now(),
         saving: false,
         saving_at: None,
+        rain: vec![0.0; RAIN_POOL * 5],
+        rain_size: (0.0, 0.0),
+        rain_path: String::with_capacity(RAIN_POOL * 32),
+        rain_time: 0.0,
+        bass_now: 0.0,
         repeat_one: false,
         repeat_all: false,
         lyrics: None,
@@ -1616,7 +1629,14 @@ fn animations(st: &Shared) {
                 let st2 = st.clone();
                 s.clock_timer.start(slint::TimerMode::Repeated, d, move || clock_tick(&st2));
             }
-            None => s.clock_timer.stop(),
+            None => {
+                s.clock_timer.stop();
+                // The rain stops with the clock: none left hanging.
+                s.rain_size = (0.0, 0.0);
+                if let Some(ui) = s.ui.upgrade() {
+                    ui.global::<App>().set_drops(SharedString::new());
+                }
+            }
         }
     }
     // The badge, once a second.
@@ -1644,7 +1664,132 @@ fn animations(st: &Shared) {
     }
 }
 
+/// At most this many rain or ash particles (drops first, the rest free for splashes).
+const RAIN_POOL: usize = 120;
+
+/// One frame of rain or ash: drops fall (faster with the bass); in RyM Wide one that reaches the
+/// player bar's top bursts into 2–3 droplets that bounce (higher with the bass), land and slide
+/// off its ends. Writes every particle into one path for the window to draw at once.
+fn rain_step(s: &mut State, ash: bool, size: (f32, f32), bar_top: Option<f32>, dt: f32) {
+    let (w, h) = size;
+    let mut seed = (s.rain_time.to_bits() as u64) ^ 0x9e37_79b9_7f4a_7c15;
+    let mut rand = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f32 / (1u64 << 53) as f32
+    };
+    let drops = if ash { 50 } else { 75 };
+    let fall = if ash { h * 0.06 } else { h * 0.9 };
+    if s.rain_size != size {
+        s.rain_size = size;
+        for i in 0..RAIN_POOL {
+            let p = &mut s.rain[i * 5..i * 5 + 5];
+            if i < drops {
+                p.copy_from_slice(&[rand() * w, rand() * h, if ash { 0.0 } else { -0.04 * fall }, fall * (0.8 + rand() * 0.4), -1.0]);
+            } else {
+                p[4] = 0.0;
+            }
+        }
+    }
+    s.rain_time += dt;
+    let t = s.rain_time;
+    let b = s.bass_now.clamp(0.0, 1.0);
+    for i in 0..RAIN_POOL {
+        let o = i * 5;
+        let life = s.rain[o + 4];
+        if life == 0.0 {
+            continue;
+        }
+        let y0 = s.rain[o + 1];
+        if life < 0.0 {
+            let vx = if ash { (t * 0.8 + i as f32).sin() * 12.0 } else { s.rain[o + 2] };
+            s.rain[o] += vx * dt;
+            s.rain[o + 1] += s.rain[o + 3] * (1.0 + b * if ash { 0.5 } else { 0.8 }) * dt;
+            let (x, y) = (s.rain[o], s.rain[o + 1]);
+            let hit = bar_top.is_some_and(|top| y0 < top && y >= top);
+            if hit {
+                let top = bar_top.unwrap_or(h);
+                let want = 2 + (rand() * 2.0) as usize;
+                let mut made = 0;
+                for j in 0..RAIN_POOL {
+                    if made == want {
+                        break;
+                    }
+                    let q = j * 5;
+                    if s.rain[q + 4] != 0.0 {
+                        continue;
+                    }
+                    let side = if rand() < 0.5 { 1.0 } else { -1.0 };
+                    s.rain[q..q + 5].copy_from_slice(&[x, top - 1.0, side * (20.0 + rand() * 50.0), -(25.0 + rand() * 35.0) * (1.0 + b * 1.5), 1.6]);
+                    made += 1;
+                }
+            }
+            if hit || y > h {
+                s.rain[o] = rand() * w;
+                s.rain[o + 1] = -rand() * h * 0.15;
+            }
+        } else {
+            s.rain[o + 3] += 470.0 * dt;
+            s.rain[o] += s.rain[o + 2] * dt;
+            s.rain[o + 1] += s.rain[o + 3] * dt;
+            if let Some(top) = bar_top
+                && s.rain[o + 3] > 0.0
+                && y0 <= top
+                && s.rain[o + 1] >= top
+            {
+                s.rain[o + 1] = top - 1.0;
+                s.rain[o + 3] = 0.0;
+                s.rain[o + 2] *= 1.01;
+            }
+            s.rain[o + 4] = life - dt;
+            if s.rain[o + 4] <= 0.0 || s.rain[o + 1] > h || s.rain[o] < 0.0 || s.rain[o] > w {
+                s.rain[o + 4] = 0.0;
+            }
+        }
+    }
+    // The path: a streak per raindrop, a dot (a tiny round-capped line) per ash flake and droplet.
+    use std::fmt::Write as _;
+    let mut path = std::mem::take(&mut s.rain_path);
+    path.clear();
+    for i in 0..RAIN_POOL {
+        let o = i * 5;
+        let life = s.rain[o + 4];
+        if life == 0.0 {
+            continue;
+        }
+        let (x, y) = (s.rain[o], s.rain[o + 1]);
+        if life < 0.0 && !ash {
+            let _ = write!(path, "M{x:.1} {y:.1}L{:.1} {:.1}", x - s.rain[o + 2] * 0.015, y - 14.0);
+        } else {
+            let _ = write!(path, "M{x:.1} {y:.1}L{x:.1} {:.1}", y + 0.1);
+        }
+    }
+    s.rain_path = path;
+}
+
 fn clock_tick(st: &Shared) {
+    // Rain or ash, when the colors have it.
+    let falling = {
+        let s = st.borrow();
+        current_colors(&s.config).filter(|t| t.fall() > 0.0).map(|t| t.style == rymplayer::themes::Style::Ash)
+    };
+    if let (Some(ash), Some(ui)) = (falling, st.borrow().ui.upgrade()) {
+        let win = ui.window();
+        let scale = win.scale_factor().max(0.1);
+        let size = (win.size().width as f32 / scale, win.size().height as f32 / scale);
+        let k = ui.global::<Ui>().get_k();
+        let wide = ui.global::<Theme>().get_wide() && ui.global::<App>().get_page() != 0;
+        let bar_top = wide.then_some(size.1 - 80.0 * k);
+        let text = {
+            let mut s = st.borrow_mut();
+            let dt = s.last_frame.map_or(0.0, |l| l.elapsed().as_secs_f32().min(0.05));
+            rain_step(&mut s, ash, size, bar_top, dt);
+            SharedString::from(s.rain_path.as_str())
+        };
+        ui.global::<App>().set_drops_ash(ash);
+        ui.global::<App>().set_drops(text);
+    }
     let ms = {
         let mut s = st.borrow_mut();
         let now = Instant::now();
@@ -2838,13 +2983,14 @@ fn extras(st: &Shared) {
     if let Some(ui) = &ui {
         let theme = ui.global::<Theme>();
         // The heartbeat (Remorse) beats with the bass like Liquid Aurora.
-        let (aurora, vu) = (theme.get_aurora() || theme.get_heartbeat(), theme.get_vu());
+        let (aurora, vu) = (theme.get_aurora() || theme.get_heartbeat() || theme.get_falling(), theme.get_vu());
         if aurora || vu {
             let (bass, left, right) = if playing { s.audio.as_ref().map(Audio::bands).unwrap_or_default() } else { (0.0, 0.0, 0.0) };
             if aurora {
                 s.bass_peak = (s.bass_peak * 0.995).max(bass).max(0.01);
                 theme.set_energy((bass / s.bass_peak).powf(1.5).clamp(0.0, 1.0));
             }
+            s.bass_now = (bass / s.bass_peak.max(0.01)).clamp(0.0, 1.0);
             if vu {
                 let level = |x: f32| ((20.0 * x.max(1e-5).log10() + 30.0) / 30.0).clamp(0.0, 1.0);
                 theme.set_vu_l(level(left));
