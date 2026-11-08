@@ -194,7 +194,7 @@ fun Cover(url: String?, size: Dp, px: Int, corner: Dp = 8.dp, modifier: Modifier
 }
 
 @Composable
-private fun Placeholder(size: Dp, shape: RoundedCornerShape) {
+private fun Placeholder(size: Dp, shape: androidx.compose.ui.graphics.Shape) {
     Box(Modifier.size(size).clip(shape).background(Color(0xFF26262C)), contentAlignment = Alignment.Center) {
         Icon(Icons.Default.MusicNote, null, tint = Dim, modifier = Modifier.size(size * 0.4f))
     }
