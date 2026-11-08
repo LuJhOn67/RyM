@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import androidx.compose.ui.text.withStyle
 import com.rymplayer.tr
 import androidx.compose.animation.AnimatedContent
 import kotlin.math.roundToInt
@@ -403,7 +404,27 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
             }
             val color by animateColorAsState(target, tween(350), label = "line")
             Column(Modifier.fillMaxWidth().clickable { vm.player.seekTo(time) }) {
-                Text(line.ifEmpty { "♪" }, color = color, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
+                // Word by word (sources with word times): the sung line fills as it's sung.
+                val words = l.words.getOrNull(i)?.takeIf { it.isNotEmpty() && i == cur }
+                if (words != null) {
+                    val end = l.synced.getOrNull(i + 1)?.first ?: (words.last().first + 3f)
+                    var split by remember(i, l) { mutableStateOf("" to line) }
+                    LaunchedEffect(i, l, vm.player.playing) {
+                        // The exact place, a dozen times a second, only for this line.
+                        while (true) {
+                            split = com.rymplayer.data.WordTimes.sungSplit(words, end, vm.player.exactPosition())
+                            if (!vm.player.playing) break
+                            kotlinx.coroutines.delay(80)
+                        }
+                    }
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            withStyle(androidx.compose.ui.text.SpanStyle(color = Color.White)) { append(split.first) }
+                            withStyle(androidx.compose.ui.text.SpanStyle(color = Color.White.copy(alpha = 0.35f))) { append(split.second) }
+                        },
+                        fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold,
+                    )
+                } else Text(line.ifEmpty { "♪" }, color = color, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
                 // A Japanese song's English, small under the line.
                 vm.lyricsTranslation.getOrNull(i)?.takeIf { it.isNotBlank() }?.let {
                     Text(it, color = color.copy(alpha = 0.8f), fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))

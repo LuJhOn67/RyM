@@ -38,10 +38,11 @@ object Lrclib {
     }
 
     private fun toLyrics(e: JsonElement?): Lyrics? {
-        val synced = e.at("syncedLyrics").str?.let(::parseLrc).orEmpty()
+        // Enhanced LRC's word tags, when the entry has them (taken out of the lines).
+        val (synced, words) = e.at("syncedLyrics").str?.let(WordTimes::parseEnhanced) ?: (emptyList<Pair<Float, String>>() to emptyList())
         val plain = e.at("plainLyrics").str?.lines().orEmpty()
         // User-submitted: skip stub or vandalized entries.
-        return if (synced.size >= 4 || plain.size >= 4) Lyrics(synced, plain, "LRCLIB") else null
+        return if (synced.size >= 4 || plain.size >= 4) Lyrics(synced, plain, "LRCLIB").also { it.words = words } else null
     }
 
     suspend fun find(title: String, artist: String, album: String, duration: Float?): Lyrics? = runCatching { coroutineScope {

@@ -654,6 +654,8 @@ struct Ui {
     extras_key: Option<(bool, bool, String)>,
     /// When the scheduled points reset was last looked at.
     reset_checked: Option<Instant>,
+    /// Word by word: the line filling, and how much (sung and left lengths) was last shown.
+    word_fill: Option<(usize, usize, usize)>,
     /// Battery saver or a low battery, looked at every 30 s (animations stop then).
     saving: bool,
     saving_at: Option<Instant>,
@@ -1498,6 +1500,7 @@ fn build(app: &Application) {
         bass_peak: 0.05,
         extras_key: None,
         reset_checked: None,
+        word_fill: None,
         saving: false,
         saving_at: None,
         user_pick: false,
@@ -3435,6 +3438,16 @@ fn scheduled_reset(ui: &Shared) {
     toast(ui, if due == rymplayer::ram_points::Due::Date { tr("Points reset: the day you picked came") } else { tr("Points reset: a week passed") });
 }
 
+/// The label of lyric line `i` (a line is its label, or a box with the label and its translation).
+fn lyric_label(lyrics_box: &gtk::Box, i: usize) -> Option<Label> {
+    let mut child = lyrics_box.first_child();
+    for _ in 0..i {
+        child = child?.next_sibling();
+    }
+    let c = child?;
+    c.clone().downcast::<Label>().ok().or_else(|| c.first_child()?.downcast::<Label>().ok())
+}
+
 /// The RaM points line in the settings: songs with points, and the top artists.
 fn ram_summary() -> String {
     let sum = rymplayer::ram_points::summary();
@@ -4977,6 +4990,31 @@ fn tick(ui: &Shared) {
         }
     }
     let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, pos));
+    // Word by word: the sung line fills as it's sung (sources with word times): the sung part in
+    // the line's color, the rest faded; the line before goes back to plain text.
+    {
+        let fill = line.and_then(|i| {
+            let l = s.lyrics.as_ref()?;
+            let words = l.words.get(i).filter(|w| !w.is_empty())?;
+            let end = l.synced.get(i + 1).map_or(words.last().map_or(pos, |w| w.0) + 3.0, |n| n.0);
+            Some((i, rymplayer::lyrics::sung_split(words, end, pos)))
+        });
+        let key = fill.as_ref().map(|(i, (a, b))| (*i, a.len(), b.len()));
+        if key != s.word_fill {
+            if let Some((old, _, _)) = s.word_fill
+                && Some(old) != line
+                && let (Some(label), Some(text)) = (lyric_label(&s.w.lyrics_box, old), s.lyrics.as_ref().and_then(|l| l.synced.get(old)).map(|x| x.1.clone()))
+            {
+                label.set_text(&text);
+            }
+            if let Some((i, (sung, left))) = &fill
+                && let Some(label) = lyric_label(&s.w.lyrics_box, *i)
+            {
+                label.set_markup(&format!("{}<span alpha=\"35%\">{}</span>", glib::markup_escape_text(sung), glib::markup_escape_text(left)));
+            }
+            s.word_fill = key;
+        }
+    }
     if line != s.lyric_line {
         let mut child = s.w.lyrics_box.first_child();
         let mut i = 0;

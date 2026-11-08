@@ -89,15 +89,18 @@ object LyricSources {
             val header = title.isNotEmpty() && artist.isNotEmpty() && title in n && artist in n
             return !credit && !header
         }
+        // The word times go with their lines.
+        var words = if (l.words.size == l.synced.size) l.words.filterIndexed { i, _ -> keep(l.synced[i].second) } else emptyList()
         var synced = l.synced.filter { keep(it.second) }
         var plain = l.plain.filter(::keep)
         // A first line naming the artist with a dash ("Artist -<Title>"): a header, title misspelled.
         fun header(s: String) = artist.isNotEmpty() && artist in norm(s) && '-' in s
         if (synced.firstOrNull()?.let { header(it.second) } == true) {
             synced = synced.drop(1)
+            words = words.drop(1)
             if (plain.firstOrNull()?.let(::header) == true) plain = plain.drop(1)
         }
-        return l.copy(synced = synced, plain = plain)
+        return l.copy(synced = synced, plain = plain).also { it.words = words; it.translation = l.translation }
     }
 
     private fun usable(l: Lyrics) = l.takeIf { it.synced.size >= 4 || it.plain.count { s -> s.isNotBlank() } >= 4 }
@@ -111,9 +114,13 @@ object LyricSources {
         val songs = get(search.toString(), "https://music.163.com/").at("result/songs").arr
         val id = songs.firstOrNull { s -> sameSong(t, s.at("name").str.orEmpty(), num(s.at("duration"))?.let { (it / 1000).toFloat() }) }
             ?.at("id")?.let { (it as? JsonPrimitive)?.content } ?: return@withContext null
-        val answer = get("https://music.163.com/api/song/lyric?id=$id&lv=1&kv=1&tv=-1", "https://music.163.com/")
-        val synced = Lrclib.parseLrc(answer.at("lrc/lyric").str.orEmpty())
-        val l = clean(Lyrics(synced, synced.map { it.second }, NETEASE), t)
+        // v1 also sends the word-timed lyrics (YRC) when NetEase has them.
+        val answer = get("https://music.163.com/api/song/lyric/v1?id=$id&lv=1&kv=1&tv=-1&yv=1", "https://music.163.com/")
+        var synced = Lrclib.parseLrc(answer.at("lrc/lyric").str.orEmpty())
+        val (timed, timedWords) = WordTimes.parseTimed(answer.at("yrc/lyric").str.orEmpty())
+        // The word-timed lines when they're the whole song.
+        val words = if (timed.isNotEmpty() && timed.size * 10 >= synced.size * 6) timedWords.also { synced = timed } else emptyList()
+        val l = clean(Lyrics(synced, synced.map { it.second }, NETEASE).also { it.words = words }, t)
         // Its own translation (often Chinese): kept when it's English, line by line by time.
         val tr = Lrclib.parseLrc(answer.at("tlyric/lyric").str.orEmpty())
         if (Translate.isEnglish(tr.map { it.second })) l.translation = Translate.byTime(l.synced, tr)
@@ -133,6 +140,13 @@ object LyricSources {
             ?: return@withContext null
         val id = (candidate.at("id") as? JsonPrimitive)?.content ?: return@withContext null
         val key = candidate.at("accesskey").str ?: return@withContext null
+        // KRC: word by word (scrambled and packed); plain LRC when it isn't there or can't be read.
+        runCatching {
+            val krc = get("https://lyrics.kugou.com/download?ver=1&client=pc&id=$id&accesskey=$key&fmt=krc&charset=utf8").at("content").str
+            val text = krc?.let { WordTimes.decodeKrc(java.util.Base64.getMimeDecoder().decode(it)) }
+            val (lines, words) = WordTimes.parseTimed(text.orEmpty())
+            if (lines.isNotEmpty()) usable(clean(Lyrics(lines, lines.map { it.second }, KUGOU).also { it.words = words }, t)) else null
+        }.getOrNull()?.let { return@withContext it }
         val content = get("https://lyrics.kugou.com/download?ver=1&client=pc&id=$id&accesskey=$key&fmt=lrc&charset=utf8").at("content").str ?: return@withContext null
         val synced = Lrclib.parseLrc(String(java.util.Base64.getMimeDecoder().decode(content), Charsets.UTF_8))
         usable(clean(Lyrics(synced, synced.map { it.second }, KUGOU), t))
