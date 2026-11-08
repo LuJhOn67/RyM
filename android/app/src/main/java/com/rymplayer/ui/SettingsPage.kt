@@ -252,6 +252,7 @@ fun SettingsPage(vm: AppViewModel) {
                 TapRow(Icons.Default.SwapHoriz, tr("Export colors"), tr("Copies these colors as JSON"), tr("Export")) { vm.exportTheme() }
                 TapRow(Icons.Default.Tune, tr("Animation frame rate"), tr("Animations stop on battery saver or under 20% · tap to change"), if (vm.fpsCap == 0) tr("As fast as the screen") else "${vm.fpsCap} FPS") { vm.cycleFps() }
                 SwitchRow(Icons.Default.Tune, tr("Performance monitor"), tr("Frames a second, frame time and memory in a corner"), vm.perfBadge) { vm.togglePerfBadge() }
+                SwitchRow(Icons.Default.GraphicEq, tr("Prefer lossless (FLAC)"), tr("Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there"), vm.preferLossless) { vm.togglePreferLossless() }
             }
             Section(tr("Sound")) {
                 val snd = vm.sound

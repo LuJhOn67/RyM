@@ -150,6 +150,8 @@ object I18n {
         "Points reset: the day you picked came" to "النقاط تصفّرت: إجا اليوم اللي اخترته",
         "Points reset: a week passed" to "النقاط تصفّرت: مر أسبوع",
         "Colors" to "الألوان",
+        "Prefer lossless (FLAC)" to "فضّل الجودة الكاملة (FLAC)",
+        "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there" to "يدوّر على الأغنية كـ FLAC بأرشيف الإنترنت أول (مجاني وقانوني)، ويوتيوب إذا ما لگاها",
         "Animation frame rate" to "سرعة رسم الحركات",
         "As fast as the screen" to "بسرعة الشاشة",
         "Animations stop on battery saver or under 20% · tap to change" to "الحركات توگف بتوفير البطارية أو تحت 20% · اضغط حتى تغيّر",

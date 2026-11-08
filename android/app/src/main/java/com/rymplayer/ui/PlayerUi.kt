@@ -252,6 +252,13 @@ fun FullPlayer(vm: AppViewModel, coverTint: Color) {
             if (colors?.vu == true) VuMeters(vuL, vuR, Modifier.padding(bottom = 10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
+                    // The gold badge: the song plays lossless (FLAC from the Internet Archive).
+                    if (p.lossless) {
+                        Text(
+                            "Hi-Res FLAC", color = Color(0xFFE6C35C), fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 4.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x1FD4AF37)).padding(horizontal = 7.dp, vertical = 2.dp),
+                        )
+                    }
                     Marquee(t.title, 22, FontWeight.Bold, Color.White)
                     Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, modifier = Modifier.clickable(enabled = com.rymplayer.data.isYouTube(t.videoId)) { vm.goArtist(t) })
                 }

@@ -248,6 +248,11 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     /** The next song was picked by hand (RaM points: its minus points go). */
     var userPick = false
 
+    /** "Prefer lossless (FLAC)": the Internet Archive's FLAC first; and whether the playing song is lossless (the gold badge). */
+    var preferLossless = false
+    var lossless by mutableStateOf(false)
+        private set
+
     fun start(list: List<Track>, start: Int) {
         if (list.isEmpty()) return
         userPick = true
@@ -335,8 +340,13 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 loading = false
                 if (sent.isSuccess) return@launch
             }
-            // A downloaded song plays from Music/RymPlayer; others stream (or play from the cache).
-            val url = Downloads.uriFor(context, t.videoId)?.toString()
+            // A downloaded song plays from Music/RymPlayer; then the Archive's FLAC when lossless is
+            // preferred and it has the song; others stream (or play from the cache).
+            val flac = if (preferLossless && com.rymplayer.data.isYouTube(t.videoId) && Downloads.uriFor(context, t.videoId) == null)
+                kotlinx.coroutines.withTimeoutOrNull(8000) { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.Lossless.find(t) } }
+            else null
+            lossless = flac != null
+            val url = flac ?: Downloads.uriFor(context, t.videoId)?.toString()
                 ?: runCatching { Streams.playable(context, t.videoId) }
                     .onFailure { if (it !is kotlinx.coroutines.CancellationException) message = "${com.rymplayer.tr("Can't play")}: ${it.message}" }
                     .getOrNull()

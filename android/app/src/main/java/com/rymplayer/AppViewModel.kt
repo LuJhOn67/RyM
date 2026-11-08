@@ -301,6 +301,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         choosePalette(names[(names.indexOf(palette).coerceAtLeast(0) + 1) % names.size])
     }
 
+    /** "Prefer lossless (FLAC)": the Internet Archive's FLAC first, YouTube when it isn't there. */
+    var preferLossless by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("prefer_lossless", false).also { player.preferLossless = it })
+        private set
+
+    fun togglePreferLossless() {
+        preferLossless = !preferLossless
+        player.preferLossless = preferLossless
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("prefer_lossless", preferLossless).apply()
+    }
+
     /** Animations' frames a second (0: as fast as the screen) and the performance badge. */
     var fpsCap by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("fps_cap", 60).also { com.rymplayer.ui.animFps = it })
         private set
