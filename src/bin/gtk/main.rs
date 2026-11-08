@@ -391,6 +391,9 @@ fn colors_css(theme: usize, t: &rymplayer::themes::Theme) -> String {
     if t.glow {
         css.push_str(&format!(" .np-art {{ box-shadow: 0 0 34px {}; }}", soft(&t.accent, 0.55)));
     }
+    if t.muted {
+        css.push_str(" .np-art { filter: grayscale(85%); }");
+    }
     if t.cover_border {
         css.push_str(&format!(" .np-art {{ border: 2px solid {}; }}", c(&t.accent)));
     }

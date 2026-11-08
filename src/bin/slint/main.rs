@@ -1648,7 +1648,7 @@ fn pal_of(t: &rymplayer::themes::Theme) -> Pal {
         glass: t.glass,
         dot_clock: t.dot_clock,
         vu: t.vu,
-        rain: t.style == rymplayer::themes::Style::Rain,
+        fall: t.fall(),
         pattern: t.tile().map(to_image).unwrap_or_default(),
     }
 }
@@ -3535,7 +3535,12 @@ fn handle(st: &Shared, ev: Ev) {
         }
         Ev::Art(vid, art) => {
             let current = st.borrow().q.now().is_some_and(|t| t.video_id == vid);
-            if current && let Some((big, soft)) = art {
+            if current && let Some((mut big, mut soft)) = art {
+                // Remorse: the cover loses its color.
+                if current_colors(&st.borrow().config).is_some_and(|t| t.muted) {
+                    rymplayer::themes::mute(&mut big.2);
+                    rymplayer::themes::mute(&mut soft.2);
+                }
                 let from_cover = cover_color(&big);
                 let accent = st.borrow().config.accent_from_cover.then_some(from_cover).flatten();
                 let lights = rymplayer::themes::cover_colors(&big.2, 4);
@@ -3958,7 +3963,10 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     app.set_has_song(true);
     app.set_title("Seasons".into());
     app.set_artist("Rival x Cadmium, feat. Harley Bird".into());
-    let cover = art(70, 60, 170);
+    let mut cover = art(70, 60, 170);
+    if preset.as_ref().is_some_and(|t| t.muted) {
+        rymplayer::themes::mute(&mut cover.2);
+    }
     let lights = rymplayer::themes::cover_colors(&cover.2, 4);
     let color = |c: (u8, u8, u8)| slint::Color::from_rgb_u8(c.0, c.1, c.2);
     if let [l1, l2, l3, l4] = lights[..] {

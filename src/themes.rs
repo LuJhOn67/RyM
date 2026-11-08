@@ -34,6 +34,8 @@ pub enum Style {
     Aqua,
     /// Stars.
     Stars,
+    /// Grey ash falling slowly.
+    Ash,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -69,6 +71,8 @@ pub struct Theme {
     pub dot_clock: bool,
     /// Two needle meters (left and right) by the song.
     pub vu: bool,
+    /// The covers lose most of their color (Remorse).
+    pub muted: bool,
 }
 
 impl Default for Theme {
@@ -92,6 +96,7 @@ impl Default for Theme {
             glass: 0.0,
             dot_clock: false,
             vu: false,
+            muted: false,
         }
     }
 }
@@ -131,6 +136,9 @@ pub fn presets() -> Vec<Theme> {
         Theme { glass: 0.35, ..theme("Aqua Glass", false, ["#dff6ff", "#ffffffb0", "#073b4c", "#2f6f80", "#0b6e8a", "#00b894", "#48dbfb", "#a8e6f0", "#ffffffcc"], Aqua, 1.0) },
         theme("Manga Ink", false, ["#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"], Halftone, 0.0),
         theme("Tactical Olive", true, ["#1d2117", "#2a2f22", "#d9dcc6", "#9aa08a", "#c8cdb0", "#8fbf3f", "#c3e86a", "#3b4230", "#5b6448"], Scanlines, 0.3),
+        // Sadness and guilt: a grey winter night, a lowered voice, an old wound's faded wine, ash
+        // falling slowly, and covers that lost their color.
+        Theme { muted: true, ..theme("Remorse", true, ["#15171c", "#1e2128", "#c9ccd3", "#7d828d", "#a9adb6", "#8c4a52", "#b0868b", "#2a2e36", "#3a3f4a80"], Ash, 0.6) },
     ]
 }
 
@@ -188,6 +196,15 @@ impl Theme {
         serde_json::from_str::<Theme>(text).map_err(|e| e.to_string())?.check()
     }
 
+    /// How fast the pattern falls while music plays (pixels a millisecond; 0 = it stays).
+    pub fn fall(&self) -> f32 {
+        match self.style {
+            Style::Rain => 0.09,
+            Style::Ash => 0.012,
+            _ => 0.0,
+        }
+    }
+
     /// The pattern's small picture (RGBA, `w` × `h`), repeated over the window; `None`: plain.
     pub fn tile(&self) -> Option<(u32, u32, Vec<u8>)> {
         let (r, g, b, _) = rgba(&self.text)?;
@@ -203,6 +220,7 @@ impl Theme {
             Style::Hud => (64, 64),
             Style::Aqua => (120, 120),
             Style::Stars => (160, 160),
+            Style::Ash => (150, 150),
         });
         let mut seed = 0x9e37_79b9_u32;
         let mut rand = move || {
@@ -274,6 +292,13 @@ impl Theme {
                     }
                 }
             }
+            Style::Ash => {
+                for _ in 0..16 {
+                    let (x, y) = ((rand() % 150) as f32, (rand() % 150) as f32);
+                    let rad = 0.7 + (rand() % 10) as f32 / 8.0;
+                    t.disc(x, y, rad, (r, g, b), 35 + (rand() % 55) as u8);
+                }
+            }
             Style::Plain | Style::Glass => {}
         }
         Some((t.w, t.h, t.px))
@@ -322,6 +347,16 @@ impl Tile {
     }
 }
 
+/// Takes most of the color out of a picture (RGBA), as Remorse shows the covers.
+pub fn mute(rgba: &mut [u8]) {
+    for p in rgba.chunks_exact_mut(4) {
+        let grey = 0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32;
+        for c in &mut p[..3] {
+            *c = (*c as f32 * 0.15 + grey * 0.85) as u8;
+        }
+    }
+}
+
 /// The cover's `n` main colors (lively ones first), for the moving backdrop. Grey covers give
 /// shades of their grey.
 pub fn cover_colors(rgba: &[u8], n: usize) -> Vec<(u8, u8, u8)> {
@@ -361,7 +396,7 @@ mod tests {
     #[test]
     fn eleven_presets_with_good_colors_and_patterns() {
         let all = presets();
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 12);
         for t in &all {
             let checked = t.clone().check().unwrap_or_else(|e| panic!("{}: {e}", t.name));
             assert_eq!(&checked, t);
@@ -381,6 +416,17 @@ mod tests {
         assert_eq!((partial.accent.as_str(), partial.round, partial.bg.as_str()), ("#ff0000", 1.0, "#343345"));
         assert!(Theme::from_json(r#"{"bg": "red"}"#).unwrap_err().contains("bg"));
         assert!(Theme::from_json("not json").is_err());
+    }
+
+    #[test]
+    fn remorse_mutes_covers_and_its_ash_falls_slowly() {
+        let t = preset("Remorse").unwrap();
+        assert!(t.muted && t.style == Style::Ash);
+        assert!(t.fall() > 0.0 && t.fall() < preset("Lo-Fi Rain").unwrap().fall());
+        let mut px = vec![220, 30, 30, 255];
+        mute(&mut px);
+        let spread = px[..3].iter().max().unwrap() - px[..3].iter().min().unwrap();
+        assert!(spread < 40, "{px:?}");
     }
 
     #[test]

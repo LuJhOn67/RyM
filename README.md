@@ -3,7 +3,7 @@
 # RyM
 
 **An ad-free YouTube Music player for Windows, Linux and Android, written in Rust.**
-Your own account and library, synced lyrics, smart suggestions, eleven color themes, and a sound
+Your own account and library, synced lyrics, smart suggestions, twelve color themes, and a sound
 engine that mixes songs like a DJ.
 
 [**العربية**](#بالعربية) · [**Download**](../../releases/latest) · [Screenshots](#screenshots) · [Build](#build)
@@ -16,7 +16,7 @@ engine that mixes songs like a DJ.
 
 | App | Platform | What it is |
 |---|---|---|
-| **RyM Slint** | Windows, Linux | The main window app: the playing song beside Up next, similar songs and the artist's songs. Three layouts (Dusk, Mist, Wide) and eleven color themes. |
+| **RyM Slint** | Windows, Linux | The main window app: the playing song beside Up next, similar songs and the artist's songs. Three layouts (Dusk, Mist, Wide) and twelve color themes. |
 | **RyM for Android** | Android 10+ | The phone app (Kotlin, Jetpack Compose), in `android/`. |
 | **RyM GTK** | Linux | A GTK 4 window app, with the same color themes. |
 | **RyM** | Windows, Linux | The same player in the terminal. |
@@ -36,7 +36,7 @@ settings and plugins.
 |---|---|
 | ![Lyrics](docs/screenshots/slint-lyrics.jpg) | ![Home](docs/screenshots/slint-home.jpg) |
 
-### The eleven color themes
+### The twelve color themes
 
 | OLED Black | Frosted Glass | Tactical Beige |
 |---|---|---|
@@ -45,8 +45,8 @@ settings and plugins.
 | ![Stellar Neon](docs/screenshots/theme-stellar-neon.jpg) | ![Dot Matrix](docs/screenshots/theme-dot-matrix.jpg) | ![Hi-Fi Rack](docs/screenshots/theme-hi-fi-rack.jpg) |
 | **Cyber HUD** | **Lo-Fi Rain** | **Aqua Glass** |
 | ![Cyber HUD](docs/screenshots/theme-cyber-hud.jpg) | ![Lo-Fi Rain](docs/screenshots/theme-lo-fi-rain.jpg) | ![Aqua Glass](docs/screenshots/theme-aqua-glass.jpg) |
-| **Manga Ink** | **Tactical Olive** | |
-| ![Manga Ink](docs/screenshots/theme-manga-ink.jpg) | ![Tactical Olive](docs/screenshots/theme-tactical-olive.jpg) | |
+| **Manga Ink** | **Tactical Olive** | **Remorse** |
+| ![Manga Ink](docs/screenshots/theme-manga-ink.jpg) | ![Tactical Olive](docs/screenshots/theme-tactical-olive.jpg) | ![Remorse](docs/screenshots/theme-remorse.jpg) |
 
 ### Extras
 
@@ -92,7 +92,8 @@ settings and plugins.
 - Plays songs as YouTube sends them (Opus first, the best format it has), with no re-encoding.
 
 **Looks**
-- Three layouts on the PC (Dusk, Mist, Wide) and **eleven color themes**, the same on every app: OLED Black, Frosted Glass, Tactical Beige, Stellar Neon, Dot Matrix, Hi-Fi Rack, Cyber HUD, Lo-Fi Rain, Aqua Glass, Manga Ink and Tactical Olive.
+- Three layouts on the PC (Dusk, Mist, Wide) and **twelve color themes**: OLED Black, Frosted Glass, Tactical Beige, Stellar Neon, Dot Matrix, Hi-Fi Rack, Cyber HUD, Lo-Fi Rain, Aqua Glass, Manga Ink, Tactical Olive and Remorse. The first eleven are on every app; Remorse is on the PC for now.
+- **Remorse**, for sadness and guilt: a grey winter night, a lowered voice, an old wound's faded wine, ash falling slowly, and a cover that lost its color.
 - **Liquid Aurora**: the cover's four main colors glow behind everything and pulse with the bass.
 - **Vinyl record**: the cover turns like a record, faster with Nightcore and slower with Slowed.
 - Needle meters (Hi-Fi Rack), dot-matrix digits (Dot Matrix), frosted glass over the cover, and glowing frames in the cover's color.
@@ -182,7 +183,7 @@ cd android && ./gradlew assembleRelease                                         
 ## بالعربية
 
 **RyM** مشغّل لـ YouTube Music بلا إعلانات، يعمل على ويندوز ولينكس وأندرويد، ومكتوب بلغة Rust. يتيح لك
-حسابك ومكتبتك، وكلمات أغانٍ متزامنة، واقتراحات ذكية، وأحد عشر ثيمًا لونيًا، ومحرّك صوت يدمج الأغاني
+حسابك ومكتبتك، وكلمات أغانٍ متزامنة، واقتراحات ذكية، واثني عشر ثيمًا لونيًا، ومحرّك صوت يدمج الأغاني
 كما يفعل منسّقو الموسيقى.
 
 [التنزيل](../../releases/latest) · [الصور](#screenshots)
@@ -191,7 +192,7 @@ cd android && ./gradlew assembleRelease                                         
 
 | التطبيق | النظام | الوصف |
 |---|---|---|
-| **RyM Slint** | ويندوز، لينكس | التطبيق الرئيسي: الأغنية الحالية بجانب قائمة «التالي» والأغاني المشابهة وأغاني الفنان نفسه، بثلاث واجهات (Dusk وMist وWide) وأحد عشر ثيمًا لونيًا. |
+| **RyM Slint** | ويندوز، لينكس | التطبيق الرئيسي: الأغنية الحالية بجانب قائمة «التالي» والأغاني المشابهة وأغاني الفنان نفسه، بثلاث واجهات (Dusk وMist وWide) واثني عشر ثيمًا لونيًا. |
 | **RyM للهاتف** | أندرويد 10 فأحدث | تطبيق الهاتف (Kotlin وJetpack Compose)، في مجلد `android/`. |
 | **RyM GTK** | لينكس | تطبيق نوافذ بـ GTK 4، بالثيمات اللونية نفسها. |
 | **RyM** | ويندوز، لينكس | المشغّل نفسه داخل الطرفية. |
@@ -225,7 +226,8 @@ cd android && ./gradlew assembleRelease                                         
 - يشغّل الأغاني كما يرسلها YouTube (بصيغة Opus أولًا، وهي أفضل ما يقدّمه) دون إعادة ترميز.
 
 **المظهر**
-- ثلاث واجهات على الحاسوب (Dusk وMist وWide)، و**أحد عشر ثيمًا لونيًا** متطابقة في كل التطبيقات: OLED Black وFrosted Glass وTactical Beige وStellar Neon وDot Matrix وHi-Fi Rack وCyber HUD وLo-Fi Rain وAqua Glass وManga Ink وTactical Olive.
+- ثلاث واجهات على الحاسوب (Dusk وMist وWide)، و**اثنا عشر ثيمًا لونيًا**: OLED Black وFrosted Glass وTactical Beige وStellar Neon وDot Matrix وHi-Fi Rack وCyber HUD وLo-Fi Rain وAqua Glass وManga Ink وTactical Olive وRemorse. الأحد عشر الأولى متوفرة في كل التطبيقات، وRemorse على الحاسوب حاليًا.
+- **Remorse** للحزن والشعور بالذنب: ليلة شتاء رمادية، وصوت خافت، ولون نبيذي باهت كجرح قديم، ورماد يتساقط ببطء، وغلاف فقد ألوانه.
 - **الشفق السائل (Liquid Aurora)**: تتوهج ألوان الغلاف الأربعة الرئيسية خلف الواجهة وتنبض مع الجهير.
 - **الأسطوانة**: يدور الغلاف كأسطوانة، أسرع مع Nightcore وأبطأ مع Slowed.
 - عدّادات بإبرة (Hi-Fi Rack)، وأرقام نقطية (Dot Matrix)، وزجاج ضبابي فوق الغلاف، وإطارات متوهجة بلون الغلاف.

@@ -85,7 +85,8 @@ export struct Pal {
     glass: float,
     dot-clock: bool,
     vu: bool,
-    rain: bool,
+    // How fast the pattern falls (pixels a millisecond; 0: it stays).
+    fall: float,
     pattern: image,
 }
 
@@ -100,7 +101,7 @@ export global Theme {
     out property <bool> glow: custom && p.glow;
     out property <float> glass: custom ? p.glass : 0;
     out property <bool> vu: custom && p.vu;
-    out property <bool> rain: custom && p.rain;
+    out property <bool> falling: custom && p.fall > 0;
     out property <bool> cover-border: custom && p.cover-border;
     out property <bool> has-pattern: custom && p.pattern.width > 0;
     out property <string> clock-font: custom && p.dot-clock ? "Doto" : "Roboto";
@@ -346,8 +347,8 @@ component Backdrop inherits Rectangle {
     }
     if Theme.has-pattern: Image {
         property <length> tile: Theme.p.pattern.height * 1px;
-        // Rain runs down; the other patterns stay.
-        y: Theme.rain && App.playing ? Math.mod(animation-tick() / 1ms * 0.09, Theme.p.pattern.height) * 1px - self.tile : 0;
+        // Rain runs down and ash drifts down; the other patterns stay.
+        y: Theme.falling && App.playing ? Math.mod(animation-tick() / 1ms * Theme.p.fall, Theme.p.pattern.height) * 1px - self.tile : 0;
         width: 100%;
         height: parent.height + self.tile;
         source: Theme.p.pattern;
