@@ -113,6 +113,9 @@ pub struct Config {
     /// The user's own theme (imported from a `.json` file).
     #[serde(default)]
     pub custom_theme: Option<crate::themes::Theme>,
+    /// "Prefer lossless (FLAC)": the Internet Archive's FLAC first, YouTube when it isn't there.
+    #[serde(default)]
+    pub prefer_lossless: bool,
     /// Animations' frames a second (24 to 240; 0: as fast as the screen).
     #[serde(default = "fps_cap")]
     pub fps_cap: u32,
@@ -315,6 +318,7 @@ impl Default for Config {
             ui_zoom: 0.85,
             only_kind: String::new(),
             accent_from_cover: false,
+            prefer_lossless: false,
             fps_cap: fps_cap(),
             perf_badge: false,
             ram_reset_date: String::new(),

@@ -985,6 +985,7 @@ fn build(app: &Application) {
     // Arabic: the whole window reads right to left.
     gtk::Widget::set_default_direction(if config.arabic { gtk::TextDirection::Rtl } else { gtk::TextDirection::Ltr });
     stream::use_source(config.source);
+    stream::prefer_lossless(config.prefer_lossless);
     stream::download_best(config.download_best);
     stream::download_parallel(config.download_connections, config.download_piece_mb);
 
@@ -3561,6 +3562,19 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Animation frame rate"), "", &fps));
+    let lossless = gtk::Switch::new();
+    lossless.set_active(config.prefer_lossless);
+    lossless.set_valign(Align::Center);
+    {
+        let ui = ui.clone();
+        lossless.connect_active_notify(move |w| {
+            let mut s = ui.borrow_mut();
+            s.config.prefer_lossless = w.is_active();
+            stream::prefer_lossless(w.is_active());
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Prefer lossless (FLAC)"), tr("Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there"), &lossless));
     for (title, about, on, set) in [
         (tr("Liquid Aurora"), tr("The cover's colors move behind everything with the bass"), config.aurora, (|c: &mut Config, on| c.aurora = on) as fn(&mut Config, bool)),
         (tr("Vinyl record"), tr("The cover turns like a record: faster with Nightcore, slower with Slowed"), config.vinyl, |c: &mut Config, on| c.vinyl = on),
@@ -4658,7 +4672,9 @@ fn play_at(ui: &Shared, i: usize) {
     if in_vlc {
         post(ui, async move { Ev::InVlc(id, stream::link(&vid).await) });
     } else {
-        post(ui, async move { Ev::Fetched(id, stream::open(vid).await) });
+        // FLAC first when "Prefer lossless" is on and the Internet Archive has the song.
+        let song = track.clone();
+        post(ui, async move { Ev::Fetched(id, stream::open_track(song).await) });
     }
     if let Some(api) = api.clone() {
         // Tells YouTube Music it was played (history, recommendations); nothing waits for it.

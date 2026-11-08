@@ -316,6 +316,7 @@ fn main() {
     rymplayer::i18n::set_arabic(config.arabic);
     rymplayer::fx::set(config.fx());
     stream::use_source(config.source);
+    stream::prefer_lossless(config.prefer_lossless);
     stream::download_best(config.download_best);
     stream::download_parallel(config.download_connections, config.download_piece_mb);
 
@@ -1263,6 +1264,7 @@ fn fill_settings(st: &Shared) {
         choice("glass-blur", "Glass blur", format!("{}", c.glass_blur.round())),
         choice("fps", "Animation frame rate", if c.fps_cap == 0 { t("As fast as the screen") } else { format!("{} FPS", c.fps_cap) }),
         switch("perf", "Performance monitor", "Frames a second, frame time and memory in a corner", c.perf_badge),
+        switch("lossless", "Prefer lossless (FLAC)", "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there", c.prefer_lossless),
         button("theme-export", "Export colors", t("Saves these colors as a .json file in Downloads"), "Export"),
         button("theme-import", "Import colors", t("A .json theme file (its path), or the JSON itself"), "Import"),
         choice("zoom", "App size", format!("{}%", (c.ui_zoom * 100.0).round())),
@@ -1353,6 +1355,10 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "accent" => c.accent_from_cover = on,
             "aurora" => c.aurora = on,
             "perf" => c.perf_badge = on,
+            "lossless" => {
+                c.prefer_lossless = on;
+                stream::prefer_lossless(on);
+            }
             // Turned on only after the warning (see `ask_weekly_reset`).
             "ram-weekly" if !on => c.ram_weekly_reset = false,
             "ram-weekly" => {}
@@ -2658,7 +2664,9 @@ fn play_at(st: &Shared, i: usize) {
         post(async move { Ev::InVlc(id, stream::link(&vid).await) });
     } else {
         rymplayer::vlc::stop(&mut st.borrow_mut().vlc);
-        post(async move { Ev::Fetched(id, stream::open(vid).await) });
+        // FLAC first when "Prefer lossless" is on and the Internet Archive has the song.
+        let song = track.clone();
+        post(async move { Ev::Fetched(id, stream::open_track(song).await) });
     }
     if let Some(api) = api.clone() {
         let vid = track.video_id.clone();
@@ -3957,6 +3965,11 @@ fn handle(st: &Shared, ev: Ev) {
                 return;
             }
             s.loading = false;
+            // The gold badge: lossless (FLAC from the Archive, or a FLAC file on this computer).
+            let flac = result.as_ref().is_ok_and(stream::is_lossless);
+            if let Some(ui) = s.ui.upgrade() {
+                ui.global::<App>().set_lossless(flac);
+            }
             let Some(t) = s.q.now().cloned() else { return };
             let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
             let resume = s.resume_at.take().filter(|(id, at)| *id == t.video_id && *at > 1.0).map(|(_, at)| at);

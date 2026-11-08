@@ -75,6 +75,13 @@ static SOURCE: AtomicU8 = AtomicU8::new(0);
 /// Downloads in the best quality through yt-dlp (else the playback file); set from the settings.
 static DOWNLOAD_BEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// "Prefer lossless (FLAC)": the Internet Archive's FLAC first, when it has the song.
+static LOSSLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn prefer_lossless(on: bool) {
+    LOSSLESS.store(on, Ordering::Relaxed);
+}
+
 pub fn download_best(best: bool) {
     DOWNLOAD_BEST.store(best, Ordering::Relaxed);
 }
@@ -95,7 +102,7 @@ pub fn cached(video_id: &str) -> Option<PathBuf> {
         return p.is_file().then_some(p);
     }
     let dir = cache_dir();
-    ["webm", "m4a", "opus", "mp4", "mp3"]
+    ["flac", "webm", "m4a", "opus", "mp4", "mp3"]
         .iter()
         .map(|ext| dir.join(format!("{video_id}.{ext}")))
         .find(|p| p.exists())
@@ -111,6 +118,32 @@ pub fn cached_duration(video_id: &str) -> Option<f32> {
 pub enum Playable {
     File(PathBuf),
     Arriving(crate::arriving::Arriving),
+}
+
+/// Opens a song, as FLAC first when "Prefer lossless" is on and the Internet Archive has it (kept
+/// in the cache like any song); YouTube otherwise.
+pub async fn open_track(t: crate::api::Track) -> Result<Playable> {
+    if LOSSLESS.load(Ordering::Relaxed) && crate::is_youtube(&t.video_id) {
+        let path = cache_dir().join(format!("{}.flac", t.video_id));
+        if path.is_file() {
+            return Ok(Playable::File(path));
+        }
+        if let Ok(Some(f)) = tokio::time::timeout(std::time::Duration::from_secs(8), crate::lossless::find(&t)).await {
+            let _ = tokio::fs::create_dir_all(cache_dir()).await;
+            if let Ok(a) = crate::arriving::Arriving::start(f.url, Vec::new(), "flac".into(), f.secs, path).await {
+                return Ok(Playable::Arriving(a));
+            }
+        }
+    }
+    open(t.video_id).await
+}
+
+/// The song plays lossless: a FLAC file (on this computer or cached) or a FLAC stream.
+pub fn is_lossless(p: &Playable) -> bool {
+    match p {
+        Playable::File(path) => path.extension().is_some_and(|e| e.eq_ignore_ascii_case("flac")),
+        Playable::Arriving(a) => a.ext == "flac",
+    }
 }
 
 /// Opens a song for playback: the cached file, or the stream, ready after its first 128 KB (the

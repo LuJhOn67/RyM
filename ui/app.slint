@@ -193,6 +193,8 @@ export global App {
     // The animations' clock (ms), moved at the chosen frame rate only while something animates
     // (playing, the window in front, no battery saver): still otherwise, so nothing is redrawn.
     in property <float> clock;
+    // The song plays lossless (FLAC): a gold badge by the title.
+    in property <bool> lossless;
     // Rain or ash falling over the window: every particle in one path (drawn at once), from Rust.
     in property <string> drops;
     in property <bool> drops-ash;
@@ -1114,6 +1116,22 @@ component Lyrics inherits Rectangle {
     }
 }
 
+// A gold "FLAC" badge: the playing song is lossless.
+component FlacBadge inherits Rectangle {
+    height: 26px * Ui.k;
+    width: flac-label.preferred-width + 14px * Ui.k;
+    border-radius: 6px * Ui.k * Theme.round;
+    border-width: 1px;
+    border-color: #d4af37;
+    background: #d4af371f;
+    flac-label := Text {
+        text: "Hi-Res FLAC";
+        font-size: 12px * Ui.k;
+        font-weight: 700;
+        color: #e6c35c;
+    }
+}
+
 // The speed by the heart: what it is, and a list to pick another.
 component SpeedButton inherits Rectangle {
     in property <length> size: 44px * Ui.k;
@@ -1360,7 +1378,11 @@ component NowPlaying inherits Rectangle {
                 Rectangle { width: 124px * Ui.k; }
             }
         }
-        // On the artist's line, at its right end: the speed, then the heart.
+        // On the artist's line, at its right end: the FLAC badge, the speed, then the heart.
+        if App.lossless: FlacBadge {
+            x: speed.x - self.width - 8px * Ui.k;
+            y: 681px * Ui.k;
+        }
         speed := SpeedButton {
             x: heart.x - self.width - 10px * Ui.k;
             y: 672px * Ui.k;
@@ -2087,6 +2109,7 @@ component WatchPage inherits Rectangle {
                     }
                     if App.sleep-text != "": Text { text: "☾ " + App.sleep-text; font-size: 14px * Ui.k; color: Theme.accent; horizontal-alignment: Ui.start; }
                 }
+                if App.lossless: VerticalLayout { alignment: center; FlacBadge { } }
                 VerticalLayout { alignment: center; SpeedButton { size: 40px * Ui.k; } }
                 for b in [
                     { id: 0, icon: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"), label: App.tr("Like") },
