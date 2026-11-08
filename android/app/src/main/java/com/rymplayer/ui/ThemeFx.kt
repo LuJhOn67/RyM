@@ -46,6 +46,12 @@ import kotlin.math.log10
 import kotlin.math.min
 import kotlin.math.sin
 
+/** A drawing only once its size is real (0 or NaN right after unlocking drew stray lines). */
+private fun ready(s: androidx.compose.ui.geometry.Size) = s.width.isFinite() && s.height.isFinite() && s.width > 1f && s.height > 1f
+
+/** A level that is a real number between 0 and 1. */
+private fun Float.safe() = if (isFinite()) coerceIn(0f, 1f) else 0f
+
 /** Dot-matrix digits for the times (Dot Matrix theme; Doto, SIL OFL). */
 val DotDigits = FontFamily(Font(com.rymplayer.R.font.doto, FontWeight.ExtraBold))
 
@@ -100,7 +106,8 @@ fun Aurora(lights: List<Color>, energy: Float, playing: Boolean, dark: Boolean, 
         while (playing) withFrameNanos { now -> if (last > 0) t += (now - last) / 1e9f / 6f; last = now }
     }
     Canvas(modifier.fillMaxSize()) {
-        val alpha = (if (dark) 0.5f else 0.4f) * (0.55f + e * 0.45f)
+        if (!ready(size)) return@Canvas
+        val alpha = (if (dark) 0.5f else 0.4f) * (0.55f + e.safe() * 0.45f)
         listOf(Triple(0.18f, 0.22f, 0.8f), Triple(0.84f, 0.2f, 0.7f), Triple(0.28f, 0.86f, 0.75f), Triple(0.82f, 0.8f, 0.65f)).forEachIndexed { i, (bx, by, s) ->
             val r = min(size.width, size.height) * s * (1f + e * 0.4f) * 0.35f
             val c = Offset(size.width * (bx + sin(t + i * 1.7f) * 0.05f), size.height * (by + cos(t * 0.8f + i * 2.3f) * 0.05f))
@@ -120,6 +127,7 @@ fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, 
     }
     Box(modifier.size(side), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
+            if (!ready(size)) return@Canvas
             val r = size.minDimension / 2
             if (glow != null) drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.55f), Color.Transparent), center, r * 1.15f), r * 1.15f)
             drawCircle(Color(0xFF0C0C0D), r)
@@ -127,6 +135,7 @@ fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, 
         }
         Box(Modifier.size(side * 0.4f).clip(CircleShape).rotate(angle)) { Cover(url, side * 0.4f, 480, 0.dp) }
         Canvas(Modifier.fillMaxSize()) {
+            if (!ready(size)) return@Canvas
             val r = size.minDimension / 2
             drawCircle(Color(0xFF0C0C0D), r * 0.0175f)
             drawCircle(Brush.linearGradient(0.28f to Color.Transparent, 0.46f to Color.White.copy(alpha = 0.09f), 0.55f to Color.Transparent, 0.82f to Color.White.copy(alpha = 0.05f), 0.9f to Color.Transparent, start = Offset.Zero, end = Offset(size.width, size.height)), r)
@@ -142,6 +151,7 @@ fun VuMeters(left: Float, right: Float, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth().height(64.dp)) {
         for ((level, name) in listOf(l to "L", r to "R")) {
             Canvas(Modifier.weight(1f).fillMaxSize().padding(horizontal = 4.dp)) {
+                if (!ready(size)) return@Canvas
                 drawRect(Brush.verticalGradient(listOf(Color(0xFFF4ECD4), Color(0xFFDDD0AD))))
                 drawRect(Color(0xFF0D0D0D), style = Stroke(2.dp.toPx()))
                 val p = Offset(size.width / 2, size.height * 0.96f)
@@ -151,7 +161,7 @@ fun VuMeters(left: Float, right: Float, modifier: Modifier = Modifier) {
                     val len = (if (k >= 8) 11 else 7).dp.toPx()
                     drawLine(if (k >= 8) Color(0xFFC0392B) else Color(0xFF2B2B2B), Offset(p.x + sin(a) * reach, p.y - cos(a) * reach), Offset(p.x + sin(a) * (reach - len), p.y - cos(a) * (reach - len)), 2.dp.toPx())
                 }
-                val a = Math.toRadians(-50.0 + level * 100).toFloat()
+                val a = Math.toRadians(-50.0 + level.safe() * 100).toFloat()
                 drawLine(Color(0xFF161616), p, Offset(p.x + sin(a) * size.height * 0.86f, p.y - cos(a) * size.height * 0.86f), 2.dp.toPx(), StrokeCap.Round)
                 drawCircle(Color(0xFF161616), 5.dp.toPx(), p)
                 drawContext.canvas.nativeCanvas.drawText(name, 8.dp.toPx(), size.height - 6.dp.toPx(), android.graphics.Paint().apply { textSize = 11.dp.toPx(); color = 0xFF5A5A5A.toInt(); isAntiAlias = true })

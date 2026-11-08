@@ -135,7 +135,7 @@ fun MiniPlayer(vm: AppViewModel, tint: Color) {
             }
             val dur = p.duration
             LinearProgressIndicator(
-                progress = { if (dur > 0) (p.position / dur).coerceIn(0f, 1f) else 0f },
+                progress = { played(p.position, dur) },
                 modifier = Modifier.fillMaxWidth().height(2.dp),
                 color = Color.White,
                 trackColor = Color.Transparent,
@@ -160,7 +160,7 @@ fun MiniPlayer(vm: AppViewModel, tint: Color) {
         }
         val dur = p.duration
         LinearProgressIndicator(
-            progress = { if (dur > 0) (p.position / dur).coerceIn(0f, 1f) else 0f },
+            progress = { played(p.position, dur) },
             modifier = Modifier.fillMaxWidth().height(2.dp),
             color = Color.White,
             trackColor = Color.White.copy(alpha = 0.15f),
@@ -262,10 +262,22 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
                     }
                 }
             }
-            val dur = p.duration
-            var dragging by remember { mutableStateOf<Float?>(null) }
+            val dur = p.duration.takeIf { it.isFinite() && it > 0f } ?: 0f
+            // A new song forgets an old drag.
+            var dragging by remember(t.videoId) { mutableStateOf<Float?>(null) }
+            // Locking the screen mid-touch cancels the drag without "finished": the thumb (a white
+            // line) stayed stuck where the finger was while the song went on. Leaving forgets it.
+            val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            androidx.compose.runtime.DisposableEffect(lifecycle) {
+                val watch = androidx.lifecycle.LifecycleEventObserver { _, e ->
+                    if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP || e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) dragging = null
+                }
+                lifecycle.lifecycle.addObserver(watch)
+                onDispose { lifecycle.lifecycle.removeObserver(watch) }
+            }
+            val shown = (dragging ?: p.position).takeIf { it.isFinite() } ?: 0f
             Slider(
-                value = (dragging ?: p.position).coerceIn(0f, dur.coerceAtLeast(1f)),
+                value = shown.coerceIn(0f, dur.coerceAtLeast(1f)),
                 onValueChange = { dragging = it },
                 onValueChangeFinished = { dragging?.let(p::seekTo); dragging = null },
                 valueRange = 0f..dur.coerceAtLeast(1f),
@@ -307,6 +319,10 @@ fun FullPlayer(vm: AppViewModel, tint: Color) {
     }
     }
 }
+
+/** How much of the song has played (0 to 1); 0 until both numbers are real (right after unlocking). */
+private fun played(position: Float, duration: Float): Float =
+    if (duration > 0f && duration.isFinite() && position.isFinite()) (position / duration).coerceIn(0f, 1f) else 0f
 
 @Composable
 private fun PanelButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
