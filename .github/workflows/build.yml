@@ -116,8 +116,8 @@ jobs:
           KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
         run: |
           if [ -n "$KEYSTORE" ]; then
-            mkdir -p ~/.android
-            echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+            echo "RYM_DEBUG_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
           fi
 
       - name: Tests and APK

@@ -29,6 +29,11 @@ android {
     // youtubedl-android unpacks Python and yt-dlp from its native libraries at run time.
     packaging { jniLibs { useLegacyPackaging = true } }
 
+    // The Actions hand over the PC's signing key (a repository secret) by its path, so their APK
+    // installs over the ones built on the PC; without it, the usual debug key.
+    System.getenv("RYM_DEBUG_KEYSTORE")?.takeIf { file(it).isFile }?.let { path ->
+        signingConfigs.getByName("debug") { storeFile = file(path) }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
