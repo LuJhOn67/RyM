@@ -402,13 +402,22 @@ fn colors_css(theme: usize, t: &rymplayer::themes::Theme) -> String {
         let px = (t.round * 12.0).round();
         css.push_str(&format!(" button, entry, .card, .tile, popover > contents, .pill, image, picture {{ border-radius: {px}px; }}"));
     }
-    // The pattern, as a picture repeated behind the window.
+    // The pattern, as a picture repeated behind the window, and the darkened edges (Remorse).
+    let mut layers = Vec::new();
     if let Some((w, h, px)) = t.tile() {
         let file = rymplayer::data_dir().join("theme-pattern.png");
         if image::RgbaImage::from_raw(w, h, px).is_some_and(|img| img.save(&file).is_ok()) {
             let url = file.to_string_lossy().replace('\\', "/");
-            css.push_str(&format!(" window.background {{ background-image: url(\"file://{url}\"); background-repeat: repeat; }}"));
+            layers.push((format!("url(\"file://{url}\")"), "repeat"));
         }
+    }
+    if t.vignette {
+        layers.push(("radial-gradient(circle, rgba(0,0,0,0) 40%, rgba(0,0,0,0.66) 100%)".to_string(), "no-repeat"));
+    }
+    if !layers.is_empty() {
+        let images: Vec<&str> = layers.iter().map(|(i, _)| i.as_str()).collect();
+        let repeats: Vec<&str> = layers.iter().map(|(_, r)| *r).collect();
+        css.push_str(&format!(" window.background {{ background-image: {}; background-repeat: {}; }}", images.join(", "), repeats.join(", ")));
     }
     css
 }

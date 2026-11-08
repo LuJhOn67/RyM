@@ -107,7 +107,7 @@ private fun patternBrush(t: com.rymplayer.data.Themes.Theme, s: Float): androidx
     fun a(c: Int, alpha: Int) = (c and 0xFFFFFF) or (alpha shl 24)
     val (w, h) = when (t.style) {
         "grid" -> 40 to 40; "dots" -> 12 to 12; "halftone" -> 14 to 14; "rain" -> 60 to 120; "scanlines" -> 4 to 4
-        "hud" -> 64 to 64; "aqua" -> 120 to 120; "stars" -> 160 to 160; else -> return null
+        "hud" -> 64 to 64; "aqua" -> 120 to 120; "stars" -> 160 to 160; "ash" -> 150 to 150; else -> return null
     }
     val bmp = android.graphics.Bitmap.createBitmap((w * s).toInt().coerceAtLeast(1), (h * s).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
     val c = android.graphics.Canvas(bmp)
@@ -126,6 +126,7 @@ private fun patternBrush(t: com.rymplayer.data.Themes.Theme, s: Float): androidx
             c.drawLine(0f, H - s / 2, k, H - s / 2, p); c.drawLine(0f, H, 0f, H - k, p); c.drawLine(W, H - s / 2, W - k, H - s / 2, p); c.drawLine(W - s / 2, H, W - s / 2, H - k, p)
         }
         "aqua" -> { p.style = android.graphics.Paint.Style.STROKE; p.color = a(-1, 80); repeat(5) { c.drawCircle(rnd.nextInt(w) * s, rnd.nextInt(h) * s, (3 + rnd.nextInt(9)) * s, p) } }
+        "ash" -> repeat(16) { p.color = a(text, 35 + rnd.nextInt(55)); c.drawCircle(rnd.nextInt(w) * s, rnd.nextInt(h) * s, (0.7f + rnd.nextInt(10) / 8f) * s, p) }
         "stars" -> repeat(26) { p.color = a(if (rnd.nextInt(4) == 0) acc else text, 50 + rnd.nextInt(150)); c.drawCircle(rnd.nextInt(w) * s, rnd.nextInt(h) * s, 0.8f * s, p) }
     }
     return androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(bmp.asImageBitmap(), androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated))
@@ -155,18 +156,27 @@ fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = nu
     val density = androidx.compose.ui.platform.LocalDensity.current.density
     val brush = remember(colors, density) { colors?.let { patternBrush(it, density) } }
     MaterialTheme(colorScheme = scheme) {
-        Box(Modifier.fillMaxSize().drawWithContent { drawContent(); brush?.let { drawRect(it) } }) { content() }
+        val vignette = colors?.vignette == true
+        Box(Modifier.fillMaxSize().drawWithContent {
+            drawContent()
+            brush?.let { drawRect(it) }
+            if (vignette && size.minDimension > 1f) {
+                drawRect(androidx.compose.ui.graphics.Brush.radialGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f), center = center, radius = size.maxDimension * 0.62f))
+            }
+        }) { content() }
     }
 }
 
 /** Cover art with a rounded corner and a note placeholder while it loads. */
 @Composable
-fun Cover(url: String?, size: Dp, px: Int, corner: Dp = 8.dp, modifier: Modifier = Modifier) {
+fun Cover(url: String?, size: Dp, px: Int, corner: Dp = 8.dp, modifier: Modifier = Modifier, muted: Boolean = false) {
     val shape = RoundedCornerShape(corner)
     SubcomposeAsyncImage(
         model = ImageRequest.Builder(LocalContext.current).data(thumbSized(url, px)).crossfade(250).build(),
         contentDescription = null,
         contentScale = ContentScale.Crop,
+        // Remorse: the cover keeps 30% of its color.
+        colorFilter = if (muted) androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.3f) }) else null,
         modifier = modifier.size(size).clip(shape),
         loading = { Placeholder(size, shape) },
         error = { Placeholder(size, shape) },

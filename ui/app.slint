@@ -87,6 +87,9 @@ export struct Pal {
     vu: bool,
     // How fast the pattern falls (pixels a millisecond; 0: it stays).
     fall: float,
+    // Darkened edges, and a slow glow beating with the bass (Remorse).
+    vignette: bool,
+    heartbeat: bool,
     pattern: image,
 }
 
@@ -102,6 +105,8 @@ export global Theme {
     out property <float> glass: custom ? p.glass : 0;
     out property <bool> vu: custom && p.vu;
     out property <bool> falling: custom && p.fall > 0;
+    out property <bool> vignette: custom && p.vignette;
+    out property <bool> heartbeat: custom && p.heartbeat;
     out property <bool> cover-border: custom && p.cover-border;
     out property <bool> has-pattern: custom && p.pattern.width > 0;
     out property <string> clock-font: custom && p.dot-clock ? "Doto" : "Roboto";
@@ -338,8 +343,25 @@ component Aurora inherits Rectangle {
     }
 }
 
+// A slow, heavy glow in the accent, beating with the bass (Remorse).
+component Heartbeat inherits Rectangle {
+    property <float> e: Theme.energy;
+    animate e { duration: 650ms; easing: ease-out; }
+    Rectangle {
+        width: min(parent.width, parent.height) * (0.85 + root.e * 0.3);
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: @radial-gradient(circle, Theme.accent.with-alpha(0.08 + root.e * 0.3) 0%, Theme.accent.with-alpha(0) 70%);
+    }
+}
+
 // Behind everything: the cover through frosted glass, Liquid Aurora, and the theme's pattern.
 component Backdrop inherits Rectangle {
+    if Theme.heartbeat: Heartbeat {
+        width: 100%;
+        height: 100%;
+    }
     if Theme.glass > 0: Image {
         width: 100%;
         height: 100%;
@@ -360,6 +382,10 @@ component Backdrop inherits Rectangle {
         source: Theme.p.pattern;
         horizontal-tiling: repeat;
         vertical-tiling: repeat;
+    }
+    // The edges darken (Remorse).
+    if Theme.vignette: Rectangle {
+        background: @radial-gradient(circle, #00000000 40%, #000000a8 100%);
     }
 }
 

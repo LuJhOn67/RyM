@@ -1726,6 +1726,8 @@ fn pal_of(t: &rymplayer::themes::Theme) -> Pal {
         dot_clock: t.dot_clock,
         vu: t.vu,
         fall: t.fall(),
+        vignette: t.vignette,
+        heartbeat: t.heartbeat,
         pattern: t.tile().map(to_image).unwrap_or_default(),
     }
 }
@@ -2706,7 +2708,8 @@ fn extras(st: &Shared) {
     // Liquid Aurora pulses with the bass; the needle meters follow left and right.
     if let Some(ui) = &ui {
         let theme = ui.global::<Theme>();
-        let (aurora, vu) = (theme.get_aurora(), theme.get_vu());
+        // The heartbeat (Remorse) beats with the bass like Liquid Aurora.
+        let (aurora, vu) = (theme.get_aurora() || theme.get_heartbeat(), theme.get_vu());
         if aurora || vu {
             let (bass, left, right) = if playing { s.audio.as_ref().map(Audio::bands).unwrap_or_default() } else { (0.0, 0.0, 0.0) };
             if aurora {

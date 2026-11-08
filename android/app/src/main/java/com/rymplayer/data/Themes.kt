@@ -29,6 +29,10 @@ object Themes {
         val glass: Float = 0f,
         val dotClock: Boolean = false,
         val vu: Boolean = false,
+        /** The cover loses 70% of its color, the edges darken, and a slow glow beats with the bass (Remorse). */
+        val muted: Boolean = false,
+        val vignette: Boolean = false,
+        val heartbeat: Boolean = false,
     ) {
         fun toJson(): String = JSONObject().apply {
             put("name", name); put("dark", dark)
@@ -36,6 +40,7 @@ object Themes {
             put("accent", accent); put("accent2", accent2); put("bar", bar); put("border", border)
             put("style", style); put("round", round.toDouble()); put("glow", glow); put("cover_border", coverBorder)
             put("glass", glass.toDouble()); put("dot_clock", dotClock); put("vu", vu)
+            put("muted", muted); put("vignette", vignette); put("heartbeat", heartbeat)
         }.toString(2)
     }
 
@@ -55,6 +60,9 @@ object Themes {
         t("Aqua Glass", false, listOf("#dff6ff", "#ffffffb0", "#073b4c", "#2f6f80", "#0b6e8a", "#00b894", "#48dbfb", "#a8e6f0", "#ffffffcc"), "aqua", 1f).copy(glass = 0.35f),
         t("Manga Ink", false, listOf("#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"), "halftone", 0f),
         t("Tactical Olive", true, listOf("#1d2117", "#2a2f22", "#d9dcc6", "#9aa08a", "#c8cdb0", "#8fbf3f", "#c3e86a", "#3b4230", "#5b6448"), "scanlines", 0.3f),
+        // Sadness and guilt: an abyssal slate night, cold mist, dried crimson, ash, darkened edges, a slow heartbeat, colorless covers.
+        t("Remorse", true, listOf("#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"), "ash", 0.6f)
+            .copy(muted = true, vignette = true, heartbeat = true),
     )
 
     fun preset(name: String): Theme? = presets.firstOrNull { it.name == name }
@@ -89,6 +97,7 @@ object Themes {
             glow = o.optBoolean("glow", false), coverBorder = o.optBoolean("cover_border", false),
             glass = o.optDouble("glass", 0.0).toFloat().coerceIn(0f, 1f),
             dotClock = o.optBoolean("dot_clock", false), vu = o.optBoolean("vu", false),
+            muted = o.optBoolean("muted", false), vignette = o.optBoolean("vignette", false), heartbeat = o.optBoolean("heartbeat", false),
         )
         for ((field, value) in listOf("bg" to t.bg, "raised" to t.raised, "text" to t.text, "dim" to t.dim, "icon" to t.icon, "accent" to t.accent, "accent2" to t.accent2, "bar" to t.bar, "border" to t.border)) {
             if (argb(value) == null) throw IllegalArgumentException("$field: \"$value\" is not a color like #12ab34")

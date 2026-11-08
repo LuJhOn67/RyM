@@ -119,7 +119,7 @@ fun Aurora(lights: List<Color>, energy: Float, playing: Boolean, dark: Boolean, 
 
 /** The cover as a record: grooves, the cover as its label turning while it plays (33⅓ rpm × [speed]). */
 @Composable
-fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, modifier: Modifier = Modifier) {
+fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, modifier: Modifier = Modifier, muted: Boolean = false) {
     var angle by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(playing, speed) {
         var last = 0L
@@ -133,13 +133,24 @@ fun Vinyl(url: String?, side: Dp, playing: Boolean, speed: Float, glow: Color?, 
             drawCircle(Color(0xFF0C0C0D), r)
             for (i in 0 until 10) drawCircle(Color.White.copy(alpha = if (i % 3 == 0) 0.13f else 0.055f), r * (0.97f - i * 0.052f), style = Stroke(1f))
         }
-        Box(Modifier.size(side * 0.4f).clip(CircleShape).rotate(angle)) { Cover(url, side * 0.4f, 480, 0.dp) }
+        Box(Modifier.size(side * 0.4f).clip(CircleShape).rotate(angle)) { Cover(url, side * 0.4f, 480, 0.dp, muted = muted) }
         Canvas(Modifier.fillMaxSize()) {
             if (!ready(size)) return@Canvas
             val r = size.minDimension / 2
             drawCircle(Color(0xFF0C0C0D), r * 0.0175f)
             drawCircle(Brush.linearGradient(0.28f to Color.Transparent, 0.46f to Color.White.copy(alpha = 0.09f), 0.55f to Color.Transparent, 0.82f to Color.White.copy(alpha = 0.05f), 0.9f to Color.Transparent, start = Offset.Zero, end = Offset(size.width, size.height)), r)
         }
+    }
+}
+
+/** A slow, heavy glow in the accent that beats with the bass (Remorse). */
+@Composable
+fun Heartbeat(accent: Color, bass: Float, modifier: Modifier = Modifier) {
+    val e by animateFloatAsState(bass.safe(), tween(650), label = "heartbeat")
+    Canvas(modifier.fillMaxSize()) {
+        if (!ready(size)) return@Canvas
+        val r = size.minDimension * (0.45f + e * 0.15f)
+        drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.08f + e * 0.3f), accent.copy(alpha = 0f)), center, r), r, center)
     }
 }
 

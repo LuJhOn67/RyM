@@ -155,7 +155,7 @@ object I18n {
         "Vinyl record" to "أسطوانة",
         "The cover turns like a record: faster with Nightcore, slower with Slowed" to "الغلاف يدور مثل الأسطوانة: أسرع ويا Nightcore وأبطأ ويا Slowed",
         "The layout's own" to "ألوان الواجهة نفسها",
-        "11 looks, the same as on the PC · tap to change" to "11 شكل، نفس اللي بالحاسبة · اضغط حتى تغيّر",
+        "12 looks, the same as on the PC · tap to change" to "12 شكل، نفس اللي بالحاسبة · اضغط حتى تغيّر",
         "Import colors" to "استيراد ألوان",
         "Export colors" to "تصدير الألوان",
         "Copy a theme's JSON (from the PC's export), then tap here" to "انسخ JSON الثيم (من التصدير بالحاسبة) وبعدين اضغط هنا",

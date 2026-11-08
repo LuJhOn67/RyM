@@ -8,7 +8,10 @@ import org.junit.Test
 class ThemesTest {
     @Test
     fun elevenPresetsWithGoodColors() {
-        assertEquals(11, Themes.presets.size)
+        assertEquals(12, Themes.presets.size)
+        val remorse = Themes.preset("Remorse")!!
+        assertTrue(remorse.muted && remorse.vignette && remorse.heartbeat && remorse.style == "ash")
+        assertEquals("#8c2d38", remorse.accent)
         for (t in Themes.presets) for (c in listOf(t.bg, t.raised, t.text, t.dim, t.icon, t.accent, t.accent2, t.bar, t.border)) assertNotNull("${t.name}: $c", Themes.argb(c))
     }
 

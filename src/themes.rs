@@ -73,6 +73,10 @@ pub struct Theme {
     pub vu: bool,
     /// The covers lose most of their color (Remorse).
     pub muted: bool,
+    /// The screen's edges darken.
+    pub vignette: bool,
+    /// A slow, heavy glow in the accent that beats with the bass.
+    pub heartbeat: bool,
 }
 
 impl Default for Theme {
@@ -97,6 +101,8 @@ impl Default for Theme {
             dot_clock: false,
             vu: false,
             muted: false,
+            vignette: false,
+            heartbeat: false,
         }
     }
 }
@@ -136,9 +142,14 @@ pub fn presets() -> Vec<Theme> {
         Theme { glass: 0.35, ..theme("Aqua Glass", false, ["#dff6ff", "#ffffffb0", "#073b4c", "#2f6f80", "#0b6e8a", "#00b894", "#48dbfb", "#a8e6f0", "#ffffffcc"], Aqua, 1.0) },
         theme("Manga Ink", false, ["#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"], Halftone, 0.0),
         theme("Tactical Olive", true, ["#1d2117", "#2a2f22", "#d9dcc6", "#9aa08a", "#c8cdb0", "#8fbf3f", "#c3e86a", "#3b4230", "#5b6448"], Scanlines, 0.3),
-        // Sadness and guilt: a grey winter night, a lowered voice, an old wound's faded wine, ash
-        // falling slowly, and covers that lost their color.
-        Theme { muted: true, ..theme("Remorse", true, ["#15171c", "#1e2128", "#c9ccd3", "#7d828d", "#a9adb6", "#8c4a52", "#b0868b", "#2a2e36", "#3a3f4a80"], Ash, 0.6) },
+        // Sadness and guilt: an abyssal slate night, cold mist, dried crimson like an old wound, ash
+        // falling slowly, darkened edges, a slow heavy heartbeat, and covers that lost their color.
+        Theme {
+            muted: true,
+            vignette: true,
+            heartbeat: true,
+            ..theme("Remorse", true, ["#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"], Ash, 0.6)
+        },
     ]
 }
 
@@ -347,12 +358,12 @@ impl Tile {
     }
 }
 
-/// Takes most of the color out of a picture (RGBA), as Remorse shows the covers.
+/// Takes 70% of the color out of a picture (RGBA), as Remorse shows the covers.
 pub fn mute(rgba: &mut [u8]) {
     for p in rgba.chunks_exact_mut(4) {
         let grey = 0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32;
         for c in &mut p[..3] {
-            *c = (*c as f32 * 0.15 + grey * 0.85) as u8;
+            *c = (*c as f32 * 0.3 + grey * 0.7) as u8;
         }
     }
 }
@@ -421,12 +432,14 @@ mod tests {
     #[test]
     fn remorse_mutes_covers_and_its_ash_falls_slowly() {
         let t = preset("Remorse").unwrap();
-        assert!(t.muted && t.style == Style::Ash);
+        assert!(t.muted && t.vignette && t.heartbeat && t.style == Style::Ash);
+        assert_eq!((t.bg.as_str(), t.raised.as_str(), t.accent.as_str(), t.dim.as_str()), ("#0b0d12", "#14171f", "#8c2d38", "#5c6b73"));
         assert!(t.fall() > 0.0 && t.fall() < preset("Lo-Fi Rain").unwrap().fall());
         let mut px = vec![220, 30, 30, 255];
         mute(&mut px);
         let spread = px[..3].iter().max().unwrap() - px[..3].iter().min().unwrap();
-        assert!(spread < 40, "{px:?}");
+        // 70% of the color goes: red 220 → about 127, the rest about 70.
+        assert!(spread < 70 && spread > 40, "{px:?}");
     }
 
     #[test]
