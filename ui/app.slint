@@ -193,6 +193,8 @@ export global App {
     // The animations' clock (ms), moved at the chosen frame rate only while something animates
     // (playing, the window in front, no battery saver): still otherwise, so nothing is redrawn.
     in property <float> clock;
+    // Windows 11's glass (Mica / Acrylic) shows through the window: the backgrounds go see-through.
+    in property <bool> see-through;
     // The song plays lossless (FLAC): a gold badge by the title.
     in property <bool> lossless;
     // Rain or ash falling over the window: every particle in one path (drawn at once), from Rust.
@@ -403,7 +405,7 @@ component Backdrop inherits Rectangle {
         width: 100%;
         height: 100%;
     }
-    if Theme.glass > 0: Image {
+    if Theme.glass > 0 && !App.see-through: Image {
         width: 100%;
         height: 100%;
         source: App.backdrop;
@@ -1241,7 +1243,7 @@ component SideButtons inherits VerticalLayout {
 }
 
 component NowPlaying inherits Rectangle {
-    background: Theme.glass > 0 ? Theme.raised : Theme.bg;
+    background: App.see-through ? Theme.bg.with-alpha(0.45) : (Theme.glass > 0 ? Theme.raised : Theme.bg);
     border-top-right-radius: (Ui.rtl ? 0 : 34px * Ui.k) * Theme.round;
     border-bottom-right-radius: (Ui.rtl ? 0 : 34px * Ui.k) * Theme.round;
     border-top-left-radius: (Ui.rtl ? 34px * Ui.k : 0) * Theme.round;
@@ -2270,7 +2272,8 @@ export component AppWindow inherits Window {
     preferred-height: 870px;
     min-width: 900px;
     min-height: 600px;
-    background: Theme.bg;
+    // Windows 11's glass shows through a see-through background.
+    background: App.see-through ? Theme.bg.with-alpha(0.2) : Theme.bg;
     default-font-family: "Roboto";
     property <float> scale: max(0.5, min(1.4, min(self.width / 1600px, self.height / 1024px))) * Ui.zoom;
     changed scale => { Ui.k = self.scale; }

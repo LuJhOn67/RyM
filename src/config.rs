@@ -113,6 +113,10 @@ pub struct Config {
     /// The user's own theme (imported from a `.json` file).
     #[serde(default)]
     pub custom_theme: Option<crate::themes::Theme>,
+    /// Windows 11's glass behind the window: 0 off, 1 Mica (the wallpaper's colors), 2 Acrylic
+    /// (what's behind the window, blurred).
+    #[serde(default)]
+    pub window_glass: u8,
     /// "Prefer lossless (FLAC)": the Internet Archive's FLAC first, YouTube when it isn't there.
     #[serde(default)]
     pub prefer_lossless: bool,
@@ -318,6 +322,7 @@ impl Default for Config {
             ui_zoom: 0.85,
             only_kind: String::new(),
             accent_from_cover: false,
+            window_glass: 0,
             prefer_lossless: false,
             fps_cap: fps_cap(),
             perf_badge: false,

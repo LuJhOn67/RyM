@@ -360,6 +360,15 @@ fn main() {
         ui.window().on_close_requested(move || close_requested(&st));
     }
     let _ = ui.show();
+    // Windows 11's glass, once the window exists (`--glass mica|acrylic` tries it for one run).
+    let glass = match args.iter().position(|a| a == "--glass").and_then(|i| args.get(i + 1)).map(String::as_str) {
+        Some("mica") => 1,
+        Some("acrylic") => 2,
+        _ => st.borrow().config.window_glass,
+    };
+    if glass > 0 {
+        window_glass(&ui, glass);
+    }
     start_tray(&st);
     // Runs on while the window is hidden in the tray; Quit ends it.
     let _ = slint::run_event_loop_until_quit();
@@ -1262,6 +1271,7 @@ fn fill_settings(st: &Shared) {
         switch("aurora", "Liquid Aurora", "The cover's colors move behind everything with the bass", c.aurora),
         switch("vinyl", "Vinyl record", "The cover turns like a record: faster with Nightcore, slower with Slowed", c.vinyl),
         choice("glass-blur", "Glass blur", format!("{}", c.glass_blur.round())),
+        choice("window-glass", "Windows glass", t(["Off", "Mica", "Acrylic"][c.window_glass.min(2) as usize])),
         choice("fps", "Animation frame rate", if c.fps_cap == 0 { t("As fast as the screen") } else { format!("{} FPS", c.fps_cap) }),
         switch("perf", "Performance monitor", "Frames a second, frame time and memory in a corner", c.perf_badge),
         switch("lossless", "Prefer lossless (FLAC)", "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there", c.prefer_lossless),
@@ -1459,6 +1469,17 @@ fn choose(st: &Shared, id: &str, step: i32) {
             set_colors(st, &name);
             return;
         }
+        "window-glass" => {
+            let kind = {
+                let mut s = st.borrow_mut();
+                s.config.window_glass = cycle(s.config.window_glass.min(2) as usize, 3) as u8;
+                s.config.save();
+                s.config.window_glass
+            };
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                window_glass(&ui, kind);
+            }
+        }
         "fps" => {
             const STEPS: [u32; 7] = [24, 30, 60, 120, 144, 240, 0];
             let mut s = st.borrow_mut();
@@ -1603,6 +1624,43 @@ fn set_text(st: &Shared, id: &str, text: &str) {
         _ => return,
     }
     s.config.save();
+}
+
+/// Windows 11's glass behind the window (0 off, 1 Mica, 2 Acrylic): DWM draws it, and the window's
+/// backgrounds go see-through so it shows. Elsewhere it does nothing.
+fn window_glass(ui: &AppWindow, kind: u8) {
+    #[cfg(windows)]
+    {
+        use slint::winit_030::WinitWindowAccessor;
+        use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        #[link(name = "dwmapi")]
+        unsafe extern "system" {
+            fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const i32, size: u32) -> i32;
+            fn DwmExtendFrameIntoClientArea(hwnd: isize, margins: *const [i32; 4]) -> i32;
+        }
+        ui.window().with_winit_window(|w| {
+            if let Ok(h) = w.window_handle()
+                && let RawWindowHandle::Win32(h) = h.as_raw()
+            {
+                let hwnd = h.hwnd.get();
+                // DWMWA_SYSTEMBACKDROP_TYPE: 1 none, 2 Mica, 3 Acrylic.
+                let backdrop: i32 = match kind {
+                    1 => 2,
+                    2 => 3,
+                    _ => 1,
+                };
+                let margins = if kind > 0 { [-1; 4] } else { [0; 4] };
+                // SAFETY: the window's own handle, and values that outlive the calls.
+                unsafe {
+                    DwmExtendFrameIntoClientArea(hwnd, &margins);
+                    DwmSetWindowAttribute(hwnd, 38, &backdrop, 4);
+                }
+            }
+        });
+        ui.global::<App>().set_see_through(kind > 0);
+    }
+    #[cfg(not(windows))]
+    let _ = (ui, kind);
 }
 
 /// One clock for every animation (rain and ash, Liquid Aurora's drift, the record): it moves at

@@ -204,6 +204,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Other music folders" => "مجلدات موسيقى ثانية",
         "Reset all points" => "تصفير كل النقاط",
         "Colors" => "الألوان",
+        "Windows glass" => "زجاج ويندوز",
         "Prefer lossless (FLAC)" => "فضّل الجودة الكاملة (FLAC)",
         "Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there" => "يدوّر على الأغنية كـ FLAC بأرشيف الإنترنت أول (مجاني وقانوني)، ويوتيوب إذا ما لگاها",
         "Add a folder" => "أضف مجلد",
