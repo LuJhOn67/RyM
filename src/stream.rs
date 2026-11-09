@@ -84,6 +84,7 @@ pub fn prefer_lossless(on: bool) {
 
 pub fn download_best(best: bool) {
     DOWNLOAD_BEST.store(best, Ordering::Relaxed);
+    crate::innertube::prefer_best(best);
 }
 
 /// Which way songs are fetched; the apps call this with their setting.
@@ -173,7 +174,16 @@ pub async fn open(video_id: String) -> Result<Playable> {
         {
             return Ok(a);
         }
-        start(innertube_link(&video_id).await?).await
+        // A kept link that no longer opens: forgotten, and another client asked.
+        let a = crate::innertube::audio(&video_id).await?;
+        match start(found_of(&a)).await {
+            Ok(x) => Ok(x),
+            Err(e) => {
+                crate::innertube::forget(&video_id);
+                let b = crate::innertube::audio_skipping(&video_id, std::slice::from_ref(&a.client)).await.map_err(|y| anyhow!("{}: {e}; {y}", a.client))?;
+                start(found_of(&b)).await
+            }
+        }
     };
     let arriving = match SOURCE.load(Ordering::Relaxed) {
         1 => start(ytdlp_link(&video_id).await?).await?,
@@ -190,8 +200,11 @@ pub async fn open(video_id: String) -> Result<Playable> {
 
 /// The InnerTube link for a song with the header its stream wants, its file type and length.
 async fn innertube_link(video_id: &str) -> Result<Found> {
-    let a = crate::innertube::audio(video_id).await?;
-    Ok((a.url, vec![("User-Agent".to_string(), a.user_agent.to_string())], a.ext.to_string(), a.seconds))
+    Ok(found_of(&crate::innertube::audio(video_id).await?))
+}
+
+fn found_of(a: &crate::innertube::Audio) -> Found {
+    (a.url.clone(), vec![("User-Agent".to_string(), a.user_agent.to_string())], a.ext.to_string(), a.seconds)
 }
 
 /// A song's direct link and the headers to send with it, for an outside player (VLC).

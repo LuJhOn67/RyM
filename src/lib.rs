@@ -13,6 +13,7 @@ pub mod fonts;
 pub mod fx;
 pub mod i18n;
 pub mod innertube;
+pub mod ytjs;
 pub mod likes;
 pub mod local;
 pub mod login;

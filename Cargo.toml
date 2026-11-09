@@ -22,6 +22,8 @@ tao = { version = "0.37.2", optional = true }
 tokio = { version = "1.54.1", features = ["full"] }
 flate2 = "1"
 sha2 = "0.10"
+sha1 = "0.11"
+url = "2"
 wry = { version = "0.57.1", optional = true }
 # The YouTube Music API library (its crates.io name is ytmapi-rs).
 music_api = { package = "ytmapi-rs", version = "0.3.3", features = ["reqwest"] }
