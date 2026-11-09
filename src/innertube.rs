@@ -161,6 +161,30 @@ pub fn prefer_best(on: bool) {
     BEST.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+fn premium_file() -> std::path::PathBuf {
+    crate::data_dir().join("innertube-premium.txt")
+}
+
+/// The account got the 256 kbps stream (Premium) from YouTube Music's player: it's asked first
+/// from then on, whatever the setting (kept between runs; signing out forgets it).
+fn premium_seen() -> bool {
+    premium_file().exists() && account("https://music.youtube.com").is_some()
+}
+
+/// Signing out (another account may not be Premium).
+pub fn forget_account() {
+    let _ = std::fs::remove_file(premium_file());
+    if let Ok(mut l) = links().lock() {
+        l.clear();
+    }
+}
+
+fn note_premium(itag: u64) {
+    if itag == 774 && !premium_file().exists() {
+        let _ = std::fs::write(premium_file(), "774");
+    }
+}
+
 fn remembered_file() -> std::path::PathBuf {
     crate::data_dir().join("innertube-client.txt")
 }
@@ -260,6 +284,14 @@ fn order() -> Vec<Way> {
     }
     let last = remembered().lock().ok().and_then(|r| r.clone());
     if let Some(i) = last.and_then(|l| ways.iter().position(|w| w.name() == l)) {
+        let w = ways.remove(i);
+        ways.insert(0, w);
+    }
+    // "Best quality" asked for, or the account is Premium: YouTube Music's player stays first,
+    // before the one that worked last (that one gave 160 kbps and kept 256 from ever being asked).
+    if (BEST.load(std::sync::atomic::Ordering::Relaxed) || premium_seen())
+        && let Some(i) = ways.iter().position(|w| *w == Way::Music)
+    {
         let w = ways.remove(i);
         ways.insert(0, w);
     }
@@ -414,6 +446,9 @@ async fn web_player(way: Way, video_id: &str) -> Result<Audio> {
         }
     }
     let mut a = audio_of(f, url, ua);
+    if way == Way::Music {
+        note_premium(a.itag);
+    }
     a.client = way.name();
     a.loudness_db = loudness_of(&v, f);
     Ok(a)

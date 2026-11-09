@@ -2301,6 +2301,7 @@ fn set_zoom(st: &Shared, z: f32) {
 // ---------------------------------------------------------------- account, home, search
 
 fn sign_out(st: &Shared) {
+    rymplayer::innertube::forget_account();
     let _ = std::fs::remove_file(cookie_path());
     {
         let mut s = st.borrow_mut();
