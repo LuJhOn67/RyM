@@ -1,6 +1,7 @@
 package com.rymplayer.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -133,10 +134,21 @@ class MusicApi(private val cookie: String?) {
         if (t.inBody) post(endpoint, JsonObject(base + ("continuation" to kotlinx.serialization.json.JsonPrimitive(t.value))))
         else post(endpoint, base, "&ctoken=${t.value}&continuation=${t.value}&type=next")
 
-    /** Songs found for [q] (the first page), and where the next page starts. */
-    suspend fun searchPaged(q: String): Paged {
-        val page = post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) })
-        return Paged(songRows(page), nextToken(page)?.let { More.Search(q, it) })
+    /**
+     * Songs found for [q] (the first page) and where the next page starts, then YouTube videos
+     * (songs that are only on YouTube, not on YouTube Music), each once. Both asked at once; one
+     * failing still gives the other.
+     */
+    suspend fun searchPaged(q: String): Paged = kotlinx.coroutines.coroutineScope {
+        val songs = async { runCatching { post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }) } }
+        val videos = async { runCatching { post("search", buildJsonObject { put("query", q); put("params", VIDEOS_FILTER) }) } }
+        val songPage = songs.await()
+        val videoPage = videos.await()
+        val found = songPage.getOrNull()?.let { songRows(it) }.orEmpty().toMutableList()
+        val seen = found.map { it.videoId }.toHashSet()
+        videoPage.getOrNull()?.let { page -> songRows(page).filter { seen.add(it.videoId) }.forEach { found += if (it.album.endsWith("views") || it.album.endsWith("view")) it.copy(album = "") else it } }
+        if (found.isEmpty()) songPage.getOrThrow().also { videoPage.getOrThrow() }
+        Paged(found, songPage.getOrNull()?.let { nextToken(it) }?.let { More.Search(q, it) })
     }
 
     /** A playlist's first page, and where the next page starts. */
@@ -457,6 +469,7 @@ class MusicApi(private val cookie: String?) {
         private const val FALLBACK_VERSION = "1.20250101.01.00"
         /** The "Songs" filter of the search page. */
         private const val SONGS_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA=="
+        private const val VIDEOS_FILTER = "EgWKAQIQAWoKEAkQChAFEAMQBA=="
         /** The "Artists" filter of the search page. */
         private const val ARTISTS_FILTER = "EgWKAQIgAWoKEAkQChAFEAMQBA=="
         private val DURATION = Regex("""^\d+(:\d\d)+$""")

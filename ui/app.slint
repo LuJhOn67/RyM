@@ -661,6 +661,34 @@ component SongRow inherits Rectangle {
     }
 }
 
+// Right-click on the playing song's cover: the same menu as a song in a list.
+component NowMenu inherits ContextMenuArea {
+    Menu {
+        MenuItem { title: App.tr("Start radio"); activated => { App.menu("radio", "now"); } }
+        Menu {
+            title: App.tr("Save to playlist");
+            for name[pi] in App.playlist-names: MenuItem { title: name; activated => { App.menu("save:" + pi, "now"); } }
+        }
+        MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", "now"); } }
+        MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", "now"); } }
+        MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", "now"); } }
+        MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", "now"); } }
+        MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", "now"); } }
+        MenuItem { title: App.liked ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", "now"); } }
+        MenuItem { title: App.tr("Go to artist"); activated => { App.menu("artist", "now"); } }
+        Menu {
+            title: App.tr("This artist's kind");
+            MenuItem { title: App.tr("Songs"); activated => { App.menu("kind:Songs", "now"); } }
+            MenuItem { title: App.tr("Husseini"); activated => { App.menu("kind:Husseini", "now"); } }
+            MenuItem { title: App.tr("Quran"); activated => { App.menu("kind:Quran", "now"); } }
+            MenuItem { title: App.tr("Nasheeds"); activated => { App.menu("kind:Nasheeds", "now"); } }
+            MenuItem { title: App.tr("Talks"); activated => { App.menu("kind:Talks", "now"); } }
+        }
+        MenuItem { title: App.tr("Download"); activated => { App.menu("download", "now"); } }
+        MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", "now"); } }
+    }
+}
+
 // A cover with its name under it (similar songs, the artist's songs, home shelves).
 component CardItem inherits VerticalLayout {
     in property <Card> card;
@@ -1318,6 +1346,7 @@ component NowPlaying inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { App.show-lyrics = true; }
             }
+            NowMenu { }
         }
         if !App.show-lyrics && !Theme.vinyl: Cover {
             x: 278px * Ui.k;
@@ -1334,6 +1363,7 @@ component NowPlaying inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { App.show-lyrics = true; }
             }
+            NowMenu { }
         }
         if App.show-lyrics: Lyrics {
             x: 278px * Ui.k;
@@ -2051,6 +2081,7 @@ component WatchPage inherits Rectangle {
                     height: self.width;
                     source: App.cover;
                     TouchArea { mouse-cursor: pointer; clicked => { App.show-lyrics = true; } }
+                    NowMenu { }
                 }
                 if !App.show-lyrics && !Theme.vinyl: Cover {
                     width: parent.height * 0.82;
@@ -2062,6 +2093,7 @@ component WatchPage inherits Rectangle {
                     drop-shadow-blur: Theme.glow ? 30px * Ui.k : 0;
                     drop-shadow-color: Theme.accent.with-alpha(0.55);
                     TouchArea { mouse-cursor: pointer; clicked => { App.show-lyrics = true; } }
+                    NowMenu { }
                 }
                 // Hi-Fi Rack: the needle meters over the bottom of the picture.
                 if Theme.vu: HorizontalLayout {

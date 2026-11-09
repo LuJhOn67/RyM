@@ -239,15 +239,35 @@ impl Api {
     }
 
     /// Songs found for `query` (the first page), and where the next page starts.
+    /// Songs first, then YouTube videos (songs that are only on YouTube, not on YouTube Music),
+    /// each video once; asked at the same time. One of the two failing still gives the other.
     pub async fn search_paged(self, query: String) -> Result<Paged> {
-        let first = RawBrowse { path: "search", body: body(&[("query", &query), ("params", SONGS_FILTER)]), ctoken: None };
-        let raw = match &self {
-            Api::Guest(y) => y.raw_json_query(first).await,
-            Api::User(y) => y.raw_json_query(first).await,
+        let (songs, videos) = tokio::join!(self.raw_search(&query, SONGS_FILTER), self.raw_search(&query, VIDEOS_FILTER));
+        let mut tracks = Vec::new();
+        let mut more = None;
+        if let Ok(page) = &songs {
+            tracks = rows(page);
+            more = next_token(page).map(|token| More::Search { query: query.clone(), token });
+        }
+        if let Ok(page) = &videos {
+            let seen: std::collections::HashSet<String> = tracks.iter().map(|t| t.video_id.clone()).collect();
+            tracks.extend(rows(page).into_iter().filter(|t| !seen.contains(&t.video_id)).map(video_row));
+        }
+        if tracks.is_empty() {
+            songs?;
+            videos?;
+        }
+        Ok(Paged { tracks, more })
+    }
+
+    async fn raw_search(&self, query: &str, params: &str) -> Result<Value> {
+        let ask = RawBrowse { path: "search", body: body(&[("query", query), ("params", params)]), ctoken: None };
+        let raw = match self {
+            Api::Guest(y) => y.raw_json_query(ask).await,
+            Api::User(y) => y.raw_json_query(ask).await,
         }
         .map_err(err)?;
-        let page: Value = serde_json::from_str(&raw)?;
-        Ok(Paged { tracks: rows(&page), more: next_token(&page).map(|token| More::Search { query, token }) })
+        Ok(serde_json::from_str(&raw)?)
     }
 
     /// A playlist's first page of songs, and where the next page starts.
@@ -760,6 +780,16 @@ impl PostQuery for RawBrowse {
 
 /// The "Songs" filter of the search page.
 const SONGS_FILTER: &str = "EgWKAQIIAWoKEAkQBRAKEAMQBA==";
+/// Search for videos only.
+const VIDEOS_FILTER: &str = "EgWKAQIQAWoKEAkQChAFEAMQBA==";
+
+/// A video found by search: its line has the views where a song has its album.
+fn video_row(mut t: Track) -> Track {
+    if t.album.ends_with("views") || t.album.ends_with("view") {
+        t.album.clear();
+    }
+    t
+}
 
 /// Where the next page of a list starts: the newer token goes in the request's body, the older
 /// one in its link.
@@ -1059,6 +1089,24 @@ mod suggestion_tests {
             let history = list.iter().filter(|s| s.from_history()).count();
             let tokens = list.iter().filter(|s| s.forget.as_deref().is_some_and(|t| !t.is_empty())).count();
             println!("input {input:?}: {} suggestions, {history} from the account's history ({tokens} with a forget token); first: {:?}", list.len(), list.iter().take(4).map(|s| &s.text).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    /// Songs then videos for a search: `cargo test --lib live_search_videos -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_search_videos() {
+        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap_or_default();
+        let api = if cookie.trim().is_empty() { super::Api::guest().await.unwrap() } else { super::Api::with_cookie(cookie).await.unwrap() };
+        for q in ["Philosophie du Soi", "باسم الكربلائي محاضرة"] {
+            let p = api.clone().search_paged(q.into()).await.unwrap();
+            println!("{q}: {} results, more {}", p.tracks.len(), p.more.is_some());
+            for t in p.tracks.iter().take(3).chain(p.tracks.iter().rev().take(2)) {
+                println!("  [{}] {} / {} / {} {}", t.video_id, t.title, t.artist, t.album, t.duration);
+            }
         }
     }
 }

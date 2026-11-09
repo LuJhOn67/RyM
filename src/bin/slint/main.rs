@@ -2382,6 +2382,10 @@ fn open_paged(st: &Shared, title: String, load: impl Future<Output = anyhow::Res
 /// A song or a home item by its key in the window ("q:3", "h:12", "l:0"...).
 fn track_of(st: &Shared, key: &str) -> Option<Track> {
     let s = st.borrow();
+    // The playing song (its cover's right-click menu).
+    if key == "now" {
+        return s.q.now().cloned();
+    }
     let (kind, rest) = key.split_once(':')?;
     let i: usize = rest.parse().ok()?;
     match kind {
