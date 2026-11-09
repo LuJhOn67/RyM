@@ -3153,6 +3153,8 @@ fn tick(st: &Shared) {
         if let Some(a) = &s.audio {
             a.seek(to);
         }
+        // Once per part: a jump that doesn't land isn't tried again and again.
+        s.segments.retain(|seg| seg.1 != to);
         drop(s);
         toast(st, tr("Skipped a part that isn't music (SponsorBlock)"));
         return;

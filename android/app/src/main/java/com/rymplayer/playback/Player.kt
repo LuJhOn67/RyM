@@ -516,6 +516,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
                 val c = controller ?: continue
                 if (!skipNonMusic || parts.isEmpty() || !c.isPlaying) continue
                 val to = com.rymplayer.data.SponsorBlock.skipTo(parts, c.currentPosition / 1000f) ?: continue
+                // Once per part: a jump that doesn't land isn't tried again and again.
+                parts = parts.filterNot { it.second == to }
                 seekTo(to)
                 message = com.rymplayer.tr("Skipped a part that isn't music (SponsorBlock)")
             }
