@@ -28,6 +28,7 @@ Needs GTK 4 (4.12 or newer), and WebKitGTK 4.1 for the Google sign-in window.
   Ubuntu/PikaOS:  sudo apt install libgtk-4-1 libwebkit2gtk-4.1-0 libasound2t64
 Optional: yt-dlp (with Node.js), VLC.
 EOF
+cp ~/RyM/LICENSE ~/RyM/THIRD_PARTY_NOTICES.md RyM-linux/
 tar czf RyM-linux-x86_64.tar.gz RyM-linux
 # On the PC (WSL), a copy on the Windows desktop.
 [ -d /mnt/c/Users/Willy/Desktop ] && cp RyM-linux-x86_64.tar.gz /mnt/c/Users/Willy/Desktop/ || true

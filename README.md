@@ -283,4 +283,15 @@ YouTube Music، وقد تتغير دون إشعار. استخدمه بحسابك
 
 ## License
 
-MIT
+- **RyM's own code:** MIT ([LICENSE](LICENSE)).
+- **The Android app:** GPL-3.0 as a whole ([LICENSES/GPL-3.0.txt](LICENSES/GPL-3.0.txt)), because it includes NewPipe Extractor and youtubedl-android.
+- **Fonts, icons, Slint, SponsorBlock and the other libraries:** each keeps its own license, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+<div dir="rtl">
+
+**الرخصة:**
+- **كود RyM نفسه:** MIT.
+- **تطبيق الأندرويد:** يُوزَّع كاملًا تحت GPL-3.0، لأنه يحتوي NewPipe Extractor وyoutubedl-android.
+- **الخطوط والأيقونات وSlint وSponsorBlock وباقي المكتبات:** كل منها برخصته، ومذكورة كلها في THIRD_PARTY_NOTICES.md.
+
+</div>
