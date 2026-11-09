@@ -181,6 +181,8 @@ struct Fade {
     secs: f32,
     /// Smart automix (the bass swap, the beat-timed start, the tempo nudge), or a plain crossfade.
     smart: bool,
+    /// Gapless: nothing moves until the incoming song's gate opens (the outgoing one ran out).
+    wait_gate: bool,
     /// When the incoming song started sounding (a smart one waits for a beat).
     began: Option<Instant>,
     /// The outgoing song's tempo, and the nudge given to the incoming one (1 = none).
@@ -202,6 +204,9 @@ pub struct Audio {
     fading: Option<Fade>,
     /// After a tempo nudge: back to the set speed, from that factor, since then.
     easing: Option<(Instant, f32)>,
+    /// Seeked since the song started: the player's position is the song's own again (before
+    /// that, the silence the song waited through at its gate is taken off).
+    seeked: std::sync::atomic::AtomicBool,
 }
 
 impl Audio {
@@ -221,6 +226,7 @@ impl Audio {
             fade: f(1.0),
             fading: None,
             easing: None,
+            seeked: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -228,13 +234,13 @@ impl Audio {
     /// measurements on it. `gate`: silent until that meter has played so many frames; `cue_in`:
     /// its quiet start is skipped (read ahead here, off the audio thread).
     fn source(song: &crate::stream::Playable, gate: Option<(Arc<Meter>, u64)>, cue_in: bool) -> Result<(Chain, Option<Duration>, Arc<Meter>)> {
-        let (src, seconds) = match song {
-            crate::stream::Playable::File(path) => (FileSource::open(path)?, None),
-            crate::stream::Playable::Arriving(a) => (FileSource::from_source(Box::new(a.reader()), Some(&a.ext))?, a.seconds),
+        let (src, seconds, id) = match song {
+            crate::stream::Playable::File(path) => (FileSource::open(path)?, None, path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
+            crate::stream::Playable::Arriving(a) => (FileSource::from_source(Box::new(a.reader()), Some(&a.ext))?, a.seconds, a.id.clone()),
         };
         let d = src.total_duration().or(seconds.map(Duration::from_secs_f32));
         let meter = Meter::new();
-        let fx = crate::fx::Effects::new(Probe::new(src, meter.clone()));
+        let fx = crate::fx::Effects::new(Probe::new(src, meter.clone())).loudness(crate::stream::loudness(&id));
         let mut tap = Tap::new(if cue_in { fx.skip_start() } else { fx }, meter.clone(), gate);
         if cue_in {
             tap.preroll();
@@ -256,6 +262,30 @@ impl Audio {
         self.player.append(src);
         self.player.play();
         self.apply_volume();
+        self.seeked.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Gapless: `song` waits silently and starts on the very frame the playing one runs out (no
+    /// gap, no overlap). Nothing playing: it just plays.
+    pub fn gapless_to(&mut self, song: &crate::stream::Playable, known_secs: Option<f32>) -> Result<()> {
+        if !self.is_playing() {
+            return self.play(song, known_secs);
+        }
+        let (src, d, meter) = Self::source(song, Some((self.meter.clone(), automix::UNTIL_END)), false)?;
+        let next = Player::connect_new(self.sink.mixer());
+        next.set_speed(load(&self.speed));
+        // Full volume at once: it's silent until its gate opens.
+        next.set_volume(self.level());
+        next.append(src);
+        next.play();
+        self.end_nudge();
+        let old = std::mem::replace(&mut self.player, next);
+        let old_meter = std::mem::replace(&mut self.meter, meter);
+        self.fading = Some(Fade { old, old_meter, secs: 0.01, smart: false, wait_gate: true, began: None, out_bpm: None, nudge: None });
+        self.duration = d.or(known_secs.map(Duration::from_secs_f32));
+        self.loaded = true;
+        self.seeked.store(false, Ordering::Relaxed);
         Ok(())
     }
 
@@ -297,7 +327,8 @@ impl Audio {
         self.end_nudge();
         let old = std::mem::replace(&mut self.player, next);
         let old_meter = std::mem::replace(&mut self.meter, meter);
-        self.fading = Some(Fade { old, old_meter, secs, smart, began: None, out_bpm: beat.map(|(_, b)| b.bpm()), nudge: None });
+        self.fading = Some(Fade { old, old_meter, secs, smart, wait_gate: false, began: None, out_bpm: beat.map(|(_, b)| b.bpm()), nudge: None });
+        self.seeked.store(false, Ordering::Relaxed);
         self.duration = d.or(known_secs.map(Duration::from_secs_f32));
         self.loaded = true;
         Ok(())
@@ -321,7 +352,7 @@ impl Audio {
         // A smart mix starts counting once the incoming song sounds (it may wait for a beat).
         let began = match f.began {
             Some(b) => b,
-            None if !f.smart || self.meter.is_open() => *f.began.insert(Instant::now()),
+            None if (!f.smart && !f.wait_gate) || self.meter.is_open() => *f.began.insert(Instant::now()),
             None => {
                 f.old.set_volume(v);
                 return;
@@ -368,6 +399,11 @@ impl Audio {
     /// A crossfade is under way.
     pub fn crossfading(&self) -> bool {
         self.fading.is_some()
+    }
+
+    /// The volume slider (0 to 1).
+    pub fn volume(&self) -> f32 {
+        load(&self.volume)
     }
 
     fn level(&self) -> f32 {
@@ -420,6 +456,7 @@ impl Audio {
 
     pub fn seek(&self, secs: f32) {
         let _ = self.player.try_seek(Duration::from_secs_f32(secs.max(0.0)));
+        self.seeked.store(true, Ordering::Relaxed);
     }
 
     pub fn set_volume(&self, v: f32) {
@@ -453,7 +490,8 @@ impl Audio {
     }
 
     pub fn position(&self) -> f32 {
-        self.player.get_pos().as_secs_f32()
+        let pos = self.player.get_pos().as_secs_f32();
+        if self.seeked.load(Ordering::Relaxed) { pos } else { (pos - self.meter.waited_secs()).max(0.0) }
     }
 
     pub fn duration(&self) -> Option<f32> {

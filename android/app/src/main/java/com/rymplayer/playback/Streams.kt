@@ -10,6 +10,7 @@ import kotlinx.coroutines.async
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaType
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.ServiceList
@@ -151,16 +152,25 @@ object Streams {
             fresh()?.let { return it }
             val started = System.currentTimeMillis()
             val viaYtDlp = source == 1
-            val fast = if (viaYtDlp) null else runCatching { fastLink(videoId) }
-                .onFailure { android.util.Log.w("RyM", "quick lookup failed for $videoId: ${it.message}") }
+            // Signed in with "Best download quality": YouTube Music's own player first (256 kbps
+            // with Premium); signed in otherwise: it's the second try when the quick way fails.
+            val signedIn = !cookie.isNullOrBlank()
+            val wantBest = signedIn && appContext?.getSharedPreferences("rym", Context.MODE_PRIVATE)?.getBoolean("download_best", false) == true
+            fun premium() = runCatching { premiumLink(videoId) }
+                .onFailure { android.util.Log.w("RyM", "YouTube Music's player failed for $videoId: ${it.message}") }
                 .getOrNull()
-            val (url, ext) = fast ?: runCatching {
+            val best = if (!viaYtDlp && wantBest) premium() else null
+            val fast = if (viaYtDlp || best != null) null else runCatching { fastLink(videoId) }
+                .onFailure { android.util.Log.w("RyM", "quick lookup failed for $videoId: ${it.message}") }
+                .getOrNull() ?: if (!viaYtDlp && signedIn && !wantBest) premium() else null
+            val firstTry = best ?: fast
+            val (url, ext) = firstTry ?: runCatching {
                 if (viaYtDlp) com.rymplayer.data.YtDlp.youtubeLink(checkNotNull(appContext) { "not ready" }, videoId, cookie) else link(videoId)
             }.getOrElse {
                 android.util.Log.w("RyM", "no audio link for $videoId", it)
                 throw IllegalStateException(it.message ?: it.javaClass.simpleName)
             }
-            val how = if (viaYtDlp) "yt-dlp" else if (fast != null) "quick" else "full NewPipe"
+            val how = if (viaYtDlp) "yt-dlp" else if (best != null) "YouTube Music" else if (fast != null) "quick" else "full NewPipe"
             android.util.Log.w("RyM", "timing: link $videoId took ${System.currentTimeMillis() - started} ms ($how, $ext)")
             return Link(url, ext, System.currentTimeMillis() + 60 * 60 * 1000L).also { links[videoId] = it }
         }
@@ -257,6 +267,68 @@ object Streams {
             url = YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(videoId, url)
         }
         return url to (if (best.getString("mimeType", "").contains("mp4")) "m4a" else "webm")
+    }
+
+    private const val MUSIC_VERSION = "1.20260707.12.00"
+
+    /**
+     * YouTube Music's own web player with your account: Premium gets the 256 kbps Opus stream
+     * (itag 774). Its links come with puzzles, solved by NewPipe from YouTube's player script.
+     */
+    private fun premiumLink(videoId: String): Pair<String, String> {
+        val cookie = cookie?.takeIf { it.isNotBlank() } ?: error("not signed in")
+        initNewPipe()
+        val sapisid = cookie.split(";").map { it.trim() }.firstNotNullOfOrNull { kv ->
+            when {
+                kv.startsWith("SAPISID=") -> kv.removePrefix("SAPISID=")
+                kv.startsWith("__Secure-3PAPISID=") -> kv.removePrefix("__Secure-3PAPISID=")
+                else -> null
+            }
+        } ?: error("no SAPISID in the sign-in")
+        val origin = "https://music.youtube.com"
+        val ts = System.currentTimeMillis() / 1000
+        val hash = java.security.MessageDigest.getInstance("SHA-1").digest("$ts $sapisid $origin".toByteArray()).joinToString("") { "%02x".format(it) }
+        val sts = YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId)
+        val body = org.json.JSONObject()
+            .put("context", org.json.JSONObject().put("client", org.json.JSONObject().put("clientName", "WEB_REMIX").put("clientVersion", MUSIC_VERSION).put("hl", "en").put("gl", "US")))
+            .put("videoId", videoId)
+            .put("playbackContext", org.json.JSONObject().put("contentPlaybackContext", org.json.JSONObject().put("signatureTimestamp", sts)))
+            .put("contentCheckOk", true)
+            .put("racyCheckOk", true)
+        val req = Request.Builder().url("$origin/youtubei/v1/player?prettyPrint=false")
+            .header("User-Agent", OkDownloader.UA)
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", MUSIC_VERSION)
+            .header("Cookie", cookie)
+            .header("Authorization", "SAPISIDHASH ${ts}_$hash")
+            .header("Origin", origin)
+            .header("X-Origin", origin)
+            .header("X-Goog-AuthUser", "0")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        val answer = media.newCall(req).execute().use { r ->
+            check(r.isSuccessful) { "YouTube Music answered ${r.code}" }
+            org.json.JSONObject(r.body?.string().orEmpty())
+        }
+        val status = answer.optJSONObject("playabilityStatus")
+        check(status?.optString("status") == "OK") { status?.optString("reason")?.ifEmpty { null } ?: status?.optString("status") ?: "not playable" }
+        val formats = answer.optJSONObject("streamingData")?.optJSONArray("adaptiveFormats") ?: error("no streams")
+        val rank = mapOf(774 to 5, 251 to 4, 140 to 3, 250 to 2, 249 to 1)
+        val best = (0 until formats.length()).map { formats.getJSONObject(it) }
+            .filter { it.optString("mimeType").startsWith("audio/") && (it.has("url") || it.has("signatureCipher")) }
+            .maxWithOrNull(compareBy({ rank[it.optInt("itag")] ?: 0 }, { it.optInt("bitrate") }))
+            ?: error("no audio stream")
+        var url = if (best.has("url")) best.getString("url") else {
+            val parts = best.getString("signatureCipher").split("&").associate { kv ->
+                kv.substringBefore("=") to java.net.URLDecoder.decode(kv.substringAfter("=", ""), "UTF-8")
+            }
+            val sig = YoutubeJavaScriptPlayerManager.deobfuscateSignature(videoId, parts["s"] ?: error("no signature"))
+            (parts["url"] ?: error("no link")) + "&" + (parts["sp"] ?: "signature") + "=" + java.net.URLEncoder.encode(sig, "UTF-8")
+        }
+        if (Uri.parse(url).getQueryParameter("n") != null) {
+            url = YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(videoId, url)
+        }
+        return url to (if (best.optString("mimeType").contains("mp4")) "m4a" else "webm")
     }
 
     private fun link(videoId: String): Pair<String, String> {

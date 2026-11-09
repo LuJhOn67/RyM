@@ -20,6 +20,8 @@ export struct Song {
     cover: image,
     liked: bool,
     playing: bool,
+    // Found as a YouTube video (not on YouTube Music).
+    video: bool,
 }
 
 export struct Card {
@@ -223,6 +225,10 @@ export global App {
     in-out property <string> query;
     in property <[Song]> results;
     in property <bool> searching;
+    // The search found songs and videos: the All / Songs / Videos chips show.
+    in property <bool> results-mixed;
+    in-out property <int> results-filter;
+    callback set-results-filter(int);
     in property <[Bar]> top-artists;
     in property <[Bar]> top-songs;
     in property <[Bar]> kinds;
@@ -562,6 +568,22 @@ component VuMeter inherits Rectangle {
     }
 }
 
+// "Video": the search found it on YouTube, not on YouTube Music.
+component VideoBadge inherits Rectangle {
+    width: badge-text.preferred-width + 12px * Ui.k;
+    height: 20px * Ui.k;
+    border-radius: 4px * Ui.k;
+    background: Theme.accent.with-alpha(0.22);
+    badge-text := Text {
+        text: App.tr("Video");
+        font-size: 12px * Ui.k;
+        font-weight: 700;
+        color: Theme.accent;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 // A song in a list: cover, title, artist (and the drag handle in Up next).
 component SongRow inherits Rectangle {
     in property <Song> song;
@@ -621,7 +643,12 @@ component SongRow inherits Rectangle {
             alignment: center;
             spacing: 12px * Ui.k;
             Text { text: root.song.title; font-size: root.title-size; font-weight: 700; color: root.song.playing ? Theme.accent : Theme.text; overflow: elide; horizontal-alignment: right; }
-            Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: right; }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px * Ui.k;
+                Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: right; }
+                if root.song.video: VideoBadge { }
+            }
         }
         Cover {
             width: root.cover-size;
@@ -632,7 +659,12 @@ component SongRow inherits Rectangle {
             alignment: center;
             spacing: 12px * Ui.k;
             Text { text: root.song.title; font-size: root.title-size; font-weight: 700; color: root.song.playing ? Theme.accent : Theme.text; overflow: elide; }
-            Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 8px * Ui.k;
+                if root.song.video: VideoBadge { }
+                Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; }
+            }
         }
         if !Ui.rtl && root.handle: Rectangle {
             width: 28px * Ui.k;
@@ -1672,6 +1704,27 @@ component SearchPage inherits Page {
             font-size: 20px * Ui.k;
             color: Theme.dim;
             horizontal-alignment: Ui.start;
+        }
+        if App.results-mixed && !App.searching: HorizontalLayout {
+            alignment: Ui.rtl ? end : start;
+            spacing: 10px * Ui.k;
+            for chip[ci] in [App.tr("All"), App.tr("Songs"), App.tr("Videos")]: Rectangle {
+                height: 40px * Ui.k;
+                width: chip-text.preferred-width + 32px * Ui.k;
+                border-radius: 20px * Ui.k;
+                background: App.results-filter == ci ? Theme.accent : Theme.hover;
+                chip-text := Text {
+                    text: chip;
+                    font-size: 17px * Ui.k;
+                    color: App.results-filter == ci ? #ffffff : Theme.text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { App.set-results-filter(ci); }
+                }
+            }
         }
         for s in App.results: SongRow { song: s; handle: false; }
     }

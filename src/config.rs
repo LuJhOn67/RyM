@@ -169,6 +169,17 @@ pub struct Config {
     /// The window's X in the Slint app: "ask", "tray" (keeps playing in the background, by the
     /// clock) or "quit".
     pub close_action: String,
+    /// yt-dlp updated by itself once a week, and when it last was.
+    pub ytdlp_auto_update: bool,
+    pub ytdlp_updated_at: u64,
+    /// SponsorBlock: a music video's non-music parts (intro, talk, outro) are skipped.
+    pub sponsorblock: bool,
+    /// No crossfade: the next song starts on the very frame this one ends.
+    pub gapless: bool,
+    /// Downloaded songs kept under this many GB (0: no limit).
+    pub cache_limit_gb: u32,
+    /// The phone can control this computer's music (play, pause, skip, seek, volume).
+    pub remote_control: bool,
 }
 
 /// A side or place ("Left", "Bottom"...) in the app's language.
@@ -351,6 +362,12 @@ impl Default for Config {
             ytdlp_nightly: false,
             link_announce: true,
             close_action: "ask".into(),
+            ytdlp_auto_update: true,
+            ytdlp_updated_at: 0,
+            sponsorblock: true,
+            gapless: true,
+            cache_limit_gb: 5,
+            remote_control: true,
         }
     }
 }
@@ -673,7 +690,7 @@ impl Config {
             }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, automix: self.automix, link_auto: self.link_auto, cross_ears: self.cross_ears, lyrics_translation: self.lyrics_translation, lyrics_font: self.lyrics_font, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ui_zoom: self.ui_zoom, only_kind: std::mem::take(&mut self.only_kind), accent_from_cover: self.accent_from_cover, visualizer: self.visualizer, romaji: self.romaji, karaoke: self.karaoke, alarm_on: self.alarm_on, alarm_time: std::mem::take(&mut self.alarm_time), alarm_rang: std::mem::take(&mut self.alarm_rang), lastfm_key: std::mem::take(&mut self.lastfm_key), lastfm_secret: std::mem::take(&mut self.lastfm_secret), lastfm_session: std::mem::take(&mut self.lastfm_session), lastfm_user: std::mem::take(&mut self.lastfm_user), ytdlp_nightly: self.ytdlp_nightly, link_announce: self.link_announce, close_action: std::mem::take(&mut self.close_action), ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, automix: self.automix, link_auto: self.link_auto, cross_ears: self.cross_ears, lyrics_translation: self.lyrics_translation, lyrics_font: self.lyrics_font, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ui_zoom: self.ui_zoom, only_kind: std::mem::take(&mut self.only_kind), accent_from_cover: self.accent_from_cover, visualizer: self.visualizer, romaji: self.romaji, karaoke: self.karaoke, alarm_on: self.alarm_on, alarm_time: std::mem::take(&mut self.alarm_time), alarm_rang: std::mem::take(&mut self.alarm_rang), lastfm_key: std::mem::take(&mut self.lastfm_key), lastfm_secret: std::mem::take(&mut self.lastfm_secret), lastfm_session: std::mem::take(&mut self.lastfm_session), lastfm_user: std::mem::take(&mut self.lastfm_user), ytdlp_nightly: self.ytdlp_nightly, link_announce: self.link_announce, close_action: std::mem::take(&mut self.close_action), ytdlp_auto_update: self.ytdlp_auto_update, ytdlp_updated_at: self.ytdlp_updated_at, sponsorblock: self.sponsorblock, gapless: self.gapless, cache_limit_gb: self.cache_limit_gb, remote_control: self.remote_control, ..Config::default() }
             }
         }
     }

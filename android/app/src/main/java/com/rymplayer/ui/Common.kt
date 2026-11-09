@@ -355,7 +355,7 @@ fun shareSong(context: Context, t: Track) {
 }
 
 /** A sheet a little lighter than the page, so it stands out. */
-private val AppColorsSheet: Color
+internal val AppColorsSheet: Color
     @Composable get() = if (themeBg == null) androidx.compose.ui.graphics.lerp(Color(0xFF0B0B0D), Color.White, 0.08f) else MaterialTheme.colorScheme.surfaceVariant
 
 @Composable

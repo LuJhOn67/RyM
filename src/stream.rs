@@ -97,6 +97,56 @@ pub fn cache_dir() -> PathBuf {
     crate::data_dir().join("cache")
 }
 
+/// Keeps the downloaded songs under `limit_gb` (0: no limit): the ones played longest ago go
+/// first, with their notes (.secs, .loud); `keep` (the playing song) stays. Returns the bytes freed.
+pub fn trim_cache(limit_gb: u32, keep: &str) -> u64 {
+    if limit_gb == 0 {
+        return 0;
+    }
+    trim_dir(&cache_dir(), limit_gb as u64 * 1024 * 1024 * 1024, keep)
+}
+
+fn trim_dir(dir: &Path, limit: u64, keep: &str) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut songs: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let ext = p.extension()?.to_str()?.to_string();
+            if !["flac", "webm", "m4a", "opus", "mp4", "mp3"].contains(&ext.as_str()) {
+                return None;
+            }
+            let m = e.metadata().ok()?;
+            // Last played: the newer of written and read.
+            let when = m.accessed().ok().max(m.modified().ok())?;
+            Some((when, m.len(), p))
+        })
+        .collect();
+    let mut total: u64 = songs.iter().map(|s| s.1).sum();
+    if total <= limit {
+        return 0;
+    }
+    songs.sort_by_key(|s| s.0);
+    let mut freed = 0;
+    for (_, size, path) in songs {
+        if total <= limit {
+            break;
+        }
+        let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+        if id == keep {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            for side in ["secs", "loud"] {
+                let _ = std::fs::remove_file(dir.join(format!("{id}.{side}")));
+            }
+            total -= size;
+            freed += size;
+        }
+    }
+    freed
+}
+
 /// Already-downloaded file for this video, if any (a song on this device is its own file).
 pub fn cached(video_id: &str) -> Option<PathBuf> {
     if let Some(p) = crate::local::path_of(video_id) {
@@ -203,7 +253,33 @@ async fn innertube_link(video_id: &str) -> Result<Found> {
     Ok(found_of(&crate::innertube::audio(video_id).await?))
 }
 
+/// YouTube's loudness for each song (`loudnessDb`), kept beside its file in the cache.
+fn loudness_map() -> &'static Mutex<HashMap<String, f32>> {
+    static M: OnceLock<Mutex<HashMap<String, f32>>> = OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+fn keep_loudness(video_id: &str, db: Option<f32>) {
+    let Some(db) = db else { return };
+    if let Ok(mut m) = loudness_map().lock() {
+        m.insert(video_id.to_string(), db);
+    }
+    let _ = std::fs::write(cache_dir().join(format!("{video_id}.loud")), db.to_string());
+}
+
+/// The song's loudness from YouTube, when it's known (for "Even loudness").
+pub fn loudness(video_id: &str) -> Option<f32> {
+    if video_id.is_empty() {
+        return None;
+    }
+    if let Some(db) = loudness_map().lock().ok().and_then(|m| m.get(video_id).copied()) {
+        return Some(db);
+    }
+    std::fs::read_to_string(cache_dir().join(format!("{video_id}.loud"))).ok()?.trim().parse().ok()
+}
+
 fn found_of(a: &crate::innertube::Audio) -> Found {
+    keep_loudness(&a.video_id, a.loudness_db);
     (a.url.clone(), vec![("User-Agent".to_string(), a.user_agent.to_string())], a.ext.to_string(), a.seconds)
 }
 
@@ -473,6 +549,7 @@ async fn innertube(video_id: &str, dir: &Path) -> Result<(Option<f32>, PathBuf)>
             anyhow!(why.join("; "))
         })?;
         let path = dir.join(format!("{video_id}.{}", audio.ext));
+        keep_loudness(video_id, audio.loudness_db);
         match save(&audio.url, &[("User-Agent".to_string(), audio.user_agent.to_string())], &path).await {
             Ok(()) => return Ok((audio.seconds, path)),
             Err(e) => {
@@ -506,7 +583,11 @@ fn page(video_id: &str) -> String {
     crate::soundcloud::url(video_id).unwrap_or_else(|| format!("https://music.youtube.com/watch?v={video_id}"))
 }
 
-fn ytdlp_command(video_id: &str) -> Result<tokio::process::Command> {
+/// Signed in, yt-dlp asks only YouTube Music's web player and skips the pages it doesn't need:
+/// about 3.5 s a song instead of 6.5, same stream (it's tried the usual way when that fails).
+const YTDLP_QUICK: &str = "youtube:player_client=web_music;player_skip=webpage,configs";
+
+fn ytdlp_command(video_id: &str, quick: bool) -> Result<tokio::process::Command> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args(["--js-runtimes", "node", "-f", "774/251/141/140/bestaudio", "--no-playlist"]);
     if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
@@ -516,6 +597,9 @@ fn ytdlp_command(video_id: &str) -> Result<tokio::process::Command> {
         let file = crate::data_dir().join("cookies-ytdlp.txt");
         write_cookie_file(&cookie, &file)?;
         cmd.arg("--cookies").arg(file);
+        if quick {
+            cmd.args(["--extractor-args", YTDLP_QUICK]);
+        }
     }
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -524,15 +608,31 @@ fn ytdlp_command(video_id: &str) -> Result<tokio::process::Command> {
 }
 
 /// The chosen format's link, the headers yt-dlp would send with it, its file type and length.
+/// Signed in to YouTube: the quick way can be tried.
+fn signed_in_for(video_id: &str) -> bool {
+    crate::is_youtube(video_id) && std::fs::read_to_string(crate::cookie_path()).is_ok_and(|c| !c.trim().is_empty())
+}
+
 async fn ytdlp_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
-    let mut cmd = ytdlp_command(video_id)?;
-    cmd.arg("-j").arg(page(video_id));
-    let output = cmd.output().await.map_err(|e| anyhow!("yt-dlp not found (pip install -U yt-dlp yt-dlp-ejs): {e}"))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("{}", err.lines().rev().find(|l| l.contains("ERROR")).unwrap_or("yt-dlp failed")));
-    }
-    let info: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let run = |quick: bool| async move {
+        let mut cmd = ytdlp_command(video_id, quick)?;
+        cmd.arg("-j").arg(page(video_id));
+        let output = cmd.output().await.map_err(|e| anyhow!("yt-dlp not found (pip install -U yt-dlp yt-dlp-ejs): {e}"))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("{}", err.lines().rev().find(|l| l.contains("ERROR")).unwrap_or("yt-dlp failed")));
+        }
+        Ok(output.stdout)
+    };
+    let out = if signed_in_for(video_id) {
+        match run(true).await {
+            Ok(o) => o,
+            Err(_) => run(false).await?,
+        }
+    } else {
+        run(false).await?
+    };
+    let info: serde_json::Value = serde_json::from_slice(&out)?;
     let pick = info["requested_downloads"].get(0).unwrap_or(&info);
     let url = pick["url"].as_str().or_else(|| info["url"].as_str()).ok_or_else(|| anyhow!("yt-dlp gave no link"))?.to_string();
     let headers = pick["http_headers"]
@@ -546,6 +646,15 @@ async fn ytdlp_link(video_id: &str) -> Result<(String, Vec<(String, String)>, St
 
 /// Runs yt-dlp for one song with the signed-in account; returns its length and the file.
 async fn ytdlp(video_id: &str, out: &Path) -> Result<(Option<f32>, PathBuf)> {
+    if signed_in_for(video_id)
+        && let Ok(found) = ytdlp_once(video_id, out, true).await
+    {
+        return Ok(found);
+    }
+    ytdlp_once(video_id, out, false).await
+}
+
+async fn ytdlp_once(video_id: &str, out: &Path, quick: bool) -> Result<(Option<f32>, PathBuf)> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args(["--js-runtimes", "node", "-f", "774/251/141/140/bestaudio", "--no-playlist", "--no-progress", "--no-part"])
         .args(["--print", "after_move:%(duration)s\t%(filepath)s", "-o"])
@@ -561,6 +670,9 @@ async fn ytdlp(video_id: &str, out: &Path) -> Result<(Option<f32>, PathBuf)> {
         let file = crate::data_dir().join("cookies-ytdlp.txt");
         write_cookie_file(&cookie, &file)?;
         cmd.arg("--cookies").arg(file);
+        if quick {
+            cmd.args(["--extractor-args", YTDLP_QUICK]);
+        }
     }
     cmd.arg(page(video_id));
     #[cfg(windows)]
@@ -674,4 +786,26 @@ mod tests {
         assert_eq!(file_name("A", "Song..."), "A - Song");
     }
 
+}
+
+#[cfg(test)]
+mod trim_tests {
+    #[test]
+    fn oldest_songs_go_first_and_the_playing_one_stays() {
+        let dir = std::env::temp_dir().join(format!("rym-trim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (i, id) in ["old", "playing", "new"].iter().enumerate() {
+            std::fs::write(dir.join(format!("{id}.webm")), vec![0u8; 1000]).unwrap();
+            std::fs::write(dir.join(format!("{id}.secs")), "200").unwrap();
+            let when = std::time::SystemTime::now() - std::time::Duration::from_secs(3600 * (3 - i as u64));
+            std::fs::File::options().write(true).open(dir.join(format!("{id}.webm"))).unwrap().set_modified(when).unwrap();
+        }
+        // Room for two songs: "old" goes; "playing" is older than "new" but stays anyway.
+        let freed = super::trim_dir(&dir, 2000, "playing");
+        assert_eq!(freed, 1000);
+        assert!(!dir.join("old.webm").exists() && !dir.join("old.secs").exists());
+        assert!(dir.join("playing.webm").exists() && dir.join("new.webm").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -198,6 +198,8 @@ fun SettingsPage(vm: AppViewModel) {
                     if (vm.pieceMb == 0) tr("No fixed size: the song is split evenly over the connections") else "${tr("Each connection fetches")} ${vm.pieceMb} MB ${tr("at a time · tap to change")}",
                     if (vm.pieceMb == 0) tr("Open") else "${vm.pieceMb} MB",
                 ) { vm.nextPieceSize() }
+                Divider()
+                SwitchRow(Icons.Default.Tune, tr("Skip non-music parts"), tr("SponsorBlock: a music video's intro, talk and outro are skipped"), vm.player.skipNonMusic) { vm.player.toggleSkipNonMusic() }
                 if (com.rymplayer.playback.Vlc.installed(ctx)) {
                     Divider()
                     SwitchRow(Icons.Default.PlayArrow, tr("Play songs in VLC"), tr("Each song opens in VLC instead of the built-in player"), vm.playInVlc) { vm.togglePlayInVlc() }

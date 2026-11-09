@@ -251,7 +251,14 @@ impl Api {
         }
         if let Ok(page) = &videos {
             let seen: std::collections::HashSet<String> = tracks.iter().map(|t| t.video_id.clone()).collect();
-            tracks.extend(rows(page).into_iter().filter(|t| !seen.contains(&t.video_id)).map(video_row));
+            let found: Vec<Track> = rows(page).into_iter().filter(|t| !seen.contains(&t.video_id)).map(video_row).collect();
+            if let Ok(mut v) = video_ids().lock() {
+                if v.len() > 5000 {
+                    v.clear();
+                }
+                v.extend(found.iter().map(|t| t.video_id.clone()));
+            }
+            tracks.extend(found);
         }
         if tracks.is_empty() {
             songs?;
@@ -782,6 +789,16 @@ impl PostQuery for RawBrowse {
 const SONGS_FILTER: &str = "EgWKAQIIAWoKEAkQBRAKEAMQBA==";
 /// Search for videos only.
 const VIDEOS_FILTER: &str = "EgWKAQIQAWoKEAkQChAFEAMQBA==";
+
+fn video_ids() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static V: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    V.get_or_init(Default::default)
+}
+
+/// The search found this as a YouTube video, not a YouTube Music song (its badge, the filter).
+pub fn found_as_video(video_id: &str) -> bool {
+    video_ids().lock().is_ok_and(|v| v.contains(video_id))
+}
 
 /// A video found by search: its line has the views where a song has its album.
 fn video_row(mut t: Track) -> Track {

@@ -213,12 +213,21 @@ pub struct Effects<S: Source<Item = f32>> {
     total: Option<u64>,
     /// Skip the quiet start even with "Skip silence" off (the automix's cue-in).
     skip_start: bool,
+    /// "Even loudness" with the song's loudness from YouTube: one gain for the whole song, right
+    /// from its first second (no listening and catching up).
+    fixed_gain: Option<f32>,
 }
 
 /// About -50 dB: quieter than this is silence.
 const SILENCE: f32 = 0.003;
 /// Loudness the normalizer aims for (RMS).
 const TARGET: f32 = 0.12;
+
+/// The gain for a song YouTube measured at `db` above its reference (about -14 LUFS): brought
+/// 4 dB under it (near the normalizer's own level), at most 15 dB down or 6 dB up.
+pub fn gain_for_loudness(db: f32) -> f32 {
+    10f32.powf((-db - 4.0).clamp(-15.0, 6.0) / 20.0)
+}
 
 impl<S: Source<Item = f32>> Effects<S> {
     pub fn new(inner: S) -> Self {
@@ -243,9 +252,16 @@ impl<S: Source<Item = f32>> Effects<S> {
             frames: 0,
             total,
             skip_start: false,
+            fixed_gain: None,
         };
         fx.update();
         fx
+    }
+
+    /// The song's loudness from YouTube (`loudnessDb`: how far above its reference it is).
+    pub fn loudness(mut self, db: Option<f32>) -> Self {
+        self.fixed_gain = db.map(gain_for_loudness);
+        self
     }
 
     /// The quiet start is skipped whatever the settings say (the automix's cue-in).
@@ -326,7 +342,13 @@ impl<S: Source<Item = f32>> Effects<S> {
                 *x = *x * (1.0 - s.reverb * 0.4) + wet;
             }
         }
-        if s.normalize {
+        if s.normalize
+            && let Some(g) = self.fixed_gain
+        {
+            for x in &mut self.frame {
+                *x *= g;
+            }
+        } else if s.normalize {
             let power = self.frame.iter().map(|x| x * x).sum::<f32>() / self.channels as f32;
             // Loudness over about 3 s; quiet parts don't drag the gain up.
             let a = 1.0 / (self.rate as f32 * 3.0);
@@ -425,5 +447,14 @@ mod tests {
         assert_eq!(out.len(), 8000);
         assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
         set(Settings::default());
+    }
+
+    #[test]
+    fn loudness_from_youtube_becomes_one_gain() {
+        // 2 dB under YouTube's reference: brought to 4 dB under it, so 2 dB down.
+        assert!((super::gain_for_loudness(-2.0) - 10f32.powf(-2.0 / 20.0)).abs() < 1e-4);
+        // Very loud: at most 15 dB down; very quiet: at most 6 dB up.
+        assert!((super::gain_for_loudness(20.0) - 10f32.powf(-15.0 / 20.0)).abs() < 1e-4);
+        assert!((super::gain_for_loudness(-30.0) - 10f32.powf(6.0 / 20.0)).abs() < 1e-4);
     }
 }

@@ -206,7 +206,14 @@ pub struct Meter {
     bass: AtomicU32,
     left: AtomicU32,
     right: AtomicU32,
+    /// Its song has run out (gapless: the next one starts on that very frame).
+    ended: AtomicBool,
+    /// Silent frames it sent while its start gate was shut (the player counts them as played).
+    waited: AtomicU64,
 }
+
+/// A gate that opens when the other song runs out, not at a frame (gapless playback).
+pub const UNTIL_END: u64 = u64::MAX;
 
 impl Meter {
     pub fn new() -> Arc<Meter> {
@@ -220,7 +227,14 @@ impl Meter {
             bass: AtomicU32::new(0),
             left: AtomicU32::new(0),
             right: AtomicU32::new(0),
+            ended: AtomicBool::new(false),
+            waited: AtomicU64::new(0),
         })
+    }
+
+    /// Seconds of silence it sent before its start gate opened.
+    pub fn waited_secs(&self) -> f32 {
+        self.waited.load(Ordering::Acquire) as f32 / self.rate().max(1) as f32
     }
 
     /// The last `secs` of its loudness as decoded.
@@ -482,8 +496,10 @@ impl<S: Source<Item = f32>> Tap<S> {
 
     fn next_frame(&mut self) -> Option<()> {
         if let Some((other, at)) = &self.gate {
-            if other.frames.load(Ordering::Acquire) < *at {
+            let open = if *at == UNTIL_END { other.ended.load(Ordering::Acquire) } else { other.frames.load(Ordering::Acquire) >= *at };
+            if !open {
                 self.frame.fill(0.0);
+                self.meter.waited.fetch_add(1, Ordering::AcqRel);
                 return Some(());
             }
             self.gate = None;
@@ -493,7 +509,13 @@ impl<S: Source<Item = f32>> Tap<S> {
             Some(f) => self.frame.copy_from_slice(&f),
             None => {
                 for c in 0..self.channels {
-                    self.frame[c] = self.inner.next()?;
+                    match self.inner.next() {
+                        Some(x) => self.frame[c] = x,
+                        None => {
+                            self.meter.ended.store(true, Ordering::Release);
+                            return None;
+                        }
+                    }
                 }
             }
         }
@@ -651,5 +673,25 @@ mod tests {
         out.frames.store(1000, Ordering::Release);
         let heard: Vec<f32> = tap.by_ref().take(200).collect();
         assert!(incoming.is_open() && rms(&heard) > 0.1);
+    }
+
+    #[test]
+    fn gapless_starts_on_the_frame_the_other_ends() {
+        let first = Meter::new();
+        let second = Meter::new();
+        let mut a = Tap::new(sine(440.0, 0.01, 48_000), first.clone(), None);
+        let mut b = Tap::new(sine(440.0, 1.0, 48_000), second.clone(), Some((first.clone(), UNTIL_END)));
+        // Mixed side by side as the player does: the second is silent while the first plays.
+        let mut waited = 0;
+        while a.next().is_some() {
+            assert_eq!(b.next(), Some(0.0));
+            waited += 1;
+        }
+        assert!(!second.is_open());
+        assert_eq!(second.waited.load(Ordering::Acquire), waited);
+        // The first ran out: the very next frame of the second is its song.
+        let heard: Vec<f32> = b.by_ref().take(200).collect();
+        assert!(second.is_open() && rms(&heard) > 0.1);
+        assert!((second.waited_secs() - waited as f32 / 48_000.0).abs() < 1e-6);
     }
 }

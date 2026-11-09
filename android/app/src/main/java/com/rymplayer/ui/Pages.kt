@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.NorthWest
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -141,6 +142,12 @@ fun HomePage(vm: AppViewModel) {
 private fun HomeTitle(vm: AppViewModel) {
     Row(Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Title(tr("For you"), Modifier.weight(1f))
+        // The computer playing RyM nearby: its remote.
+        if (vm.pcNearby() != null) {
+            IconButton({ vm.remoteOpen = true }) {
+                Icon(androidx.compose.material.icons.Icons.Default.Computer, contentDescription = tr("Remote"), tint = MaterialTheme.colorScheme.primary)
+            }
+        }
         IconButton(vm::toggleTheme) {
             Icon(Icons.Default.Palette, tr("Switch theme"), tint = if (vm.ytmTheme) MaterialTheme.colorScheme.primary else Dim)
         }

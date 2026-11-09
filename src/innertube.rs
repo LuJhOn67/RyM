@@ -181,8 +181,69 @@ fn remember(way: Way) {
     }
 }
 
+/// How each client has done this run: links given, refusals, refusals in a row (and when the
+/// last one was), and its average time.
+#[derive(Debug, Clone, Copy, Default)]
+struct Record {
+    ok: u32,
+    failed: u32,
+    failed_in_row: u32,
+    last_failed: Option<std::time::Instant>,
+    ms: f32,
+}
+
+fn records() -> &'static std::sync::Mutex<std::collections::HashMap<String, Record>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Record>>> = std::sync::OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+fn record(way: Way, ok: bool, took: std::time::Duration) {
+    if let Ok(mut r) = records().lock() {
+        let e = r.entry(way.name()).or_default();
+        if ok {
+            e.ok += 1;
+            e.failed_in_row = 0;
+            let ms = took.as_secs_f32() * 1000.0;
+            e.ms = if e.ms == 0.0 { ms } else { e.ms * 0.7 + ms * 0.3 };
+        } else {
+            e.failed += 1;
+            e.failed_in_row += 1;
+            e.last_failed = Some(std::time::Instant::now());
+        }
+    }
+}
+
+/// Refused 3 times in a row within the last half hour: asked last for now.
+fn resting(way: Way) -> bool {
+    records().lock().ok().and_then(|r| r.get(&way.name()).copied()).is_some_and(|e| e.failed_in_row >= 3 && e.last_failed.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(1800)))
+}
+
+/// How the clients have done, for the settings ("VISIONOS 12/12 0.4 s · …").
+pub fn report() -> String {
+    let r = records().lock().map(|r| r.clone()).unwrap_or_default();
+    let mut lines: Vec<(u32, String)> = r
+        .iter()
+        .filter(|(_, e)| e.ok + e.failed > 0)
+        .map(|(name, e)| {
+            let short = name.split(' ').next().unwrap_or(name);
+            let time = if e.ok > 0 { format!(" {:.1} s", e.ms / 1000.0) } else { String::new() };
+            (e.ok, format!("{short} {}/{}{time}", e.ok, e.ok + e.failed))
+        })
+        .collect();
+    lines.sort_by_key(|l| std::cmp::Reverse(l.0));
+    lines.into_iter().map(|(_, l)| l).collect::<Vec<_>>().join(" · ")
+}
+
+/// Gets the player script and its solver ready when the app opens (only when Node.js is there),
+/// so the first song from the TV or Music player doesn't wait for them.
+pub async fn warm_up() {
+    if crate::ytjs::node().is_some() {
+        let _ = crate::ytjs::solve(&[], &["AAAAAAAAAAAAAAAAB".to_string()]).await;
+    }
+}
+
 /// The ways to try, in order: the one that worked last first; the TV and Music players only with
-/// Node.js (their puzzles), Music only signed in.
+/// Node.js (their puzzles), Music only signed in; clients refused again and again go last.
 fn order() -> Vec<Way> {
     let node = crate::ytjs::node().is_some();
     let signed_in = account("https://music.youtube.com").is_some();
@@ -202,6 +263,8 @@ fn order() -> Vec<Way> {
         let w = ways.remove(i);
         ways.insert(0, w);
     }
+    // Stable: the others keep their order.
+    ways.sort_by_key(|w| resting(*w));
     ways
 }
 
@@ -352,6 +415,7 @@ async fn web_player(way: Way, video_id: &str) -> Result<Audio> {
     }
     let mut a = audio_of(f, url, ua);
     a.client = way.name();
+    a.loudness_db = loudness_of(&v, f);
     Ok(a)
 }
 
@@ -369,6 +433,20 @@ pub struct Audio {
     pub user_agent: &'static str,
     /// Which client gave it ("NAME version"), to skip it if the link doesn't work.
     pub client: String,
+    /// How loud the song is, from YouTube (dB above its reference), for "Even loudness".
+    pub loudness_db: Option<f32>,
+    pub video_id: String,
+}
+
+/// How far above YouTube's reference (-14 LUFS) the song is: the stream's own `loudnessDb`, or
+/// the whole track's measure.
+fn loudness_of(v: &Value, format: &Value) -> Option<f32> {
+    let cfg = &v["playerConfig"]["audioConfig"];
+    format["loudnessDb"]
+        .as_f64()
+        .or_else(|| cfg["loudnessDb"].as_f64())
+        .or_else(|| Some(cfg["trackAbsoluteLoudnessLkfs"].as_f64()? - cfg["loudnessTargetLkfs"].as_f64().unwrap_or(-14.0)))
+        .map(|d| d as f32)
 }
 
 fn http() -> &'static reqwest::Client {
@@ -392,13 +470,16 @@ pub async fn audio_skipping(video_id: &str, skip: &[String]) -> Result<Audio> {
         if skip.contains(&name) {
             continue;
         }
+        let started = std::time::Instant::now();
         let got = match way {
             Way::VisionOs => visionos_audio(video_id).await,
             Way::App(i) => player(&CLIENTS[i], video_id).await,
             Way::Tv | Way::Music => web_player(way, video_id).await,
         };
+        record(way, got.is_ok(), started.elapsed());
         match got {
-            Ok(a) => {
+            Ok(mut a) => {
+                a.video_id = video_id.to_string();
                 remember(way);
                 keep(video_id, &a);
                 return Ok(a);
@@ -481,6 +562,8 @@ fn audio_of(best: &Value, url: String, user_agent: &'static str) -> Audio {
         seconds: num(best, "approxDurationMs").map(|ms| ms as f32 / 1000.0),
         user_agent,
         client: String::new(),
+        loudness_db: None,
+        video_id: String::new(),
     }
 }
 
@@ -511,6 +594,8 @@ fn pick(v: &Value, user_agent: &'static str) -> Result<Audio> {
         seconds: num(best, "approxDurationMs").map(|ms| ms as f32 / 1000.0),
         user_agent,
         client: String::new(),
+        loudness_db: loudness_of(v, best),
+        video_id: String::new(),
     })
 }
 
@@ -543,7 +628,7 @@ mod tests {
     #[ignore]
     async fn live_audio() {
         let a = audio("lYBUbBu4W08").await.expect("audio");
-        println!("itag {} {} {} kbps, {:?} bytes, {:?} s", a.itag, a.ext, a.bitrate / 1000, a.size, a.seconds);
+        println!("itag {} {} {} kbps, {:?} bytes, {:?} s, loudness {:?} dB from {}", a.itag, a.ext, a.bitrate / 1000, a.size, a.seconds, a.loudness_db, a.client);
         let r = http().get(&a.url).header("User-Agent", a.user_agent).header("Range", "bytes=0-65535").send().await.unwrap();
         println!("first range: HTTP {}, {} bytes", r.status(), r.bytes().await.unwrap().len());
     }

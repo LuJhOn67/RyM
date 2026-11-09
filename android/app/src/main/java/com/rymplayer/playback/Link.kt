@@ -29,6 +29,27 @@ import java.security.MessageDigest
  * apps' src/link.rs.
  */
 object Link {
+    /** A computer's note: what it plays, where in the song (when the note came) and its volume. */
+    data class PcState(
+        val ip: String,
+        val port: Int,
+        val device: String,
+        val videoId: String,
+        val title: String,
+        val artist: String,
+        val thumb: String?,
+        val playing: Boolean,
+        val position: Float,
+        val duration: Float,
+        val volume: Float,
+        /** Its "Remote from the phone" setting is on. */
+        val remote: Boolean,
+        val at: Long,
+    ) {
+        /** Where its song is now: the note's second, plus the time since while it plays. */
+        fun positionNow(now: Long = System.currentTimeMillis()): Float = (position + if (playing) (now - at) / 1000f else 0f).coerceAtMost(duration.takeIf { it > 0f } ?: Float.MAX_VALUE)
+    }
+
     const val PORT = 47811
 
     /** What plays, as the app's player last said: the queue, the song, the second, and since when. */
@@ -155,10 +176,10 @@ object Link {
     private var listening = false
 
     /**
-     * Seamless Music the other way: a PC of the same account tells what it plays; [onPc] hears it
-     * on the main thread (its address, port, name and song).
+     * Seamless Music the other way, the remote and "Play along": a PC of the same account tells
+     * what it plays (or that it's paused); [onPc] hears each note on the main thread.
      */
-    @Synchronized fun listen(ctx: android.content.Context, onPc: (String, Int, String, String) -> Unit) {
+    @Synchronized fun listen(ctx: android.content.Context, onPc: (PcState) -> Unit) {
         if (listening) return
         listening = true
         val main = Handler(Looper.getMainLooper())
@@ -185,24 +206,28 @@ object Link {
                 val note = runCatching { Json.parseToJsonElement(String(packet.data, 0, packet.length)).jsonObject }.getOrNull() ?: continue
                 val key = account ?: continue
                 if (!enabled || note["kind"]?.jsonPrimitive?.content != "pc" || note["account"]?.jsonPrimitive?.content != key) continue
-                if (note["playing"]?.jsonPrimitive?.booleanOrNull != true) continue
                 val port = note["port"]?.jsonPrimitive?.intOrNull ?: continue
-                val vid = note["video_id"]?.jsonPrimitive?.content ?: continue
-                val device = note["device"]?.jsonPrimitive?.content.orEmpty()
                 val ip = packet.address?.hostAddress ?: continue
-                main.post { onPc(ip, port, device, vid) }
+                fun str(k: String) = note[k]?.jsonPrimitive?.takeIf { it.isString }?.content.orEmpty()
+                fun num(k: String) = note[k]?.jsonPrimitive?.floatOrNull ?: 0f
+                val state = PcState(
+                    ip, port, str("device"), str("video_id"), str("title"), str("artist"), str("thumb").ifEmpty { null },
+                    note["playing"]?.jsonPrimitive?.booleanOrNull == true, num("position"), num("duration"),
+                    note["volume"]?.jsonPrimitive?.floatOrNull ?: 1f, note["remote"]?.jsonPrimitive?.booleanOrNull == true,
+                    System.currentTimeMillis(),
+                )
+                main.post { onPc(state) }
             }
             socket.close()
             lock?.release()
         }, "rym-link-listen").apply { isDaemon = true }.start()
     }
 
-    /** Takes the PC's music: its queue, the song in it and the second; then the PC pauses. Blocking. */
-    fun takeOver(ip: String, port: Int): Triple<List<Track>, Int, Float>? {
+    /** One request to a PC, with the account's key (and [query] after it). Blocking. */
+    private fun call(ip: String, port: Int, method: String, path: String, query: String = ""): String? {
         val key = account ?: return null
-        val base = "http://$ip:$port"
-        fun call(method: String, path: String): String? = runCatching {
-            val c = java.net.URL("$base$path?account=$key").openConnection() as java.net.HttpURLConnection
+        return runCatching {
+            val c = java.net.URL("http://$ip:$port$path?account=$key$query").openConnection() as java.net.HttpURLConnection
             c.requestMethod = method
             c.connectTimeout = 4000
             c.readTimeout = 4000
@@ -212,7 +237,22 @@ object Link {
             }
             c.inputStream.bufferedReader().use { it.readText() }.also { c.disconnect() }
         }.getOrNull()
-        val state = call("GET", "/state")?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return null
+    }
+
+    /** The remote: play, pause, toggle, next, prev, seek (seconds) or volume (0 to 1). Blocking. */
+    fun control(ip: String, port: Int, what: String, value: Float = 0f): Boolean =
+        call(ip, port, "POST", "/control", "&do=$what&value=$value") != null
+
+    /** Takes the PC's music: its queue, the song in it and the second; then the PC pauses. Blocking. */
+    fun takeOver(ip: String, port: Int): Triple<List<Track>, Int, Float>? {
+        val got = pcQueue(ip, port) ?: return null
+        call(ip, port, "POST", "/pause")
+        return got
+    }
+
+    /** The PC's queue, the song in it and the second, without pausing it ("Play along"). Blocking. */
+    fun pcQueue(ip: String, port: Int): Triple<List<Track>, Int, Float>? {
+        val state = call(ip, port, "GET", "/state")?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return null
         val songs = state["songs"]?.jsonArray?.mapNotNull { e ->
             val o = e.jsonObject
             val id = o["video_id"]?.jsonPrimitive?.content ?: return@mapNotNull null
@@ -222,7 +262,6 @@ object Link {
         val current = state["current"]?.jsonPrimitive?.intOrNull ?: 0
         if (songs.getOrNull(current) == null) return null
         val position = state["position"]?.jsonPrimitive?.floatOrNull ?: 0f
-        call("POST", "/pause")
         return Triple(songs, current, position)
     }
 }

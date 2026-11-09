@@ -36,6 +36,8 @@ pub struct Arriving {
     pub ext: String,
     /// Length YouTube reported, for formats that don't carry one (WebM).
     pub seconds: Option<f32>,
+    /// The song's id (its file's name in the cache).
+    pub id: String,
 }
 
 impl std::fmt::Debug for Arriving {
@@ -61,6 +63,7 @@ impl Arriving {
             done: AtomicBool::new(false),
             failed: Mutex::new(None),
         });
+        let id = save_to.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let worker = shared.clone();
         tokio::spawn(async move {
             let result = fetch(&url, &headers, &worker).await;
@@ -95,7 +98,7 @@ impl Arriving {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        Ok(Arriving { shared, ext, seconds })
+        Ok(Arriving { shared, ext, seconds, id })
     }
 
     /// A reader for the decoder, from the start of the song.

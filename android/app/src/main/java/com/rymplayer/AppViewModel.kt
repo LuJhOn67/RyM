@@ -407,6 +407,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Video plugin: the "download from a link" box is open. */
     var linkOpen by mutableStateOf(false)
 
+    /** The computer's remote is open. */
+    var remoteOpen by mutableStateOf(false)
+
     val versionName: String = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull().orEmpty()
 
     var autoUpdates by mutableStateOf(prefs.getBoolean("auto_updates", true))

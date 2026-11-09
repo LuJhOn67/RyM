@@ -3,7 +3,9 @@
 //!
 //! The phone sends a small JSON note by UDP broadcast every few seconds while RyM runs on it
 //! ([`Announce`], port [`PORT`]); it answers `GET /state` (the queue and where it is) and
-//! `POST /pause` on the TCP port the note gives. Only devices signed in to the same Google
+//! `POST /pause` on the TCP port the note gives. A computer sends the same notes, and also
+//! answers `POST /control?do=…&value=…` (play, pause, toggle, next, prev, seek, volume) when
+//! remote control is on: the phone's remote, and its "Play along" (the same song in step). Only devices signed in to the same Google
 //! account take part: the note carries [`account_key`], and the phone checks it on each request.
 //! The same as the phone app's `playback/Link.kt`.
 
@@ -135,6 +137,11 @@ pub struct Playing {
     pub position: f32,
     pub since: Option<std::time::Instant>,
     pub playing: bool,
+    /// The song's length and the volume (0 to 1), for the phone's remote.
+    pub duration: f32,
+    pub volume: f32,
+    /// The phone may control this computer's music.
+    pub remote: bool,
 }
 
 impl Playing {
@@ -150,7 +157,7 @@ impl Playing {
     pub fn note(&self, device: &str, port: u16) -> Option<String> {
         let key = self.account.as_ref().filter(|_| self.enabled)?;
         let t = self.songs.get(self.current);
-        let mut n = serde_json::json!({ "rym": 1, "kind": "pc", "device": device, "account": key, "port": port, "playing": self.playing && t.is_some() });
+        let mut n = serde_json::json!({ "rym": 1, "kind": "pc", "device": device, "account": key, "port": port, "playing": self.playing && t.is_some(), "remote": self.remote, "volume": self.volume, "duration": self.duration });
         if let Some(t) = t {
             n["video_id"] = t.video_id.clone().into();
             n["title"] = t.title.clone().into();
@@ -167,13 +174,28 @@ impl Playing {
         let from = self.current.saturating_sub(100);
         let to = (self.current + 401).min(self.songs.len());
         let songs: Vec<serde_json::Value> = self.songs[from..to].iter().map(Self::track_json).collect();
-        Some(serde_json::json!({ "songs": songs, "current": self.current - from, "position": self.position_now(), "playing": self.playing }).to_string())
+        Some(serde_json::json!({ "songs": songs, "current": self.current - from, "position": self.position_now(), "playing": self.playing, "duration": self.duration, "volume": self.volume, "remote": self.remote }).to_string())
     }
 }
 
-/// Tells the phones what this computer plays (a note every 3 seconds) and answers their
-/// `/state` and `/pause` (with the account's key); `pause` runs when a phone took the music.
-pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing>>, pause: impl Fn() + Send + Sync + 'static) -> bool {
+/// What the phone's remote asked: the action and its value (seconds for `seek`, 0 to 1 for `volume`).
+pub fn control_of(query: &str) -> Option<(String, f32)> {
+    let mut what = None;
+    let mut value = 0.0;
+    for kv in query.split('&') {
+        match kv.split_once('=') {
+            Some(("do", v)) if ["play", "pause", "toggle", "next", "prev", "seek", "volume"].contains(&v) => what = Some(v.to_string()),
+            Some(("value", v)) => value = v.parse::<f32>().ok().filter(|x| x.is_finite()).unwrap_or(0.0),
+            _ => {}
+        }
+    }
+    what.map(|w| (w, value))
+}
+
+/// Tells the phones what this computer plays (a note every 3 seconds; every second while it
+/// plays, so "Play along" keeps in step) and answers their `/state`, `/pause` and `/control`
+/// (with the account's key); `pause` runs when a phone took the music, `control` for the remote.
+pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing>>, pause: impl Fn() + Send + Sync + 'static, control: impl Fn(String, f32) + Send + Sync + 'static) -> bool {
     use std::io::{BufRead, BufReader, Write};
     let Ok(server) = std::net::TcpListener::bind(("0.0.0.0", 0)) else { return false };
     let Ok(port) = server.local_addr().map(|a| a.port()) else { return false };
@@ -198,6 +220,14 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
                         pause();
                         (200, "{}".to_string())
                     }
+                    (true, "POST") if target.starts_with("/control") => match (p.remote, control_of(target.split_once('?').map_or("", |(_, q)| q))) {
+                        (false, _) => (403, "{}".to_string()),
+                        (true, Some((what, value))) => {
+                            control(what, value);
+                            (200, "{}".to_string())
+                        }
+                        (true, None) => (400, "{}".to_string()),
+                    },
                     _ => (404, "{}".to_string()),
                 }
             };
@@ -214,11 +244,11 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
             let Ok(socket) = UdpSocket::bind(("0.0.0.0", 0)) else { return };
             let _ = socket.set_broadcast(true);
             loop {
-                let note = playing.lock().ok().and_then(|p| p.note(&device, port));
+                let (note, often) = playing.lock().ok().map(|p| (p.note(&device, port), p.playing)).unwrap_or((None, false));
                 if let Some(n) = note {
                     let _ = socket.send_to(n.as_bytes(), ("255.255.255.255", PORT));
                 }
-                std::thread::sleep(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_secs(if often { 1 } else { 3 }));
             }
         })
         .is_ok()
@@ -229,9 +259,17 @@ mod pc_tests {
     use super::*;
 
     #[test]
+    fn remote_requests() {
+        assert_eq!(control_of("account=k&do=seek&value=42.5"), Some(("seek".into(), 42.5)));
+        assert_eq!(control_of("do=next&account=k"), Some(("next".into(), 0.0)));
+        assert_eq!(control_of("do=format-disk"), None);
+        assert_eq!(control_of("do=volume&value=NaN"), Some(("volume".into(), 0.0)));
+    }
+
+    #[test]
     fn the_pc_note_and_state() {
         let t = |id: &str| Track { video_id: id.into(), title: id.into(), artist: "A".into(), album: String::new(), duration: "3:00".into(), thumb: None, album_id: None, artist_id: None, link: None };
-        let mut p = Playing { account: Some("k".into()), enabled: true, songs: vec![t("a"), t("b")], current: 1, position: 10.0, since: None, playing: true };
+        let mut p = Playing { account: Some("k".into()), enabled: true, songs: vec![t("a"), t("b")], current: 1, position: 10.0, since: None, playing: true, duration: 200.0, volume: 0.5, remote: true };
         let note: Announce = parse(p.note("PC", 5000).unwrap().as_bytes()).unwrap();
         assert_eq!((note.kind.as_str(), note.video_id.as_str(), note.port), ("pc", "b", 5000));
         let state: State = serde_json::from_str(&p.state().unwrap()).unwrap();

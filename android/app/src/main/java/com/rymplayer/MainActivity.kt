@@ -224,5 +224,6 @@ private fun Main(vm: AppViewModel) {
         vm.video?.let { com.rymplayer.ui.VideoPage(vm, it) }
         vm.update?.let { com.rymplayer.ui.UpdateDialog(vm, it) }
         if (vm.linkOpen) com.rymplayer.ui.LinkDialog(vm)
+        if (vm.remoteOpen) com.rymplayer.ui.RemoteSheet(vm) { vm.remoteOpen = false }
     }
 }

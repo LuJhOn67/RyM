@@ -92,6 +92,12 @@ enum Ev {
     /// A phone took the music (Seamless Music the other way): pause here.
     LinkPause,
     Peer(rymplayer::link::Announce, std::net::IpAddr),
+    /// The phone's remote: an action and its value.
+    Remote(String, f32),
+    /// SponsorBlock's non-music parts of the song asked for (by its request id).
+    Segments(u64, rymplayer::sponsorblock::Segments),
+    /// What yt-dlp, ejs and Node are (the settings' line).
+    YtDlpStatus(String),
     TookOver(String, anyhow::Result<rymplayer::link::State>),
     Done,
 }
@@ -128,6 +134,12 @@ struct State {
     loading: bool,
     ended_for: u64,
     crossfade_next: bool,
+    /// Gapless: the next song was loaded to start on the frame this one ends.
+    gapless_next: bool,
+    /// SponsorBlock: the playing song's non-music parts.
+    segments: rymplayer::sponsorblock::Segments,
+    /// yt-dlp, ejs and Node as found (the settings).
+    ytdlp_status: String,
     crossfade_for: u64,
     resume_at: Option<(String, f32)>,
     radio_pending: bool,
@@ -238,6 +250,9 @@ struct State {
     store: Vec<rymplayer::plugins::Plugin>,
     /// Where the search results go on.
     results_more: Option<More>,
+    /// The search's rows shown (indices into `results`) under the chosen filter: all, songs, videos.
+    results_shown: Vec<usize>,
+    results_filter: i32,
     /// A phone took the music: until then, its songs aren't taken back here (no ping-pong).
     link_quiet_until: Option<Instant>,
     /// Seamless Music, asked first: the phone waiting for an answer (address, port, key, name).
@@ -480,6 +495,9 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         loading: false,
         ended_for: 0,
         crossfade_next: false,
+        gapless_next: false,
+        segments: Vec::new(),
+        ytdlp_status: String::new(),
         crossfade_for: 0,
         resume_at: None,
         radio_pending: false,
@@ -548,6 +566,8 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         tray: None,
         store: Vec::new(),
         results_more: None,
+        results_shown: Vec::new(),
+        results_filter: 0,
         link_quiet_until: None,
         peer_pending: None,
         prompt_for: String::new(),
@@ -748,6 +768,12 @@ fn wire(ui: &AppWindow, st: &Shared) {
     }
     {
         let st = st.clone();
+        let st2 = st.clone();
+        app.on_set_results_filter(move |f| {
+            st2.borrow_mut().results_filter = f;
+            show_songs(&st2, 'r');
+            mark_playing(&st2);
+        });
         app.on_pick_suggestion(move |i| {
             let text = st.borrow().suggestions.get(i as usize).map(|s| s.text.clone());
             if let Some(text) = text {
@@ -885,8 +911,9 @@ fn start(st: &Shared) {
             p.enabled = s.config.link_announce;
         }
         let device = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into());
-        rymplayer::link::announce(device, s.link.clone(), || send(Ev::LinkPause));
+        rymplayer::link::announce(device, s.link.clone(), || send(Ev::LinkPause), |what, value| send(Ev::Remote(what, value)));
     }
+    background_upkeep(st);
     if st.borrow().config.lyrics_overlay {
         let st2 = st.clone();
         slint::Timer::single_shot(Duration::from_millis(800), move || show_float(&st2, true));
@@ -993,7 +1020,8 @@ fn fill_covers(st: &Shared) {
     for (i, t) in s.q.songs.iter().skip(start).take(QUEUE_SHOWN).enumerate() {
         fill_song(&s.m.queue, i, get(t, ROW_PX));
     }
-    for (model, tracks) in [(&s.m.list, &s.list), (&s.m.results, &s.results)] {
+    let list: Vec<&Track> = s.list.iter().collect();
+    for (model, tracks) in [(&s.m.list, list), (&s.m.results, shown_results(&s))] {
         for (i, t) in tracks.iter().enumerate() {
             fill_song(model, i, get(t, ROW_PX));
         }
@@ -1048,7 +1076,13 @@ fn song_item(s: &mut State, key: String, t: &Track) -> Song {
         cover: cover(s, t.thumb.as_ref(), ROW_PX),
         liked: s.liked.contains(&t.video_id),
         playing,
+        video: rymplayer::api::found_as_video(&t.video_id),
     }
+}
+
+/// The search's rows under the chosen filter.
+fn shown_results(s: &State) -> Vec<&Track> {
+    s.results_shown.iter().filter_map(|&i| s.results.get(i)).collect()
 }
 
 fn card_item(s: &mut State, key: String, t: &Track) -> Card {
@@ -1147,12 +1181,33 @@ fn show_cards(st: &Shared, which: char) {
 
 fn show_songs(st: &Shared, which: char) {
     let mut s = st.borrow_mut();
-    let tracks = if which == 'l' { s.list.clone() } else { s.results.clone() };
-    let items: Vec<Song> = tracks.iter().enumerate().map(|(i, t)| song_item(&mut s, format!("{which}:{i}"), t)).collect();
     if which == 'l' {
+        let tracks = s.list.clone();
+        let items: Vec<Song> = tracks.iter().enumerate().map(|(i, t)| song_item(&mut s, format!("l:{i}"), t)).collect();
         s.m.list.set_vec(items);
-    } else {
-        s.m.results.set_vec(items);
+        return;
+    }
+    // Search: all, the songs, or the videos (the keys keep each row's place in `results`).
+    let tracks = s.results.clone();
+    let videos = tracks.iter().filter(|t| rymplayer::api::found_as_video(&t.video_id)).count();
+    let mixed = videos > 0 && videos < tracks.len();
+    if !mixed {
+        s.results_filter = 0;
+    }
+    let filter = s.results_filter;
+    let shown: Vec<usize> = (0..tracks.len())
+        .filter(|&i| match filter {
+            1 => !rymplayer::api::found_as_video(&tracks[i].video_id),
+            2 => rymplayer::api::found_as_video(&tracks[i].video_id),
+            _ => true,
+        })
+        .collect();
+    let items: Vec<Song> = shown.iter().map(|&i| song_item(&mut s, format!("r:{i}"), &tracks[i])).collect();
+    s.results_shown = shown;
+    s.m.results.set_vec(items);
+    if let Some(ui) = s.ui.upgrade() {
+        ui.global::<App>().set_results_mixed(mixed);
+        ui.global::<App>().set_results_filter(filter);
     }
 }
 
@@ -1228,7 +1283,7 @@ fn refresh_hearts(st: &Shared) {
     let start = s.q.current.map_or(0, |c| c + 1);
     let queue: Vec<&Track> = s.q.songs.iter().skip(start).take(QUEUE_SHOWN).collect();
     let list: Vec<&Track> = s.list.iter().collect();
-    let results: Vec<&Track> = s.results.iter().collect();
+    let results = shown_results(&s);
     for (model, tracks) in [(&s.m.queue, queue), (&s.m.list, list), (&s.m.results, results)] {
         for (i, t) in tracks.iter().enumerate() {
             if let Some(mut row) = model.row_data(i) {
@@ -1249,7 +1304,8 @@ fn refresh_hearts(st: &Shared) {
 fn mark_playing(st: &Shared) {
     let s = st.borrow();
     let now = s.q.now().map(|t| t.video_id.clone()).unwrap_or_default();
-    for (model, tracks) in [(&s.m.list, &s.list), (&s.m.results, &s.results)] {
+    let list: Vec<&Track> = s.list.iter().collect();
+    for (model, tracks) in [(&s.m.list, list), (&s.m.results, shown_results(&s))] {
         for (i, t) in tracks.iter().enumerate() {
             if let Some(mut row) = model.row_data(i) {
                 let playing = t.video_id == now;
@@ -1323,7 +1379,9 @@ fn fill_settings(st: &Shared) {
         switch("automix", "Smart Automix", "Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing", c.automix),
         choice("crossfade", "Crossfade", format!("{} s", c.crossfade)),
         switch("skip-silence", "Skip silence", "Quiet starts and ends are skipped", c.skip_silence),
-        switch("normalize", "Even loudness", "Every song about as loud", c.normalize),
+        switch("normalize", "Even loudness", "Every song about as loud (by YouTube's own measure when it has one)", c.normalize),
+        switch("gapless", "Gapless", "With no crossfade, the next song starts the instant this one ends", c.gapless),
+        switch("sponsorblock", "Skip non-music parts", "SponsorBlock: a music video's intro, talk and outro are skipped", c.sponsorblock),
         choice("eq", "Equalizer", t(c.eq_name())),
         choice("mode", "Speed", t(c.mode_name())),
         choice("sleep", "Sleep timer", sleep),
@@ -1348,10 +1406,16 @@ fn fill_settings(st: &Shared) {
         switch("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
         switch("link-auto", "Take over from the phone by itself", "Off: RyM asks first", c.link_auto),
         switch("announce", "Tell the phone what plays here", "Open RyM on your phone and it takes the music from here", c.link_announce),
+        switch("remote", "Remote from the phone", "Your phone can play, pause, skip, seek and set the volume here, and play along in step", c.remote_control),
         head("Playback and downloads"),
         choice("source", "Audio source", t(c.source.label())),
         choice("quality", "Download quality", t(if c.download_best { "Best (yt-dlp)" } else { "Fast" })),
         choice("connections", "Download connections", c.download_connections.to_string()),
+        choice("cache", "Keep played songs up to", if c.cache_limit_gb == 0 { t("No limit") } else { format!("{} GB", c.cache_limit_gb) }),
+        button("innertube", "YouTube's ways", {
+            let r = rymplayer::innertube::report();
+            if r.is_empty() { t("How each way of asking YouTube did (after a few songs)") } else { r }
+        }, "Refresh"),
         head("Discord"),
         switch("discord", "Show on Discord", "What you play on your Discord profile; needs an application id from discord.com/developers", c.discord),
         field("discord-id", "Application id", "", &c.discord_app_id),
@@ -1360,8 +1424,9 @@ fn fill_settings(st: &Shared) {
         field("lastfm-secret", "Shared secret", "", &c.lastfm_secret),
         lastfm,
         head("yt-dlp"),
+        switch("ytdlp-auto", "Update by itself", "Once a week, when RyM opens", c.ytdlp_auto_update),
         switch("ytdlp-nightly", "Nightly builds", "The newest yt-dlp every day (fixes come sooner)", c.ytdlp_nightly),
-        button("ytdlp", "Update yt-dlp", s.ytdlp_text.clone(), "Update"),
+        button("ytdlp", "Update yt-dlp", if s.ytdlp_text.is_empty() { s.ytdlp_status.clone() } else { format!("{} · {}", s.ytdlp_text, s.ytdlp_status) }, "Update"),
         head("Window"),
         choice("close", "When closing the window", t(match c.close_action.as_str() {
             "tray" => "Keep in background",
@@ -1424,6 +1489,10 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "seamless" => c.cross_ears = on,
             "announce" => c.link_announce = on,
             "link-auto" => c.link_auto = on,
+            "remote" => c.remote_control = on,
+            "gapless" => c.gapless = on,
+            "sponsorblock" => c.sponsorblock = on,
+            "ytdlp-auto" => c.ytdlp_auto_update = on,
             "vlc" => c.play_in_vlc = on,
             p if p.starts_with("plugin:") => {
                 let pid = &p[7..];
@@ -1585,6 +1654,17 @@ fn choose(st: &Shared, id: &str, step: i32) {
             s.config.download_best = !s.config.download_best;
             stream::download_best(s.config.download_best);
             s.config.save();
+        }
+        "cache" => {
+            const SIZES: [u32; 7] = [0, 1, 2, 5, 10, 20, 50];
+            let (limit, keep) = {
+                let mut s = st.borrow_mut();
+                let at = SIZES.iter().position(|g| *g == s.config.cache_limit_gb).unwrap_or(3);
+                s.config.cache_limit_gb = SIZES[cycle(at, SIZES.len())];
+                s.config.save();
+                (s.config.cache_limit_gb, s.q.now().map(|t| t.video_id.clone()).unwrap_or_default())
+            };
+            trim_cache(limit, keep);
         }
         "connections" => {
             let mut s = st.borrow_mut();
@@ -2036,6 +2116,7 @@ fn press(st: &Shared, id: &str) {
         }
         "link-dl" => ask_text(st, "link", tr("Download from a link"), tr("Paste a link from YouTube or any site")),
         "check" => check_updates(st, true),
+        "innertube" => fill_settings(st),
         "ytdlp" => {
             let nightly = st.borrow().config.ytdlp_nightly;
             st.borrow_mut().ytdlp_text = tr("Updating…").into();
@@ -3046,6 +3127,36 @@ fn tick(st: &Shared) {
         play_at(st, n);
         return;
     }
+    // Gapless (no crossfade): the next song, already downloaded, waits to start on the very frame
+    // this one ends.
+    if fade_secs == 0.0
+        && s.config.gapless
+        && playing
+        && !s.repeat_one
+        && dur > 10.0
+        && pos >= dur - 1.5
+        && s.crossfade_for != s.request_id
+        && let Some(n) = next_index
+        && s.q.songs.get(n).is_some_and(|t| stream::cached(&t.video_id).is_some())
+    {
+        s.crossfade_for = s.request_id;
+        s.gapless_next = true;
+        drop(s);
+        play_at(st, n);
+        return;
+    }
+    // SponsorBlock: a non-music part (an intro, a talk) is jumped over.
+    if s.config.sponsorblock
+        && playing
+        && let Some(to) = rymplayer::sponsorblock::skip_to(&s.segments, pos)
+    {
+        if let Some(a) = &s.audio {
+            a.seek(to);
+        }
+        drop(s);
+        toast(st, tr("Skipped a part that isn't music (SponsorBlock)"));
+        return;
+    }
     // Nobody sees the window: only the end of the song is looked at below; what it showed is
     // forgotten, so all of it is told again when it comes back.
     if unseen(s.ui.upgrade().as_ref()) {
@@ -3269,10 +3380,85 @@ fn extras(st: &Shared) {
         }
     }
     // What the phones are told.
+    let volume = s.audio.as_ref().map_or(0.8, Audio::volume);
     if let Ok(mut p) = s.link.lock() {
         p.playing = playing && loaded;
         p.position = pos;
         p.since = Some(Instant::now());
+        p.duration = dur;
+        p.volume = volume;
+        p.remote = s.config.remote_control;
+    }
+}
+
+/// When the app opens: the player script and its solver made ready, yt-dlp's versions looked at
+/// (and yt-dlp updated if a week went by), and the downloaded songs kept under their limit.
+fn background_upkeep(st: &Shared) {
+    post(async {
+        rymplayer::innertube::warm_up().await;
+        Ev::Done
+    });
+    let (auto, last, nightly, limit) = {
+        let s = st.borrow();
+        (s.config.ytdlp_auto_update, s.config.ytdlp_updated_at, s.config.ytdlp_nightly, s.config.cache_limit_gb)
+    };
+    let now = rymplayer::updates::now();
+    if auto && rymplayer::ytdlp::update_due(last, now) {
+        {
+            let mut s = st.borrow_mut();
+            s.config.ytdlp_updated_at = now;
+            s.config.save();
+        }
+        post(async move {
+            let r = rymplayer::ytdlp::update(nightly).await;
+            log(&format!("yt-dlp weekly update: {}", r.as_ref().map_or_else(|e| e.to_string(), |t| t.clone())));
+            Ev::YtDlpStatus(rymplayer::ytdlp::status().await)
+        });
+    } else {
+        post(async { Ev::YtDlpStatus(rymplayer::ytdlp::status().await) });
+    }
+    trim_cache(limit, String::new());
+}
+
+/// Downloaded songs over the limit go (off the window's thread).
+fn trim_cache(limit_gb: u32, keep: String) {
+    if limit_gb == 0 {
+        return;
+    }
+    post(async move {
+        let freed = tokio::task::spawn_blocking(move || stream::trim_cache(limit_gb, &keep)).await.unwrap_or(0);
+        if freed > 0 {
+            log(&format!("cache: {} MB freed", freed / (1024 * 1024)));
+        }
+        Ev::Done
+    });
+}
+
+/// The phone's remote.
+fn remote(st: &Shared, what: &str, value: f32) {
+    if !st.borrow().config.remote_control {
+        return;
+    }
+    let playing = st.borrow().audio.as_ref().is_some_and(Audio::is_playing);
+    match what {
+        "toggle" => toggle_playback(st),
+        "play" if !playing => toggle_playback(st),
+        "pause" if playing => toggle_playback(st),
+        "next" => skip(st),
+        "prev" => previous(st),
+        "seek" => {
+            if let Some(a) = &st.borrow().audio {
+                a.seek(value.max(0.0));
+            }
+        }
+        "volume" => {
+            let v = value.clamp(0.0, 1.0);
+            if let Some(a) = &st.borrow().audio {
+                a.set_volume(v);
+            }
+            with_app(st, |a| a.set_volume(v));
+        }
+        _ => {}
     }
 }
 
@@ -4109,6 +4295,7 @@ fn handle(st: &Shared, ev: Ev) {
                         let mut s = st.borrow_mut();
                         s.results = p.tracks.into_iter().filter(|t| t.link.is_none()).collect();
                         s.results_more = p.more;
+                        s.results_filter = 0;
                     }
                     show_songs(st, 'r');
                     mark_playing(st);
@@ -4191,9 +4378,12 @@ fn handle(st: &Shared, ev: Ev) {
             let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
             let resume = s.resume_at.take().filter(|(id, at)| *id == t.video_id && *at > 1.0).map(|(_, at)| at);
             let crossfade = std::mem::take(&mut s.crossfade_next);
+            let gapless = std::mem::take(&mut s.gapless_next);
+            s.segments.clear();
             let automix = s.config.automix;
             let secs = if automix { rymplayer::automix::mix_secs(s.config.crossfade) } else { s.config.crossfade as f32 };
             let started = match (result, &mut s.audio) {
+                (Ok(song), Some(a)) if gapless => a.gapless_to(&song, known).map_err(|e| e.to_string()),
                 (Ok(song), Some(a)) if crossfade && automix => a.automix_to(&song, known, secs).map_err(|e| e.to_string()),
                 (Ok(song), Some(a)) if crossfade => a.crossfade_to(&song, known, secs).map_err(|e| e.to_string()),
                 (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()).map(|()| {
@@ -4210,6 +4400,15 @@ fn handle(st: &Shared, ev: Ev) {
                 Ok(()) => {
                     prefetch_next(st);
                     lastfm_start(st);
+                    let (sponsor, limit) = {
+                        let s = st.borrow();
+                        (s.config.sponsorblock, s.config.cache_limit_gb)
+                    };
+                    if sponsor {
+                        let vid = t.video_id.clone();
+                        post(async move { Ev::Segments(id, rymplayer::sponsorblock::segments(&vid).await) });
+                    }
+                    trim_cache(limit, t.video_id.clone());
                 }
                 Err(e) => {
                     log(&format!("can't play {}: {e}", t.video_id));
@@ -4506,6 +4705,7 @@ fn handle(st: &Shared, ev: Ev) {
             toast(st, &format!("yt-dlp: {text}"));
             st.borrow_mut().ytdlp_text = text;
             fill_settings(st);
+            post(async { Ev::YtDlpStatus(rymplayer::ytdlp::status().await) });
         }
         Ev::LastFmToken(Ok((token, page))) => {
             st.borrow_mut().lastfm_token = Some(token);
@@ -4541,6 +4741,17 @@ fn handle(st: &Shared, ev: Ev) {
             }
         }
         Ev::Peer(note, ip) => heard_peer(st, note, ip),
+        Ev::Remote(what, value) => remote(st, &what, value),
+        Ev::Segments(id, segments) => {
+            let mut s = st.borrow_mut();
+            if id == s.request_id {
+                s.segments = segments;
+            }
+        }
+        Ev::YtDlpStatus(text) => {
+            st.borrow_mut().ytdlp_status = text;
+            fill_settings(st);
+        }
         Ev::TookOver(device, Ok(state)) => {
             let current = state.current;
             let songs: Vec<Track> = state.songs.into_iter().map(Track::from).collect();
@@ -4645,7 +4856,7 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     app.set_volume(0.5);
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("seasons")))));
     app.set_artist_name("Rival".into());
-    let song = |t: &str, a: &str, c: Image| Song { key: "q:1".into(), title: t.into(), artist: a.into(), cover: c, liked: false, playing: false };
+    let song = |t: &str, a: &str, c: Image| Song { key: "q:1".into(), title: t.into(), artist: a.into(), cover: c, liked: false, playing: false, video: false };
     app.set_queue(ModelRc::from(Rc::new(VecModel::from(vec![
         song("Another Love", "Tom Odell", swatch(40, 90, 120)),
         song("Die For You", "VALORANT, Grabbitz", swatch(200, 20, 30)),

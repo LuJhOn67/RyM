@@ -76,7 +76,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
         Link.pause = { pause() }
         // Seamless Music from the PC: while nothing plays here, a PC of the same account's music moves here.
-        Link.listen(context) { ip, port, device, vid -> fromPc(ip, port, device, vid) }
+        Link.listen(context) { fromPc(it) }
+        watchNonMusic()
         future.addListener({
             val c = runCatching { future.get() }.getOrElse {
                 ready.completeExceptionally(it)
@@ -487,8 +488,124 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     private var pcNote: PcNote? = null
     private data class PcNote(val ip: String, val port: Int, val device: String, val vid: String, val at: Long)
 
-    private fun fromPc(ip: String, port: Int, device: String, vid: String) {
-        pcNote = PcNote(ip, port, device, vid, System.currentTimeMillis())
+    /** SponsorBlock: a music video's non-music parts (intro, talk, outro) are skipped. */
+    var skipNonMusic by mutableStateOf(context.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("sponsorblock", true))
+        private set
+
+    fun toggleSkipNonMusic() {
+        skipNonMusic = !skipNonMusic
+        context.getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("sponsorblock", skipNonMusic).apply()
+    }
+
+    /** Twice a second while a song plays: its non-music parts (asked once per song) are jumped over. */
+    private fun watchNonMusic() {
+        scope.launch {
+            var forId: String? = null
+            var parts: List<Pair<Float, Float>> = emptyList()
+            while (isActive) {
+                delay(500)
+                val id = current?.videoId
+                if (id != forId) {
+                    forId = id
+                    parts = emptyList()
+                    if (id != null && skipNonMusic) {
+                        val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.SponsorBlock.segments(id) }
+                        if (current?.videoId == id) parts = found
+                    }
+                }
+                val c = controller ?: continue
+                if (!skipNonMusic || parts.isEmpty() || !c.isPlaying) continue
+                val to = com.rymplayer.data.SponsorBlock.skipTo(parts, c.currentPosition / 1000f) ?: continue
+                seekTo(to)
+                message = com.rymplayer.tr("Skipped a part that isn't music (SponsorBlock)")
+            }
+        }
+    }
+
+    /** The computer heard last (its note), for the remote. */
+    var pc by mutableStateOf<Link.PcState?>(null)
+        private set
+
+    /** "Play along": the PC's song plays here too, in step (the PC goes on playing). */
+    var playAlong by mutableStateOf(false)
+        private set
+
+    /** Added to the PC's second while playing along (headphones and speakers lag differently). */
+    var alongOffsetMs by mutableIntStateOf(context.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("along_offset_ms", 0))
+        private set
+
+    fun nudgeAlongOffset(ms: Int) {
+        alongOffsetMs = (alongOffsetMs + ms).coerceIn(-1000, 1000)
+        context.getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putInt("along_offset_ms", alongOffsetMs).apply()
+        lastFix = 0
+    }
+
+    private fun fromPc(n: Link.PcState) {
+        pc = n
+        if (n.playing && n.videoId.isNotEmpty()) pcNote = PcNote(n.ip, n.port, n.device, n.videoId, n.at)
+        if (playAlong) follow(n)
+    }
+
+    /** The phone's remote for the PC heard last. */
+    fun remote(what: String, value: Float = 0f) {
+        val n = pc ?: return
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            if (!Link.control(n.ip, n.port, what, value)) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { message = com.rymplayer.tr("The computer didn't answer") }
+            }
+        }
+    }
+
+    fun startPlayAlong() {
+        val n = pc ?: return
+        playAlong = true
+        lastFix = 0
+        join(n)
+    }
+
+    fun stopPlayAlong() {
+        playAlong = false
+    }
+
+    private var joining = false
+    private var lastFix = 0L
+
+    /** Plays the PC's queue from its song and second (plus the offset and a moment to start). */
+    private fun join(n: Link.PcState) {
+        if (joining) return
+        joining = true
+        scope.launch {
+            val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Link.pcQueue(n.ip, n.port) }
+            joining = false
+            if (got == null || !playAlong) return@launch
+            val (songs, current, position) = got
+            resumeAt = songs[current].videoId to ((position + alongOffsetMs / 1000f + 0.4f) * 1000).toLong().coerceAtLeast(0)
+            start(songs, current)
+            lastFix = System.currentTimeMillis()
+        }
+    }
+
+    /** Each PC note while playing along: the same song, playing or paused like it, within a third of a second. */
+    private fun follow(n: Link.PcState) {
+        if (loading || joining || n.videoId.isEmpty()) return
+        if (current?.videoId != n.videoId) {
+            join(n)
+            return
+        }
+        val c = controller ?: return
+        if (n.playing != c.isPlaying) {
+            if (n.playing) c.play() else c.pause()
+            return
+        }
+        if (!n.playing) return
+        val now = System.currentTimeMillis()
+        if (now - lastFix < 4000) return
+        val want = n.positionNow(now) + alongOffsetMs / 1000f
+        val here = c.currentPosition / 1000f
+        if (kotlin.math.abs(want - here) > 0.35f) {
+            lastFix = now
+            seekTo(want + 0.05f)
+        }
     }
 
     /** RyM was opened on the phone: if the PC is playing (heard in the last seconds) and nothing plays here, the music comes here. */
