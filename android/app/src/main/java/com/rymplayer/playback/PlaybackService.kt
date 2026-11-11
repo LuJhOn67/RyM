@@ -38,6 +38,22 @@ object QueueBridge {
 }
 
 /**
+ * When the network drops mid-song, loading tries again (1, 2, 4, 8 then every 10 s, about two
+ * minutes in all) and the song goes on once it's back. A refused or gone link (4xx) isn't retried.
+ */
+@OptIn(UnstableApi::class)
+private class KeepTrying : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+    override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        val e = info.exception
+        if (e is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException && e.responseCode in 400..499) return C.TIME_UNSET
+        if (e is androidx.media3.datasource.HttpDataSource.HttpDataSourceException) return minOf(1000L shl minOf(info.errorCount - 1, 3), 10_000L)
+        return super.getRetryDelayMsFor(info)
+    }
+
+    override fun getMinimumLoadableRetryCount(dataType: Int) = 16
+}
+
+/**
  * Plays in the background and shows Android's media notification (with lock-screen controls).
  *
  * Two players: the one the media session shows, and the other, used by the smart automix. When a
@@ -117,7 +133,7 @@ class PlaybackService : MediaSessionService() {
         }
         val exo = ExoPlayer.Builder(this, renderers)
             .setLoadControl(load)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, WebDataSource.Factory())))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, WebDataSource.Factory())).setLoadErrorHandlingPolicy(KeepTrying()))
             // Only the session's player holds the audio focus (the other would take it away).
             .setAudioAttributes(attributes, i == 0)
             .setHandleAudioBecomingNoisy(true)
