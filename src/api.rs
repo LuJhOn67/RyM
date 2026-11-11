@@ -683,7 +683,7 @@ fn watch_track(t: WatchPlaylistTrack) -> Track {
         video_id: t.video_id.get_raw().to_string(),
         album_id: None,
         artist_id: None,
-        title: t.title,
+        title: clean_title(&t.title, &t.author),
         artist: t.author,
         album: String::new(),
         duration: t.duration,
@@ -854,7 +854,64 @@ fn video_row(mut t: Track) -> Track {
     if t.album.ends_with("views") || t.album.ends_with("view") {
         t.album.clear();
     }
+    t.title = clean_title(&t.title, &t.artist);
     t
+}
+
+/// Words that only ever describe the upload, never the song.
+const CLUTTER: [&str; 22] = [
+    "official", "music", "video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k", "mv", "m/v", "oficial",
+    "officiel", "clip", "full", "videoclip", "videoclipe", "with", "on", "screen",
+];
+/// One of these must be there for brackets to count as clutter ("(Official)" alone stays).
+const CLUTTER_MARK: [&str; 13] = ["video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k", "mv", "m/v", "oficial", "officiel"];
+
+fn is_clutter(inner: &str) -> bool {
+    let words: Vec<String> = inner.to_lowercase().split(|c: char| c.is_whitespace() || c == '-' || c == '_').filter(|w| !w.is_empty()).map(str::to_string).collect();
+    !words.is_empty() && words.iter().all(|w| CLUTTER.contains(&w.as_str())) && words.iter().any(|w| CLUTTER_MARK.contains(&w.as_str()))
+}
+
+/// A title as a song's, not an upload's: brackets that only say "(Official Video)", "[Official
+/// Music Video]", "(Lyrics)", "(Visualizer)", "[HD]" and the like go, so do "| Official Video",
+/// hashtags, and the artist's name in front ("Artist - Song"). Brackets that mean something
+/// ("(Remix)", "(Live)", "(feat. X)") stay. The same rules as ytm_bridge.py and the phone's.
+pub fn clean_title(title: &str, artist: &str) -> String {
+    let mut out = String::new();
+    let mut rest = title;
+    while let Some(i) = rest.find(['(', '[']) {
+        let close = if rest[i..].starts_with('(') { ')' } else { ']' };
+        let Some(j) = rest[i + 1..].find(close).map(|j| i + 1 + j) else { break };
+        out.push_str(&rest[..i]);
+        if !is_clutter(&rest[i + 1..j]) {
+            out.push_str(&rest[i..=j]);
+        }
+        rest = &rest[j + 1..];
+    }
+    out.push_str(rest);
+    // "Song | Official Video", "Song - Official Audio".
+    for sep in [" | ", " - ", " – "] {
+        if let Some(i) = out.rfind(sep)
+            && is_clutter(&out[i + sep.len()..])
+        {
+            out.truncate(i);
+        }
+    }
+    let joined = out.split_whitespace().filter(|w| !w.starts_with('#')).collect::<Vec<_>>().join(" ");
+    // "Artist - Song" when the artist is the song's own.
+    let first = crate::radio::first_artist(artist);
+    let mut text = joined.clone();
+    for sep in [" - ", " – "] {
+        if let Some((front, song)) = joined.split_once(sep)
+            && !first.is_empty()
+            && crate::radio::normalize_artist_key(front) == first
+            && !song.trim().is_empty()
+        {
+            text = song.trim().to_string();
+            break;
+        }
+    }
+    let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ").trim_matches(|c: char| c == '-' || c == '|' || c == '–' || c.is_whitespace()).to_string();
+    if cleaned.is_empty() { title.trim().to_string() } else { cleaned }
 }
 
 /// Where the next page of a list starts: the newer token goes in the request's body, the older
@@ -1175,4 +1232,26 @@ mod search_tests {
             }
         }
     }
+
+    #[test]
+    fn titles_lose_the_upload_clutter() {
+        let cases = [
+            ("Blinding Lights (Official Video)", "The Weeknd", "Blinding Lights"),
+            ("Tame Impala - The Less I Know The Better [Official Music Video]", "Tame Impala", "The Less I Know The Better"),
+            ("Song (Lyrics) [HD]", "X", "Song"),
+            ("Song | Official Audio", "X", "Song"),
+            ("Song (Official Visualizer) #shorts #music", "X", "Song"),
+            ("Song (Remix) (Official Video)", "X", "Song (Remix)"),
+            ("Song (Live at Wembley)", "X", "Song (Live at Wembley)"),
+            ("Song (feat. Y) [4K]", "X", "Song (feat. Y)"),
+            ("Song (Official)", "X", "Song (Official)"),
+            ("Other Artist - Song", "X", "Other Artist - Song"),
+            ("خطار إجاني (Official Video)", "باسم الكربلائي", "خطار إجاني"),
+            ("(Official Video)", "X", "(Official Video)"),
+        ];
+        for (title, artist, want) in cases {
+            assert_eq!(super::clean_title(title, artist), want, "{title}");
+        }
+    }
+
 }

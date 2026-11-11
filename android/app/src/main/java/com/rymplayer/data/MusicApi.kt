@@ -158,7 +158,7 @@ class MusicApi(private val cookie: String?) {
         val videoPage = videos.await()
         val found = songPage.getOrNull()?.let { songRows(it) }.orEmpty().toMutableList()
         val seen = found.map { it.videoId }.toHashSet()
-        videoPage.getOrNull()?.let { page -> songRows(page).filter { seen.add(it.videoId) }.forEach { found += if (it.album.endsWith("views") || it.album.endsWith("view")) it.copy(album = "") else it } }
+        videoPage.getOrNull()?.let { page -> songRows(page).filter { seen.add(it.videoId) }.forEach { v -> val t = v.copy(title = Radio.cleanTitle(v.title, v.artist)); found += if (t.album.endsWith("views") || t.album.endsWith("view")) t.copy(album = "") else t } }
         if (found.isEmpty()) songPage.getOrThrow().also { videoPage.getOrThrow() }
         Paged(found, songPage.getOrNull()?.let { nextToken(it) }?.let { More.Search(q, it) })
     }
@@ -473,7 +473,7 @@ class MusicApi(private val cookie: String?) {
         val ids = r.at("longBylineText/runs").arr.mapNotNull { it.at("navigationEndpoint/browseEndpoint/browseId").str }
         Track(
             videoId = videoId,
-            title = r.at("title").runsText(),
+            title = Radio.cleanTitle(r.at("title").runsText(), byline.firstOrNull().orEmpty()),
             artist = byline.firstOrNull().orEmpty(),
             album = byline.getOrNull(1).orEmpty(),
             duration = r.at("lengthText").runsText(),

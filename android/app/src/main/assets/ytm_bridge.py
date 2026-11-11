@@ -47,6 +47,62 @@ def best_thumb(thumbs):
     return max(thumbs, key=lambda t: t.get("width") or 0)["url"]
 
 
+CLUTTER = {"official", "music", "video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k", "mv", "m/v", "oficial",
+           "officiel", "clip", "full", "videoclip", "videoclipe", "with", "on", "screen"}
+CLUTTER_MARK = {"video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k", "mv", "m/v", "oficial", "officiel"}
+
+
+def is_clutter(inner):
+    words = [w for w in inner.lower().replace("-", " ").replace("_", " ").split() if w]
+    return bool(words) and all(w in CLUTTER for w in words) and any(w in CLUTTER_MARK for w in words)
+
+
+def artist_key(name):
+    key = name.strip().lower()
+    while True:
+        before = len(key)
+        for ending in (" - topic", "- topic", "vevo", " official", "official"):
+            if key.endswith(ending) and key[: -len(ending)].strip():
+                key = key[: -len(ending)].rstrip()
+        if len(key) == before:
+            break
+    return " ".join(key.split())
+
+
+def clean_title(title, artist):
+    """A title as a song's, not an upload's (the same rules as RyM's api::clean_title)."""
+    out, rest = "", title
+    while True:
+        starts = [i for i in (rest.find("("), rest.find("[")) if i >= 0]
+        if not starts:
+            break
+        i = min(starts)
+        close = ")" if rest[i] == "(" else "]"
+        j = rest.find(close, i + 1)
+        if j < 0:
+            break
+        out += rest[:i]
+        if not is_clutter(rest[i + 1 : j]):
+            out += rest[i : j + 1]
+        rest = rest[j + 1 :]
+    out += rest
+    for sep in (" | ", " - ", " – "):
+        i = out.rfind(sep)
+        if i >= 0 and is_clutter(out[i + len(sep) :]):
+            out = out[:i]
+    joined = " ".join(w for w in out.split() if not w.startswith("#"))
+    text = joined
+    first = artist_key((artist or "").replace("&", ",").split(",")[0])
+    for sep in (" - ", " – "):
+        if sep in joined:
+            front, song = joined.split(sep, 1)
+            if first and artist_key(front) == first and song.strip():
+                text = song.strip()
+                break
+    cleaned = " ".join(text.split()).strip(" -|–")
+    return cleaned or title.strip()
+
+
 def track(r):
     vid = r.get("videoId")
     if not vid:
@@ -56,7 +112,7 @@ def track(r):
         album = {"name": album}
     return {
         "video_id": vid,
-        "title": r.get("title") or "",
+        "title": clean_title(r.get("title") or "", names(r.get("artists"))),
         "artist": names(r.get("artists")),
         "album": album.get("name") or "",
         "duration": r.get("duration") or r.get("length") or "",

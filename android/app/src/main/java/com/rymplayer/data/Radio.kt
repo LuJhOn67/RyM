@@ -46,6 +46,54 @@ object Radio {
         return out
     }
 
+    private val CLUTTER = setOf("official", "music", "video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k", "mv", "m/v", "oficial", "officiel", "clip", "full", "videoclip", "videoclipe", "with", "on", "screen")
+    private val CLUTTER_MARK = setOf("video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k", "mv", "m/v", "oficial", "officiel")
+
+    private fun isClutter(inner: String): Boolean {
+        val words = inner.lowercase().split(' ', '-', '_', '\t').filter { it.isNotEmpty() }
+        return words.isNotEmpty() && words.all { it in CLUTTER } && words.any { it in CLUTTER_MARK }
+    }
+
+    /**
+     * A title as a song's, not an upload's: brackets that only say "(Official Video)", "[Official
+     * Music Video]", "(Lyrics)", "[HD]" and the like go, so do "| Official Video", hashtags, and
+     * the artist's name in front ("Artist - Song"). Brackets that mean something ("(Remix)",
+     * "(Live)", "(feat. X)") stay. The same rules as the PC apps' api::clean_title.
+     */
+    fun cleanTitle(title: String, artist: String): String {
+        val out = StringBuilder()
+        var rest = title
+        while (true) {
+            val i = listOf(rest.indexOf('('), rest.indexOf('[')).filter { it >= 0 }.minOrNull() ?: break
+            val close = if (rest[i] == '(') ')' else ']'
+            val j = rest.indexOf(close, i + 1)
+            if (j < 0) break
+            out.append(rest, 0, i)
+            if (!isClutter(rest.substring(i + 1, j))) out.append(rest, i, j + 1)
+            rest = rest.substring(j + 1)
+        }
+        out.append(rest)
+        var text = out.toString()
+        for (sep in listOf(" | ", " - ", " – ")) {
+            val i = text.lastIndexOf(sep)
+            if (i >= 0 && isClutter(text.substring(i + sep.length))) text = text.substring(0, i)
+        }
+        val joined = text.split(Regex("""\s+""")).filter { it.isNotEmpty() && !it.startsWith("#") }.joinToString(" ")
+        text = joined
+        val first = firstArtist(artist)
+        for (sep in listOf(" - ", " – ")) {
+            val i = joined.indexOf(sep)
+            if (i < 0) continue
+            val song = joined.substring(i + sep.length).trim()
+            if (first.isNotEmpty() && normalizeArtistKey(joined.substring(0, i)) == first && song.isNotEmpty()) {
+                text = song
+                break
+            }
+        }
+        val cleaned = text.split(Regex("""\s+""")).filter { it.isNotEmpty() }.joinToString(" ").trim(' ', '-', '|', '–')
+        return cleaned.ifEmpty { title.trim() }
+    }
+
     /** The first of a song's artists, as a key (see [normalizeArtistKey]). */
     fun firstArtist(artist: String): String = normalizeArtistKey(artist.split(',', '&').first())
 
