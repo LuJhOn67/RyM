@@ -6108,10 +6108,17 @@ fn poll_events(ui: &Shared) {
             Ev::Installed(Ok(exe)) => {
                 // The new version opens where this one leaves off.
                 save_session(ui);
+                rymplayer::stats::flush();
                 if std::process::Command::new(&exe).spawn().is_ok() {
                     // Closing runs the close handler, which uses the app's state: not held here.
                     let window = ui.borrow().w.window.clone();
                     window.close();
+                    // It goes for good (closing may only hide it to the tray), so the old
+                    // version doesn't stay open beside the new one.
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_secs(3));
+                        std::process::exit(0);
+                    });
                 } else {
                     toast(ui, tr("Updated: open RyM again to use the new version"));
                 }

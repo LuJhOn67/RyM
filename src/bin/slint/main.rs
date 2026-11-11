@@ -4709,8 +4709,19 @@ fn handle(st: &Shared, ev: Ev) {
         Ev::Installed(Ok(path)) => {
             set_update_text(st, tr("Updated: RyM opens again"));
             save_session(st);
+            rymplayer::stats::flush();
             if std::process::Command::new(&path).spawn().is_ok() {
-                let _ = slint::quit_event_loop();
+                // This copy goes for good, not to the tray (the small windows and the tray icon
+                // too), so the old version doesn't stay open beside the new one.
+                if let Some(ui) = st.borrow().ui.upgrade() {
+                    let _ = ui.hide();
+                }
+                quit(st);
+                // Whatever still holds it (the sound or the media keys' threads) can't keep it open.
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_secs(3));
+                    std::process::exit(0);
+                });
             }
         }
         Ev::Installed(Err(e)) => set_update_text(st, format!("{}: {e}", tr("Update failed"))),

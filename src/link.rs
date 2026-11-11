@@ -90,21 +90,37 @@ pub fn parse(bytes: &[u8]) -> Option<Announce> {
     serde_json::from_slice::<Announce>(bytes).ok().filter(|a| a.rym == 1)
 }
 
+/// Tries `bind` again for a while (half a second apart): right after an update the old copy of
+/// RyM still holds the port for a moment.
+fn bind_soon<T>(bind: impl Fn() -> std::io::Result<T>) -> Option<T> {
+    for _ in 0..30 {
+        if let Ok(s) = bind() {
+            return Some(s);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    None
+}
+
 /// Listens for notes on the Wi-Fi (on its own thread) and hands each one, with the sender's
-/// address, to `got`. False when the port is taken (another RyM listens already).
+/// address, to `got`. False when the port is taken now (another RyM listens already); it's
+/// tried again for 15 seconds then, in case that one is closing (an update).
 pub fn listen(got: impl Fn(Announce, IpAddr) + Send + 'static) -> bool {
-    let Ok(socket) = UdpSocket::bind(("0.0.0.0", PORT)) else { return false };
-    std::thread::Builder::new()
+    let bind = || UdpSocket::bind(("0.0.0.0", PORT));
+    let first = bind().ok();
+    let now = first.is_some();
+    let _ = std::thread::Builder::new()
         .name("rym-link".into())
         .spawn(move || {
+            let Some(socket) = first.or_else(|| bind_soon(bind)) else { return };
             let mut buf = [0u8; 4096];
             while let Ok((n, from)) = socket.recv_from(&mut buf) {
                 if let Some(a) = parse(&buf[..n]) {
                     got(a, from.ip());
                 }
             }
-        })
-        .is_ok()
+        });
+    now
 }
 
 fn http() -> &'static reqwest::Client {
@@ -290,7 +306,7 @@ pub fn hand_over(link: &str) -> bool {
     let Ok(mut c) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else { return false };
     let _ = c.set_read_timeout(Some(Duration::from_secs(2)));
     let one_line: String = link.chars().filter(|c| !c.is_control()).take(4000).collect();
-    if write!(c, "{OPEN_HELLO}{one_line}\n").is_err() {
+    if writeln!(c, "{OPEN_HELLO}{one_line}").is_err() {
         return false;
     }
     let mut answer = String::new();
@@ -298,13 +314,16 @@ pub fn hand_over(link: &str) -> bool {
 }
 
 /// Takes the links other copies hand over (see [`hand_over`]), on its own thread; `got` gets
-/// each one. False when another RyM takes them already.
+/// each one. False when another RyM takes them now (tried again for 15 seconds, like [`listen`]).
 pub fn take_handed_links(got: impl Fn(String) + Send + 'static) -> bool {
     use std::io::{BufRead, BufReader, Read, Write};
-    let Ok(server) = std::net::TcpListener::bind(("127.0.0.1", OPEN_PORT)) else { return false };
-    std::thread::Builder::new()
+    let bind = || std::net::TcpListener::bind(("127.0.0.1", OPEN_PORT));
+    let first = bind().ok();
+    let now = first.is_some();
+    let _ = std::thread::Builder::new()
         .name("rym-open".into())
         .spawn(move || {
+            let Some(server) = first.or_else(|| bind_soon(bind)) else { return };
             for client in server.incoming().flatten() {
                 let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
                 let mut line = String::new();
@@ -318,8 +337,8 @@ pub fn take_handed_links(got: impl Fn(String) + Send + 'static) -> bool {
                     got(link);
                 }
             }
-        })
-        .is_ok()
+        });
+    now
 }
 
 /// Windows: `rym://` links open this RyM (HKEY_CURRENT_USER\Software\Classes\rym, which Windows
