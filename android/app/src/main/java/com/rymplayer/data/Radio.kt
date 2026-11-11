@@ -46,7 +46,25 @@ object Radio {
         return out
     }
 
-    fun firstArtist(artist: String): String = artist.split(',', '&').first().trim().lowercase()
+    /** The first of a song's artists, as a key (see [normalizeArtistKey]). */
+    fun firstArtist(artist: String): String = normalizeArtistKey(artist.split(',', '&').first())
+
+    /**
+     * An artist's name as a key: lower case, trimmed, without YouTube's channel endings
+     * (" - Topic", "VEVO", "Official"), so the same artist from the built-in engine and from
+     * ytmusicapi is one key ("Adele", "AdeleVEVO" and "Adele - Topic" are all "adele").
+     */
+    fun normalizeArtistKey(name: String): String {
+        var key = name.trim().lowercase()
+        while (true) {
+            val before = key.length
+            for (ending in listOf(" - topic", "- topic", "vevo", " official", "official")) {
+                if (key.endsWith(ending) && key.removeSuffix(ending).isNotBlank()) key = key.removeSuffix(ending).trimEnd()
+            }
+            if (key.length == before) break
+        }
+        return key.split(Regex("""\s+""")).filter { it.isNotEmpty() }.joinToString(" ")
+    }
 
     /** "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload. */
     fun sameSongKey(t: Track): String = key(t)

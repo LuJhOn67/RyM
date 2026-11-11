@@ -46,8 +46,30 @@ pub fn same_song_key(t: &Track) -> String {
     format!("{title}|{}", first_artist(&t.artist))
 }
 
+/// The first of a song's artists, as a key (see [`normalize_artist_key`]).
 pub fn first_artist(artist: &str) -> String {
-    artist.split([',', '&']).next().unwrap_or_default().trim().to_lowercase()
+    normalize_artist_key(artist.split([',', '&']).next().unwrap_or_default())
+}
+
+/// An artist's name as a key: lower case, trimmed, without YouTube's channel endings
+/// (" - Topic", "VEVO", "Official"), so the same artist from the built-in engine's answers and
+/// from ytmusicapi's is one key ("Adele", "AdeleVEVO" and "Adele - Topic" are all "adele").
+pub fn normalize_artist_key(name: &str) -> String {
+    let mut key = name.trim().to_lowercase();
+    loop {
+        let before = key.len();
+        for ending in [" - topic", "- topic", "vevo", " official", "official"] {
+            if let Some(rest) = key.strip_suffix(ending)
+                && !rest.trim().is_empty()
+            {
+                key = rest.trim_end().to_string();
+            }
+        }
+        if key.len() == before {
+            break;
+        }
+    }
+    key.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// First artists of `tracks` (lower case), for `session_artists`.

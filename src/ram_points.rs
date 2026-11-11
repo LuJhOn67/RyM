@@ -202,6 +202,34 @@ pub struct Notes {
     names: HashMap<String, String>,
 }
 
+impl Notes {
+    /// Artist keys saved before [`crate::radio::normalize_artist_key`] ("adelevevo", "adele -
+    /// topic") moved onto the normalized key, their counts and points added together, so no
+    /// earlier points are lost. Songs stay keyed by their id.
+    fn rekey(&mut self) {
+        use crate::radio::normalize_artist_key as key;
+        fn merge<V>(map: &mut HashMap<String, V>, add: impl Fn(&mut V, V)) {
+            if map.keys().all(|k| key(k) == *k) {
+                return;
+            }
+            for (k, v) in std::mem::take(map) {
+                let k = key(&k);
+                match map.get_mut(&k) {
+                    Some(have) => add(have, v),
+                    None => {
+                        map.insert(k, v);
+                    }
+                }
+            }
+        }
+        merge(&mut self.artists, |a, b| a.iter_mut().zip(b).for_each(|(x, y)| *x += y));
+        merge(&mut self.fixed, |_, _| {});
+        merge(&mut self.bias, |a, b| *a += b);
+        merge(&mut self.affinity, |a, b| *a += b);
+        merge(&mut self.names, |_, _| {});
+    }
+}
+
 /// A song's points, and when it last played (seconds since 1970).
 #[derive(Default, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Score {
@@ -367,7 +395,9 @@ impl Notes {
     }
 
     pub fn load() -> Notes {
-        std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut notes: Notes = std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        notes.rekey();
+        notes
     }
 
     pub fn save(&mut self) {
@@ -1026,4 +1056,27 @@ mod tests {
         let same: Vec<Scored> = (0..6).map(|i| mk(&format!("s{i}"), "one", false, 10)).collect();
         assert_eq!(order(same, 10, 3, Some(3)).len(), 3);
     }
+
+    #[test]
+    fn artist_keys_merge_without_losing_points() {
+        use crate::radio::normalize_artist_key as key;
+        assert_eq!(key("Adele"), "adele");
+        assert_eq!(key("AdeleVEVO"), "adele");
+        assert_eq!(key("Adele - Topic"), "adele");
+        assert_eq!(key("  Tame   Impala Official "), "tame impala");
+        assert_eq!(key("VEVO"), "vevo", "a name that is only the ending stays");
+        assert_eq!(crate::radio::first_artist("Bruno Mars, Lady Gaga"), "bruno mars");
+        let mut notes = Notes::default();
+        notes.affinity.insert("adelevevo".into(), 4.0);
+        notes.affinity.insert("adele".into(), 2.0);
+        notes.bias.insert("adele - topic".into(), 3);
+        notes.artists.insert("adelevevo".into(), [1, 0, 0, 0, 0]);
+        notes.artists.insert("adele".into(), [2, 0, 0, 0, 1]);
+        notes.rekey();
+        assert_eq!(notes.affinity.get("adele"), Some(&6.0));
+        assert_eq!(notes.affinity.len(), 1);
+        assert_eq!(notes.bias.get("adele"), Some(&3));
+        assert_eq!(notes.artists.get("adele"), Some(&[3, 0, 0, 0, 1]));
+    }
+
 }

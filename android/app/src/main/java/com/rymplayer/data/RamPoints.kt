@@ -338,7 +338,22 @@ object RamPoints {
             affinity[parts[0]] = n
             parts.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { names[parts[0]] = it }
         }
-        return Notes(base.artists, base.fixed, bias, hidden, tracks, affinity, names)
+        return Notes(rekey(base.artists) { a, b -> IntArray(a.size) { a[it] + b.getOrElse(it) { 0 } } }, rekey(base.fixed) { a, _ -> a }, rekey(bias) { a, b -> a + b }, hidden, tracks, rekey(affinity) { a, b -> a + b }, rekey(names) { a, _ -> a })
+    }
+
+    /**
+     * Artist keys saved before [Radio.normalizeArtistKey] ("adelevevo", "adele - topic") moved
+     * onto the normalized key, their counts and points added together, so no earlier points are
+     * lost. Songs stay keyed by their id.
+     */
+    internal fun <V> rekey(map: MutableMap<String, V>, add: (V, V) -> V): MutableMap<String, V> {
+        if (map.keys.all { Radio.normalizeArtistKey(it) == it }) return map
+        val out = HashMap<String, V>()
+        for ((k, v) in map) {
+            val key = Radio.normalizeArtistKey(k)
+            out[key] = out[key]?.let { add(it, v) } ?: v
+        }
+        return out
     }
 
     fun save(ctx: Context, notes: Notes) {
