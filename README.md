@@ -75,10 +75,9 @@ settings and plugins.
 - Picks up where you left off: the same song, second and queue.
 
 **Smart suggestions: RaM points**
-- Every song has a kind (songs, Husseini, Quran, nasheeds, talks), and kinds never mix: a song brings songs, a latmiya brings latmiyat.
 - Every song earns points when you play it and hear it to the end, and loses them when you skip it in its first seconds. 30% of every change goes to its artist, so new songs by artists you love come up first.
 - A song you just played rests for six hours, and points fade a little each day, so the same songs don't top every list.
-- "Recommend more" and "Don't recommend" in a song's menu, "Only this kind" in Settings, and buttons to reset all points or only the negative ones.
+- "Recommend more" and "Don't recommend" in a song's menu, and buttons in Settings to reset all points or only the negative ones.
 
 **Lyrics**
 - Synced lyrics from LRCLIB, NetEase and KuGou (asked at once), then Genius and YouTube Music. One button per source.
@@ -117,7 +116,7 @@ settings and plugins.
 - **Linux:** the file is readable only by your user.
 
 **More**
-- Your listening stats: time this month and in all, your top songs and artists, and what kinds you listen to.
+- Your listening stats: time this month and in all, and your top songs and artists.
 - Share a song as a picture or copy its link. Discord status with "Play this song" and "Get RyM" buttons. Last.fm scrobbling.
 - Closing the window keeps the music playing from the tray (or quits, as you choose).
 - Plugins: video player and downloader, Spotify to YouTube Music, SoundCloud. Optional playback in VLC.
@@ -224,10 +223,9 @@ cd android && ./gradlew assembleRelease                                         
 - يكمل من حيث توقفت: الأغنية نفسها والثانية نفسها وقائمة التشغيل نفسها.
 
 **اقتراحات ذكية: نظام RaM points**
-- لكل أغنية نوع (أغانٍ، أو حسيني، أو قرآن، أو أناشيد، أو محاضرات)، ولا تختلط الأنواع أبدًا: الأغنية تجلب أغاني، واللطمية تجلب لطميات.
 - تكسب كل أغنية نقاطًا حين تشغّلها وحين تسمعها حتى النهاية، وتخسر نقاطًا حين تتخطاها في ثوانيها الأولى. ويذهب 30% من كل تغيير إلى فنانها، فتظهر أولًا الأغاني الجديدة لفنانيك المفضّلين.
 - تستريح الأغنية التي سمعتها للتو ست ساعات، وتخفّ النقاط قليلًا كل يوم، حتى لا تتصدّر الأغاني نفسها كل قائمة.
-- خيارا «اقترح أكثر» و«لا تقترح» في قائمة الأغنية، وخيار «هذا النوع فقط» في الإعدادات، وزرّان لتصفير كل النقاط أو السالبة منها فقط.
+- خيارا «اقترح أكثر» و«لا تقترح» في قائمة الأغنية، وزرّان في الإعدادات لتصفير كل النقاط أو السالبة منها فقط.
 
 **الكلمات**
 - كلمات متزامنة من LRCLIB وNetEase وKuGou معًا، ثم Genius وYouTube Music، مع زر لكل مصدر.
@@ -266,7 +264,7 @@ cd android && ./gradlew assembleRelease                                         
 - **لينكس:** لا يقرأ الملف إلا مستخدمك.
 
 **وأكثر**
-- إحصاءات استماعك: الوقت هذا الشهر وإجمالًا، وأكثر الأغاني والفنانين، والأنواع التي تسمعها.
+- إحصاءات استماعك: الوقت هذا الشهر وإجمالًا، وأكثر الأغاني والفنانين.
 - مشاركة الأغنية كصورة أو نسخ رابطها، وحالة Discord مع زرّي «شغّل هذه الأغنية» و«احصل على RyM»، وتسجيل الاستماع في Last.fm.
 - إغلاق النافذة يُبقي الموسيقى تعمل من شريط المهام بجانب الساعة، أو يغلق البرنامج، بحسب اختيارك.
 - إضافات: مشغّل الفيديو والمحمّل، وتحويل Spotify إلى YouTube Music، وSoundCloud. والتشغيل عبر VLC اختياري.
