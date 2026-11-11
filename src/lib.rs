@@ -34,6 +34,7 @@ pub mod ytdlp;
 pub mod ytmusicapi;
 pub mod ram_points;
 pub mod recent;
+pub mod bgutil;
 pub mod crash;
 pub mod secret;
 pub mod session;

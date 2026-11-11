@@ -32,6 +32,12 @@ open-source work listed here, each under its own license.
 | certifi (phone, in `ytmusicapi.zip`) | MPL-2.0 | its `certifi-*.dist-info/licenses` folder |
 | charset-normalizer (phone, in `ytmusicapi.zip`) | MIT | its `charset_normalizer-*.dist-info/licenses` folder |
 
+## Installed separately, only if you ask
+
+| What | License | How |
+|---|---|---|
+| bgutil-ytdlp-pot-provider (github.com/Brainicism/bgutil-ytdlp-pot-provider), for PO Tokens | GPL-3.0 | Settings → Network & Parsers → "PO Token helper" clones and builds it in its own folder (`~/bgutil-ytdlp-pot-provider`); RyM runs it as a separate program and never includes it. |
+
 ## Rust libraries (PC apps)
 
 Most are under MIT or Apache-2.0. The ones under other licenses:

@@ -375,7 +375,7 @@ mod tests {
                         b - a + 1
                     );
                     let _ = conn.write_all(head.as_bytes());
-                    let cut = a > 0 && left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
+                    let cut = a > 0 && left.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
                     let send = if cut { &data[a..a + (b - a + 1) / 2] } else { &data[a..=b] };
                     let _ = conn.write_all(send);
                     // A cut answer just closes: fewer bytes than it promised.

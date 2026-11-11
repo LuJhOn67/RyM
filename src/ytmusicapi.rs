@@ -443,6 +443,11 @@ pub async fn update_parsers(nightly: bool) -> String {
     })
     .await
     .unwrap_or_else(|e| Err(anyhow!("{e}")));
+    let pot = if crate::bgutil::installed() {
+        Some(crate::bgutil::install().await.unwrap_or_else(|e| format!("bgutil: {e}")))
+    } else {
+        None
+    };
     crate::innertube::forget_cache();
     crate::page_cache::clear();
     let say = |r: &Result<String>, name: &str| match r {
@@ -450,7 +455,10 @@ pub async fn update_parsers(nightly: bool) -> String {
         Err(e) => format!("{name}: {e}"),
     };
     let fresh = status().await;
-    format!("{} · {} · {fresh}", say(&ytdlp, "yt-dlp"), say(&ytm, "ytmusicapi"))
+    match pot {
+        Some(p) => format!("{} · {} · {p} · {fresh}", say(&ytdlp, "yt-dlp"), say(&ytm, "ytmusicapi")),
+        None => format!("{} · {} · {fresh}", say(&ytdlp, "yt-dlp"), say(&ytm, "ytmusicapi")),
+    }
 }
 
 #[cfg(test)]

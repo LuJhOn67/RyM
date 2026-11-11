@@ -352,12 +352,18 @@ fn account(origin: &str) -> Option<Vec<(&'static str, String)>> {
     ])
 }
 
-/// A proof-of-origin token from a local token server (bgutil-ytdlp-pot-provider) bound to
-/// `binding`; none when no server runs.
+/// A proof-of-origin token bound to `binding`: from bgutil's server when one runs (port 4416),
+/// else from bgutil's script (see [`crate::bgutil`]); none when neither is there.
 async fn po_token(binding: &str) -> Option<String> {
-    let client = reqwest::Client::builder().connect_timeout(std::time::Duration::from_millis(300)).timeout(std::time::Duration::from_secs(20)).build().ok()?;
-    let v: Value = client.post("http://127.0.0.1:4416/get_pot").json(&json!({ "content_binding": binding })).send().await.ok()?.json().await.ok()?;
-    v["poToken"].as_str().map(str::to_string)
+    let from_server = async {
+        let client = reqwest::Client::builder().connect_timeout(std::time::Duration::from_millis(300)).timeout(std::time::Duration::from_secs(20)).build().ok()?;
+        let v: Value = client.post("http://127.0.0.1:4416/get_pot").json(&json!({ "content_binding": binding })).send().await.ok()?.json().await.ok()?;
+        v["poToken"].as_str().map(str::to_string)
+    };
+    match from_server.await {
+        Some(t) => Some(t),
+        None => crate::bgutil::token(binding).await,
+    }
 }
 
 /// The TV app's visitor id and current version, read off its page (youtube.com/tv) once an hour.

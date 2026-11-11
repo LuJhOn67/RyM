@@ -108,6 +108,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "PO Token helper (bgutil)" => "مساعد رمز PO (bgutil)",
+        "Installing… (git, npm; a minute or two)" => "جاري التنصيب… (git وnpm، دقيقة أو دقيقتين)",
         "What you play on your Discord profile; it works as it is, or put your own application id below" => "ما تسمعه يظهر على حسابك في Discord؛ يعمل كما هو، أو ضع معرّف تطبيقك تحت",
         "RyM closed unexpectedly last time" => "RyM انسدّ فجأة آخر مرة",
         "OK opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise." => "«موافق» يفتح صفحة Issue على GitHub معبّأة بهذا التقرير، وإنت ترسله بنفسك. ما ينرسل شي غير هيچ.",

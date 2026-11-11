@@ -89,6 +89,8 @@ enum Ev {
     YtDlp(anyhow::Result<String>),
     /// "Update parsers" finished: what happened.
     Parsers(String),
+    /// The PO Token helper's install finished: what happened.
+    Bgutil(String),
     /// What ytmusicapi is (version, or why it isn't working).
     ParsersStatus(String),
     LastFmToken(anyhow::Result<(String, String)>),
@@ -253,6 +255,8 @@ struct State {
     /// "Update parsers": what it's doing or did, and what's installed (ytmusicapi).
     parsers_text: String,
     parsers_status: String,
+    /// The PO Token helper's install: what it's doing or did.
+    bgutil_text: String,
     update_text: String,
     /// The plugin store's list once loaded.
     store: Vec<rymplayer::plugins::Plugin>,
@@ -599,6 +603,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         ytdlp_text: String::new(),
         parsers_text: String::new(),
         parsers_status: String::new(),
+        bgutil_text: String::new(),
         update_text: String::new(),
     }));
     if let Some(saved) = session {
@@ -1445,6 +1450,7 @@ fn fill_settings(st: &Shared) {
             }
             if text.is_empty() { t("yt-dlp and ytmusicapi to their newest, saved answers cleared") } else { text }
         }, "Update"),
+        button("bgutil", "PO Token helper (bgutil)", if s.bgutil_text.is_empty() { rymplayer::bgutil::status() } else { s.bgutil_text.clone() }, if rymplayer::bgutil::installed() { "Update" } else { "Install" }),
         head("yt-dlp"),
         switch("ytdlp-auto", "Update by itself", "Once a week, when RyM opens", c.ytdlp_auto_update),
         switch("ytdlp-nightly", "Nightly builds", "The newest yt-dlp every day (fixes come sooner)", c.ytdlp_nightly),
@@ -2143,6 +2149,11 @@ fn press(st: &Shared, id: &str) {
         "link-dl" => ask_text(st, "link", tr("Download from a link"), tr("Paste a link from YouTube or any site")),
         "check" => check_updates(st, true),
         "innertube" => fill_settings(st),
+        "bgutil" => {
+            st.borrow_mut().bgutil_text = tr("Installing… (git, npm; a minute or two)").into();
+            fill_settings(st);
+            post(async move { Ev::Bgutil(rymplayer::bgutil::install().await.unwrap_or_else(|e| e.to_string())) });
+        }
         "parsers" => {
             let nightly = st.borrow().config.ytdlp_nightly;
             st.borrow_mut().parsers_text = tr("Updating…").into();
@@ -4813,6 +4824,11 @@ fn handle(st: &Shared, ev: Ev) {
             }
             fill_settings(st);
             post(async { Ev::YtDlpStatus(rymplayer::ytdlp::status().await) });
+        }
+        Ev::Bgutil(text) => {
+            toast(st, &text);
+            st.borrow_mut().bgutil_text = text;
+            fill_settings(st);
         }
         Ev::ParsersStatus(text) => {
             st.borrow_mut().parsers_status = text;
