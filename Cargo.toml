@@ -1,6 +1,6 @@
 [package]
 name = "rymplayer"
-version = "7.4.1"
+version = "7.4.2"
 edition = "2024"
 license = "MIT"
 autobins = false
