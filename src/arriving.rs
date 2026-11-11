@@ -107,27 +107,90 @@ impl Arriving {
     }
 }
 
-/// Fetches the song in ranges, adding each piece as it arrives. A song nobody plays any more
-/// (skipped before it was all in) stops downloading and its memory is let go; it isn't cached.
+/// After the network goes away mid-song, the download keeps trying this long before it gives up.
+const GIVE_UP_AFTER: Duration = Duration::from_secs(120);
+
+/// How one range went.
+enum Step {
+    /// The whole song is in.
+    Done,
+    /// This range is in; on to the next.
+    More,
+}
+
+/// Why a range failed: worth another try (the network dropped, a server hiccup), or not (the
+/// link was refused, the song was skipped).
+enum Fail {
+    Retry(anyhow::Error),
+    Stop(anyhow::Error),
+}
+
+fn retry(e: reqwest::Error) -> Fail {
+    Fail::Retry(anyhow!("audio: {e}"))
+}
+
+/// Fetches the song in ranges, adding each piece as it arrives. When the network drops mid-song
+/// it tries again from the byte where it stopped (waiting 1, 2, 4... up to 10 s between tries,
+/// for up to two minutes), so the song goes on once the network is back. A song nobody plays any
+/// more (skipped before it was all in) stops downloading and its memory is let go; it isn't
+/// cached.
 async fn fetch(url: &str, headers: &[(String, String)], shared: &Arc<Shared>) -> Result<()> {
     let nobody_listens = || Arc::strong_count(shared) == 1;
-    let client = http();
     let mut pos = 0u64;
+    let mut down_since: Option<std::time::Instant> = None;
+    let mut tries = 0u32;
     loop {
+        match fetch_range(url, headers, shared, &mut pos).await {
+            Ok(Step::Done) => return Ok(()),
+            Ok(Step::More) => {
+                down_since = None;
+                tries = 0;
+            }
+            Err(Fail::Stop(e)) => return Err(e),
+            Err(Fail::Retry(e)) => {
+                let since = *down_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() > GIVE_UP_AFTER || nobody_listens() {
+                    return Err(e);
+                }
+                tries += 1;
+                let wait = Duration::from_secs(1u64 << tries.min(4)).min(Duration::from_secs(10));
+                let until = std::time::Instant::now() + wait;
+                while std::time::Instant::now() < until {
+                    if nobody_listens() {
+                        return Err(anyhow!("skipped"));
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+    }
+}
+
+/// One range from `pos` on; `pos` moves with every byte that arrives, so a retry goes on from there.
+async fn fetch_range(url: &str, headers: &[(String, String)], shared: &Arc<Shared>, pos: &mut u64) -> std::result::Result<Step, Fail> {
+    let nobody_listens = || Arc::strong_count(shared) == 1;
+    let client = http();
+    {
         let total = shared.total.load(Ordering::Relaxed);
-        if total > 0 && pos >= total {
-            return Ok(());
+        if total > 0 && *pos >= total {
+            return Ok(Step::Done);
         }
         if nobody_listens() {
-            return Err(anyhow!("skipped"));
+            return Err(Fail::Stop(anyhow!("skipped")));
         }
-        let size = if pos == 0 { FIRST_RANGE } else { RANGE };
-        let end = if total > 0 { (pos + size).min(total) } else { pos + size } - 1;
-        let mut req = client.get(url).header("Range", format!("bytes={pos}-{end}"));
+        let size = if *pos == 0 { FIRST_RANGE } else { RANGE };
+        let end = if total > 0 { (*pos + size).min(total) } else { *pos + size } - 1;
+        let mut req = client.get(url).header("Range", format!("bytes={}-{end}", *pos));
         for (k, v) in headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let mut resp = req.send().await?.error_for_status().map_err(|e| anyhow!("audio: {e}"))?;
+        let resp = req.send().await.map_err(retry)?;
+        let status = resp.status();
+        // A refused or gone link won't get better by asking again; a server hiccup might.
+        if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(Fail::Retry(anyhow!("audio: HTTP {status}")));
+        }
+        let mut resp = resp.error_for_status().map_err(|e| Fail::Stop(anyhow!("audio: {e}")))?;
         let whole = resp.status() == reqwest::StatusCode::OK;
         if let Some(t) = resp
             .headers()
@@ -144,23 +207,28 @@ async fn fetch(url: &str, headers: &[(String, String)], shared: &Arc<Shared>) ->
                 data.reserve_exact(need);
             }
         }
-        let before = pos;
-        while let Some(chunk) = resp.chunk().await? {
+        if whole && *pos > 0 {
+            // A whole-song answer to a request for the middle: what arrived would come twice.
+            return Err(Fail::Stop(anyhow!("audio: the server can't go on from the middle")));
+        }
+        let before = *pos;
+        while let Some(chunk) = resp.chunk().await.map_err(retry)? {
             shared.data.lock().unwrap().extend_from_slice(&chunk);
-            pos += chunk.len() as u64;
+            *pos += chunk.len() as u64;
             shared.arrived.notify_all();
             if nobody_listens() {
-                return Err(anyhow!("skipped"));
+                return Err(Fail::Stop(anyhow!("skipped")));
             }
         }
         if whole {
             // The server sent the whole song at once.
-            shared.total.store(pos, Ordering::Relaxed);
-            return Ok(());
+            shared.total.store(*pos, Ordering::Relaxed);
+            return Ok(Step::Done);
         }
-        if pos == before {
-            return Err(anyhow!("audio stopped at {pos} bytes"));
+        if *pos == before {
+            return Err(Fail::Retry(anyhow!("audio stopped at {} bytes", *pos)));
         }
+        Ok(Step::More)
     }
 }
 
@@ -275,6 +343,65 @@ mod tests {
             }
         });
         format!("http://{addr}/audio")
+    }
+
+    /// Like [`serve`], but the first `cuts` answers stop halfway through (the network dropping).
+    fn serve_dropping(data: Arc<Vec<u8>>, cuts: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let left = Arc::new(std::sync::atomic::AtomicUsize::new(cuts));
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut conn) = conn else { continue };
+                let (data, left) = (data.clone(), left.clone());
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(conn.try_clone().unwrap());
+                    let mut range = None;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                            let (a, b) = r.trim().split_once('-').unwrap();
+                            range = Some((a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap()));
+                        }
+                    }
+                    let (a, b) = range.unwrap_or((0, data.len() - 1));
+                    let b = b.min(data.len() - 1);
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        data.len(),
+                        b - a + 1
+                    );
+                    let _ = conn.write_all(head.as_bytes());
+                    let cut = a > 0 && left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
+                    let send = if cut { &data[a..a + (b - a + 1) / 2] } else { &data[a..=b] };
+                    let _ = conn.write_all(send);
+                    // A cut answer just closes: fewer bytes than it promised.
+                });
+            }
+        });
+        format!("http://{addr}/audio")
+    }
+
+    #[tokio::test]
+    async fn goes_on_after_the_network_drops() {
+        let data: Arc<Vec<u8>> = Arc::new((0..(9 << 20) + 123).map(|i| (i * 7 % 253) as u8).collect());
+        let url = serve_dropping(data.clone(), 2);
+        let dir = std::env::temp_dir().join(format!("rym-arriving-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = Arriving::start(url, Vec::new(), "webm".into(), None, dir.join("song.webm")).await.unwrap();
+        let all = tokio::task::spawn_blocking(move || {
+            let mut r = a.reader();
+            let mut all = Vec::new();
+            r.read_to_end(&mut all).unwrap();
+            all
+        })
+        .await
+        .unwrap();
+        assert!(all == *data, "{} of {} bytes after two drops", all.len(), data.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
