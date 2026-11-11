@@ -41,11 +41,16 @@ jobs:
             libfontconfig1-dev libfreetype-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Tests
         run: cargo test --lib
+
+      - name: Clippy (reported; Windows' run fails on warnings)
+        run: cargo clippy --lib --bins --no-default-features --features gtk-ui
 
       - name: RyM (terminal) and RyM Slint
         run: |
@@ -78,11 +83,16 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Tests
         run: cargo test --lib
+
+      - name: Clippy (any warning fails the build)
+        run: cargo clippy --lib --bins --features slint-ui -- -D warnings
 
       - name: RyM Slint and RyM
         run: |
