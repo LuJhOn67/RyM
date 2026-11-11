@@ -86,6 +86,10 @@ enum Ev {
     /// Romaji for a song's lyrics (the lyrics' source, the lines).
     Romaji(String, String, Vec<String>),
     YtDlp(anyhow::Result<String>),
+    /// "Update parsers" finished: what happened.
+    Parsers(String),
+    /// What ytmusicapi is (version, or why it isn't working).
+    ParsersStatus(String),
     LastFmToken(anyhow::Result<(String, String)>),
     LastFmSession(anyhow::Result<(String, String)>),
     Batch(stream::Batch),
@@ -245,6 +249,9 @@ struct State {
     wave_live: bool,
     /// What the last yt-dlp update and update check said (shown in the settings).
     ytdlp_text: String,
+    /// "Update parsers": what it's doing or did, and what's installed (ytmusicapi).
+    parsers_text: String,
+    parsers_status: String,
     update_text: String,
     /// The plugin store's list once loaded.
     store: Vec<rymplayer::plugins::Plugin>,
@@ -352,6 +359,8 @@ fn main() {
     rymplayer::i18n::set_arabic(config.arabic);
     rymplayer::fx::set(config.fx());
     stream::use_source(config.source);
+    rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(config.music_engine));
+    rymplayer::ytmusicapi::use_language(config.arabic);
     stream::prefer_lossless(config.prefer_lossless);
     stream::download_best(config.download_best);
     stream::download_parallel(config.download_connections, config.download_piece_mb);
@@ -586,6 +595,8 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         wave_peak: 0.05,
         wave_live: false,
         ytdlp_text: String::new(),
+        parsers_text: String::new(),
+        parsers_status: String::new(),
         update_text: String::new(),
     }));
     if let Some(saved) = session {
@@ -1423,6 +1434,15 @@ fn fill_settings(st: &Shared) {
         field("lastfm-key", "API key", "", &c.lastfm_key),
         field("lastfm-secret", "Shared secret", "", &c.lastfm_secret),
         lastfm,
+        head("Network & Parsers"),
+        choice("engine", "Song finder", t(rymplayer::ytmusicapi::Engine::from_index(c.music_engine).label())),
+        button("parsers", "Update parsers", {
+            let mut text = if s.parsers_text.is_empty() { s.parsers_status.clone() } else { s.parsers_text.clone() };
+            if let Some(why) = rymplayer::ytmusicapi::last_failure() {
+                text = format!("{text} · {}: {why}", t("Last fallback"));
+            }
+            if text.is_empty() { t("yt-dlp and ytmusicapi to their newest, saved answers cleared") } else { text }
+        }, "Update"),
         head("yt-dlp"),
         switch("ytdlp-auto", "Update by itself", "Once a week, when RyM opens", c.ytdlp_auto_update),
         switch("ytdlp-nightly", "Nightly builds", "The newest yt-dlp every day (fixes come sooner)", c.ytdlp_nightly),
@@ -1641,6 +1661,12 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let mut s = st.borrow_mut();
             let at = names.iter().position(|n| *n == s.config.close_action).unwrap_or(0);
             s.config.close_action = names[cycle(at, names.len())].to_string();
+            s.config.save();
+        }
+        "engine" => {
+            let mut s = st.borrow_mut();
+            s.config.music_engine = cycle(s.config.music_engine as usize, 3) as u8;
+            rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(s.config.music_engine));
             s.config.save();
         }
         "source" => {
@@ -2117,6 +2143,12 @@ fn press(st: &Shared, id: &str) {
         "link-dl" => ask_text(st, "link", tr("Download from a link"), tr("Paste a link from YouTube or any site")),
         "check" => check_updates(st, true),
         "innertube" => fill_settings(st),
+        "parsers" => {
+            let nightly = st.borrow().config.ytdlp_nightly;
+            st.borrow_mut().parsers_text = tr("Updating…").into();
+            fill_settings(st);
+            post(async move { Ev::Parsers(rymplayer::ytmusicapi::update_parsers(nightly).await) });
+        }
         "ytdlp" => {
             let nightly = st.borrow().config.ytdlp_nightly;
             st.borrow_mut().ytdlp_text = tr("Updating…").into();
@@ -3419,6 +3451,10 @@ fn background_upkeep(st: &Shared) {
         });
     } else {
         post(async { Ev::YtDlpStatus(rymplayer::ytdlp::status().await) });
+    }
+    // ytmusicapi: started (and installed with pip the first time) now, so the first search is quick.
+    if rymplayer::ytmusicapi::engine() != rymplayer::ytmusicapi::Engine::Builtin {
+        post(async { Ev::ParsersStatus(rymplayer::ytmusicapi::status().await) });
     }
     trim_cache(limit, String::new());
 }
@@ -4753,6 +4789,19 @@ fn handle(st: &Shared, ev: Ev) {
         }
         Ev::YtDlpStatus(text) => {
             st.borrow_mut().ytdlp_status = text;
+            fill_settings(st);
+        }
+        Ev::Parsers(text) => {
+            toast(st, &format!("{}: {text}", tr("Parsers")));
+            {
+                let mut s = st.borrow_mut();
+                s.parsers_text = format!("{} · {text}", tr("Up to date"));
+            }
+            fill_settings(st);
+            post(async { Ev::YtDlpStatus(rymplayer::ytdlp::status().await) });
+        }
+        Ev::ParsersStatus(text) => {
+            st.borrow_mut().parsers_status = text;
             fill_settings(st);
         }
         Ev::TookOver(device, Ok(state)) => {

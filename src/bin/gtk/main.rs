@@ -341,6 +341,54 @@ fn lyrics_css(bg: (u8, u8, u8), ytm: bool) -> String {
 }
 
 thread_local! {
+    /// The "Update parsers" row's status line, while the settings page shows.
+    static PARSERS_LABEL: RefCell<Option<glib::WeakRef<Label>>> = const { RefCell::new(None) };
+}
+
+/// Settings > Network & Parsers: which engine finds songs (with the rollback to the built-in
+/// one), and "Update parsers" (yt-dlp and ytmusicapi to their newest, saved answers cleared).
+fn network_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
+    use rymplayer::ytmusicapi::Engine;
+    page.append(&label(tr("Network & Parsers"), &["shelf"]));
+    let names: Vec<&str> = (0..3).map(|i| tr(Engine::from_index(i).label())).collect();
+    let engine = gtk::DropDown::from_strings(&names);
+    engine.set_selected(config.music_engine.min(2) as u32);
+    {
+        let ui = ui.clone();
+        engine.connect_selected_notify(move |d| {
+            let mut s = ui.borrow_mut();
+            s.config.music_engine = d.selected().min(2) as u8;
+            rymplayer::ytmusicapi::use_engine(Engine::from_index(s.config.music_engine));
+            s.config.save();
+        });
+    }
+    page.append(&setting_row(tr("Song finder"), tr("Search, radio and mixes; the built-in one is the rollback if a YouTube change breaks ytmusicapi"), &engine));
+    let status = rymplayer::ytmusicapi::last_failure().map_or_else(|| tr("yt-dlp and ytmusicapi to their newest, saved answers cleared").to_string(), |why| format!("{}: {why}", tr("Last fallback")));
+    let about = label(&status, &["dim", "small"]);
+    about.set_wrap(true);
+    let update = Button::with_label(tr("Update"));
+    update.add_css_class("pill");
+    update.set_valign(Align::Center);
+    {
+        let (ui, about) = (ui.clone(), about.clone());
+        update.connect_clicked(move |_| {
+            about.set_text(tr("Updating…"));
+            let nightly = ui.borrow().config.ytdlp_nightly;
+            post(&ui, async move { Ev::Parsers(rymplayer::ytmusicapi::update_parsers(nightly).await) });
+        });
+    }
+    PARSERS_LABEL.with(|l| *l.borrow_mut() = Some(about.downgrade()));
+    let row = gtk::Box::new(Orientation::Horizontal, 12);
+    let text = gtk::Box::new(Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    text.append(&label(tr("Update parsers"), &["title"]));
+    text.append(&about);
+    row.append(&text);
+    row.append(&update);
+    page.append(&row);
+}
+
+thread_local! {
     static LYRICS_FONT: std::cell::OnceCell<CssProvider> = const { std::cell::OnceCell::new() };
 }
 
@@ -531,6 +579,8 @@ enum Ev {
     /// RyM Link: a device's note on the Wi-Fi, and the music taken over from a phone.
     Peer(rymplayer::link::Announce, std::net::IpAddr),
     TookOver(String, anyhow::Result<rymplayer::link::State>),
+    /// "Update parsers" finished: what happened.
+    Parsers(String),
     Done,
 }
 
@@ -967,6 +1017,8 @@ fn build(app: &Application) {
     // Arabic: the whole window reads right to left.
     gtk::Widget::set_default_direction(if config.arabic { gtk::TextDirection::Rtl } else { gtk::TextDirection::Ltr });
     stream::use_source(config.source);
+    rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(config.music_engine));
+    rymplayer::ytmusicapi::use_language(config.arabic);
     stream::prefer_lossless(config.prefer_lossless);
     stream::download_best(config.download_best);
     stream::download_parallel(config.download_connections, config.download_piece_mb);
@@ -3659,6 +3711,7 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
         });
     }
     page.append(&setting_row(tr("Download quality"), tr("Songs saved with right-click > Download go to Music/RymPlayer"), &quality));
+    network_settings(ui, &page, &config);
     sound_settings(ui, &page, &config);
 
     let steps = ["1", "2", "4", "6", "8", "10", "12", "16"];
@@ -6090,6 +6143,14 @@ fn poll_events(ui: &Shared) {
                 update_batch(ui);
             }
             Ev::Done => {}
+            Ev::Parsers(text) => {
+                toast(ui, &format!("{}: {text}", tr("Parsers")));
+                PARSERS_LABEL.with(|l| {
+                    if let Some(label) = l.borrow().as_ref().and_then(|w| w.upgrade()) {
+                        label.set_text(&format!("{} · {text}", tr("Up to date")));
+                    }
+                });
+            }
         }
     }
     let due = {

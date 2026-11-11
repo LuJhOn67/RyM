@@ -101,7 +101,20 @@ impl Api {
         account_from(&page).ok_or_else(|| anyhow!("no account in YouTube Music's answer"))
     }
 
+    /// The signed-in cookie, for the ytmusicapi engine (None as a guest).
+    fn cookie(&self) -> Option<String> {
+        if matches!(self, Api::User(_)) { crate::secret::read_cookie() } else { None }
+    }
+
+    /// Songs for a search: ytmusicapi, with the built-in engine as the fallback (see
+    /// [`crate::ytmusicapi`]).
     pub async fn search(self, query: String) -> Result<Vec<Track>> {
+        let cookie = self.cookie();
+        crate::ytmusicapi::hybrid("search", crate::ytmusicapi::search(query.clone(), "songs", cookie), || self.builtin_search(query)).await
+    }
+
+    /// The built-in engine's search (ytmapi-rs over InnerTube).
+    pub async fn builtin_search(self, query: String) -> Result<Vec<Track>> {
         let songs = match &self {
             Api::Guest(y) => y.search_songs(query.as_str()).await,
             Api::User(y) => y.search_songs(query.as_str()).await,
@@ -241,7 +254,29 @@ impl Api {
     /// Songs found for `query` (the first page), and where the next page starts.
     /// Songs first, then YouTube videos (songs that are only on YouTube, not on YouTube Music),
     /// each video once; asked at the same time. One of the two failing still gives the other.
+    /// Search results (songs, then videos): ytmusicapi, with the built-in engine as the fallback.
     pub async fn search_paged(self, query: String) -> Result<Paged> {
+        let cookie = self.cookie();
+        let q = query.clone();
+        let new = async move {
+            let (songs, videos) = tokio::join!(crate::ytmusicapi::search(q.clone(), "songs", cookie.clone()), crate::ytmusicapi::search(q, "videos", cookie));
+            let mut tracks = songs?;
+            let seen: std::collections::HashSet<String> = tracks.iter().map(|t| t.video_id.clone()).collect();
+            let found: Vec<Track> = videos.unwrap_or_default().into_iter().filter(|t| !seen.contains(&t.video_id)).map(video_row).collect();
+            if let Ok(mut v) = video_ids().lock() {
+                if v.len() > 5000 {
+                    v.clear();
+                }
+                v.extend(found.iter().map(|t| t.video_id.clone()));
+            }
+            tracks.extend(found);
+            Ok(Paged { tracks, more: None })
+        };
+        crate::ytmusicapi::hybrid("search", new, || self.builtin_search_paged(query)).await
+    }
+
+    /// The built-in engine's search results, with their next pages.
+    pub async fn builtin_search_paged(self, query: String) -> Result<Paged> {
         let (songs, videos) = tokio::join!(self.raw_search(&query, SONGS_FILTER), self.raw_search(&query, VIDEOS_FILTER));
         let mut tracks = Vec::new();
         let mut more = None;
@@ -335,7 +370,14 @@ impl Api {
     }
 
     /// YouTube Music's "up next" radio for a song (the song itself comes first).
+    /// A song's radio: ytmusicapi, with the built-in engine as the fallback.
     pub async fn radio(self, video_id: String) -> Result<Vec<Track>> {
+        let cookie = self.cookie();
+        crate::ytmusicapi::hybrid("radio", crate::ytmusicapi::radio(video_id.clone(), cookie), || self.builtin_radio(video_id)).await
+    }
+
+    /// The built-in engine's radio.
+    pub async fn builtin_radio(self, video_id: String) -> Result<Vec<Track>> {
         let vid = VideoID::from_raw(video_id);
         let tracks = match &self {
             Api::Guest(y) => y.get_watch_playlist_from_video_id(vid).await,
@@ -345,8 +387,15 @@ impl Api {
         Ok(tracks.into_iter().map(watch_track).collect())
     }
 
-    /// Tracks of a mix ("RD..." playlist), which only exists as a watch queue.
+    /// Tracks of a mix ("RD..." playlist), which only exists as a watch queue: ytmusicapi, with
+    /// the built-in engine as the fallback.
     pub async fn mix_tracks(self, id: String) -> Result<Vec<Track>> {
+        let cookie = self.cookie();
+        crate::ytmusicapi::hybrid("mix", crate::ytmusicapi::mix(id.clone(), cookie), || self.builtin_mix_tracks(id)).await
+    }
+
+    /// The built-in engine's mix.
+    pub async fn builtin_mix_tracks(self, id: String) -> Result<Vec<Track>> {
         let query = GetWatchPlaylistQuery::new_from_playlist_id(PlaylistID::from_raw(id));
         let tracks = match &self {
             Api::Guest(y) => y.query(query).await,

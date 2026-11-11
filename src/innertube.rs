@@ -525,6 +525,18 @@ pub async fn audio_skipping(video_id: &str, skip: &[String]) -> Result<Audio> {
     Err(anyhow!("YouTube gave no audio ({})", why.join("; ")))
 }
 
+/// "Update parsers": every saved link and the remembered client are forgotten, so the next song
+/// asks YouTube afresh with the updated tools.
+pub fn forget_cache() {
+    if let Ok(mut l) = links().lock() {
+        l.clear();
+    }
+    if let Ok(mut r) = remembered().lock() {
+        *r = None;
+    }
+    let _ = std::fs::remove_file(remembered_file());
+}
+
 /// A link the player couldn't open: it's asked again (from another client) next time.
 pub fn forget(video_id: &str) {
     if let Ok(mut l) = links().lock() {

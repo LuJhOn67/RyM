@@ -303,6 +303,8 @@ impl App {
         self.auto_update_check();
         self.spawn(async { Event::Store(s(rymplayer::plugins::store().await)) });
         stream::use_source(self.config.source);
+        rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(self.config.music_engine));
+        rymplayer::ytmusicapi::use_language(self.config.arabic);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
         // The last session: its queue, its song paused where it was left, its volume.
@@ -1173,6 +1175,8 @@ impl App {
         self.config.change(SETTINGS[i], step);
         self.apply_sound();
         stream::use_source(self.config.source);
+        rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(self.config.music_engine));
+        rymplayer::ytmusicapi::use_language(self.config.arabic);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);
         self.config.save();

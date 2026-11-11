@@ -31,6 +31,7 @@ pub mod radio;
 pub mod romaji;
 pub mod lastfm;
 pub mod ytdlp;
+pub mod ytmusicapi;
 pub mod ram_points;
 pub mod recent;
 pub mod secret;
