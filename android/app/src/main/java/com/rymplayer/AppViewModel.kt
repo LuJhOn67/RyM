@@ -129,7 +129,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         com.rymplayer.playback.Streams.warmUp()
         com.rymplayer.playback.Streams.connections = prefs.getInt("dl_connections", 8)
         com.rymplayer.playback.Streams.pieceMb = prefs.getInt("dl_piece_mb", 0)
-        val cookie = prefs.getString("cookie", null)
+        val cookie = com.rymplayer.data.SecureCookie.read(prefs)
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
         followLyrics()
@@ -564,7 +564,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         status = "${tr("Downloading")} $url"
         status = runCatching {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val file = com.rymplayer.data.YtDlp.downloadAny(getApplication(), url, asVideo, prefs.getString("cookie", null))
+                val file = com.rymplayer.data.YtDlp.downloadAny(getApplication(), url, asVideo, com.rymplayer.data.SecureCookie.read(prefs))
                 "${tr("Saved to")} ${Downloads.publish(getApplication(), file, asVideo)}"
             }
         }.getOrElse { "${tr("Download failed")}: ${it.message}" }
@@ -581,7 +581,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- session
 
     fun start(cookie: String?) {
-        prefs.edit().apply { if (cookie != null) putString("cookie", cookie) else remove("cookie") }.apply()
+        com.rymplayer.data.SecureCookie.write(prefs, cookie)
         api = MusicApi(cookie)
         com.rymplayer.playback.Streams.cookie = cookie
         signedIn = cookie != null
@@ -615,7 +615,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun guest() = start(null).also { signedIn = true }
 
     fun signOut() {
-        prefs.edit().remove("cookie").apply()
+        com.rymplayer.data.SecureCookie.write(prefs, null)
         // Forget the sign-in page's Google session too, so the next sign-in can pick another account.
         android.webkit.CookieManager.getInstance().removeAllCookies(null)
         player.stop()
@@ -1112,7 +1112,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
     fun download(t: Track) = viewModelScope.launch {
         status = "${tr("Downloading")} \"${t.title}\"..."
-        status = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
+        status = runCatching { Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
             "${tr("Download failed")}: ${it.message ?: it.javaClass.simpleName}"
         })
@@ -1152,7 +1152,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             var b = Batch(0, songs.size)
             batch = b
             for (t in songs) {
-                val r = runCatching { Downloads.save(getApplication(), t, prefs.getString("cookie", null), downloadBest) }
+                val r = runCatching { Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), downloadBest) }
                 b = when {
                     r.getOrNull() == "already saved" -> b.copy(skipped = b.skipped + 1)
                     r.isSuccess -> b.copy(saved = b.saved + 1)
