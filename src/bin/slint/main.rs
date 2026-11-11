@@ -1430,7 +1430,7 @@ fn fill_settings(st: &Shared) {
             if r.is_empty() { t("How each way of asking YouTube did (after a few songs)") } else { r }
         }, "Refresh"),
         head("Discord"),
-        switch("discord", "Show on Discord", "What you play on your Discord profile; needs an application id from discord.com/developers", c.discord),
+        switch("discord", "Show on Discord", "What you play on your Discord profile; it works as it is, or put your own application id below", c.discord),
         field("discord-id", "Application id", "", &c.discord_app_id),
         head("Last.fm"),
         field("lastfm-key", "API key", "", &c.lastfm_key),

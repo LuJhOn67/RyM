@@ -198,6 +198,10 @@ fn place(name: &str) -> String {
     tr(word).to_string()
 }
 
+/// RyM's own Discord application (its name and picture on your profile); your own id in the
+/// settings takes its place.
+pub const DISCORD_APP_ID: &str = "1568047216743030784";
+
 /// Piece sizes the settings cycle through (MB; 0 = open).
 pub const PIECE_SIZES: [u8; 5] = [0, 1, 2, 4, 8];
 
@@ -334,7 +338,7 @@ impl Default for Config {
             pitch: 1.0,
             reverb: 0.0,
             discord: false,
-            discord_app_id: String::new(),
+            discord_app_id: DISCORD_APP_ID.into(),
             lyrics_overlay: false,
             overlay_click_through: false,
             ui_zoom: 0.85,
@@ -581,10 +585,12 @@ impl Config {
     }
 
     pub fn load() -> Config {
-        std::fs::read_to_string(path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let mut c: Config = std::fs::read_to_string(path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // No id of your own: RyM's (so "Show on Discord" works with no setup).
+        if c.discord_app_id.trim().is_empty() {
+            c.discord_app_id = DISCORD_APP_ID.into();
+        }
+        c
     }
 
     pub fn save(&self) {
