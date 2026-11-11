@@ -38,6 +38,13 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -74,6 +81,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.rymplayer.data.CrashReport.watch(this)
         enableEdgeToEdge()
         setContent {
             val model: AppViewModel = viewModel()
@@ -137,6 +145,30 @@ fun RymApp(vm: AppViewModel) {
         ) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+    // The last run crashed: the report is offered (it shows what would be sent).
+    var crash by remember { mutableStateOf(com.rymplayer.data.CrashReport.pending(ctx)) }
+    crash?.let { report ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { com.rymplayer.data.CrashReport.dismiss(ctx); crash = null },
+            title = { Text(tr("RyM closed unexpectedly last time")) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(tr("Open report opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise."))
+                    Text(report, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton({
+                    com.rymplayer.data.CrashReport.dismiss(ctx)
+                    crash = null
+                    runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(com.rymplayer.data.CrashReport.issueUrl(report)))) }
+                }) { Text(tr("Open report")) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton({ com.rymplayer.data.CrashReport.dismiss(ctx); crash = null }) { Text(tr("Not now")) }
+            },
+        )
     }
     // Short messages ("Added to ...", errors) as toasts.
     val context = LocalContext.current

@@ -809,6 +809,7 @@ fn main() {
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_default();
         log(&format!("CRASH at {at}: {msg}"));
+        rymplayer::crash::record("RyM GTK", &at, &msg);
     }));
     configure_gtk_runtime();
     // What the last update put aside goes now.
@@ -1942,6 +1943,7 @@ fn build(app: &Application) {
     #[cfg(windows)]
     redraw_after_display_changes(&ui.borrow().w.window);
     window.present();
+    offer_crash_report(&ui);
 }
 
 /// Frames that took long to lay out or draw, with the window's size and what was on screen, go
@@ -1999,6 +2001,27 @@ fn watch_frames(ui: &Shared) {
                 count(s.w.queue_box.upcast_ref()),
             ));
         });
+    });
+}
+
+/// The last run crashed: the report is offered (it shows what would be sent); "Open report"
+/// opens a GitHub issue filled in with it, and you send it yourself.
+fn offer_crash_report(ui: &Shared) {
+    let Some(report) = rymplayer::crash::pending() else { return };
+    let dialog = gtk::AlertDialog::builder()
+        .modal(true)
+        .message(tr("RyM closed unexpectedly last time"))
+        .detail(format!("{}\n\n{report}", tr("OK opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise.")))
+        .buttons([tr("Not now"), tr("Open report")])
+        .cancel_button(0)
+        .default_button(1)
+        .build();
+    let window = ui.borrow().w.window.clone();
+    dialog.choose(Some(&window), None::<&gtk::gio::Cancellable>, move |answer| {
+        rymplayer::crash::dismiss();
+        if answer.is_ok_and(|i| i == 1) {
+            let _ = rymplayer::updates::open_link(&rymplayer::crash::issue_url(&report));
+        }
     });
 }
 

@@ -339,6 +339,7 @@ fn main() {
         let msg = info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned()).unwrap_or_default();
         let thread = std::thread::current();
         log(&format!("CRASH at {at} (thread {}): {msg}", thread.name().unwrap_or("unnamed")));
+        rymplayer::crash::record("RyM Slint", &at, &msg);
     }));
     if std::env::args().any(|a| a == "--login") {
         login::run();
@@ -2731,6 +2732,15 @@ fn ask_text(st: &Shared, what: &str, title: &str, hint: &str) {
 fn prompt_done(st: &Shared, ok: bool) {
     let text = st.borrow().ui.upgrade().map(|ui| ui.global::<App>().get_prompt_text().trim().to_string()).unwrap_or_default();
     with_app(st, |a| a.set_prompt_open(false));
+    // The crash report: OK opens the filled-in issue; either way it isn't offered again.
+    if st.borrow().prompt_for == "crash" {
+        st.borrow_mut().prompt_for.clear();
+        rymplayer::crash::dismiss();
+        if ok && !text.is_empty() {
+            let _ = rymplayer::updates::open_link(&rymplayer::crash::issue_url(&text));
+        }
+        return;
+    }
     if !ok || text.is_empty() {
         return;
     }
@@ -3456,6 +3466,11 @@ fn background_upkeep(st: &Shared) {
         post(async { Ev::ParsersStatus(rymplayer::ytmusicapi::status().await) });
     }
     trim_cache(limit, String::new());
+    // The last run crashed: the report is offered (the box shows what would be sent).
+    if let Some(report) = rymplayer::crash::pending() {
+        ask_text(st, "crash", tr("RyM closed unexpectedly last time"), tr("OK opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise."));
+        with_app(st, |a| a.set_prompt_text(report.into()));
+    }
 }
 
 /// Downloaded songs over the limit go (off the window's thread).
