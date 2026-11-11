@@ -363,7 +363,7 @@ impl Tile {
 
 /// Takes 70% of the color out of a picture (RGBA), as Remorse shows the covers.
 pub fn mute(rgba: &mut [u8]) {
-    for p in rgba.chunks_exact_mut(4) {
+    for p in rgba.as_chunks_mut::<4>().0 {
         let grey = 0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32;
         for c in &mut p[..3] {
             *c = (*c as f32 * 0.3 + grey * 0.7) as u8;
@@ -376,7 +376,7 @@ pub fn mute(rgba: &mut [u8]) {
 pub fn cover_colors(rgba: &[u8], n: usize) -> Vec<(u8, u8, u8)> {
     // Colors in 4×4×4 boxes; each box's count and its colors' sum.
     let mut boxes = vec![(0u32, 0u32, 0u32, 0u32); 64];
-    for p in rgba.chunks_exact(4).step_by(7) {
+    for p in rgba.as_chunks::<4>().0.iter().step_by(7) {
         let i = (p[0] as usize >> 6) * 16 + (p[1] as usize >> 6) * 4 + (p[2] as usize >> 6);
         let b = &mut boxes[i];
         b.0 += 1;

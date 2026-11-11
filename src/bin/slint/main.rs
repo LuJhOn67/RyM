@@ -1359,7 +1359,7 @@ fn fill_settings(st: &Shared) {
     let sleep = match s.sleep {
         None => t("Off"),
         Some(Sleep::EndOfSong) => t("End of song"),
-        Some(Sleep::At(when)) => format!("{} min", (when.saturating_duration_since(Instant::now()).as_secs() + 59) / 60),
+        Some(Sleep::At(when)) => format!("{} min", when.saturating_duration_since(Instant::now()).as_secs().div_ceil(60)),
     };
     let only = if c.only_kind.is_empty() { t("Every kind heard") } else { t(&c.only_kind) };
     let lastfm = if !c.lastfm_session.is_empty() {
@@ -1875,8 +1875,6 @@ fn animations(st: &Shared) {
                 tr("nothing moves in these colors")
             } else if saving {
                 tr("battery saver")
-            } else if covered {
-                tr("window hidden")
             } else {
                 ""
             };
@@ -3657,7 +3655,7 @@ fn open_share(st: &Shared) {
 fn cover_color(px: &Pixels) -> Option<slint::Color> {
     let (_, _, data) = px;
     let mut bins = [(0f32, 0f32, 0f32, 0f32); 12];
-    for p in data.chunks_exact(4).step_by(11) {
+    for p in data.as_chunks::<4>().0.iter().step_by(11) {
         let (r, g, b) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0);
         let (max, min) = (r.max(g).max(b), r.min(g).min(b));
         let sat = if max > 0.0 { (max - min) / max } else { 0.0 };

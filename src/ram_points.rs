@@ -100,8 +100,11 @@ fn normalize(s: &str) -> String {
 }
 
 /// Each kind's words and phrases, normalized once.
-fn telling_words() -> &'static [(Kind, HashSet<String>, Vec<String>)] {
-    static WORDS: OnceLock<Vec<(Kind, HashSet<String>, Vec<String>)>> = OnceLock::new();
+/// A kind, its single telling words, and its telling phrases.
+type Telling = (Kind, HashSet<String>, Vec<String>);
+
+fn telling_words() -> &'static [Telling] {
+    static WORDS: OnceLock<Vec<Telling>> = OnceLock::new();
     WORDS.get_or_init(|| {
         // Quran first: a reciter's "imam" shouldn't make it Husseini.
         [(Kind::Quran, QURAN), (Kind::Husseini, HUSSEINI), (Kind::Nasheed, NASHEED), (Kind::Talk, TALK)]

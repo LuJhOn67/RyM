@@ -50,7 +50,7 @@ pub fn working_set_mb() -> Option<u64> {
         let mut c = sys::Counters { cb: std::mem::size_of::<sys::Counters>() as u32, ..Default::default() };
         // SAFETY: `c` is a valid, correctly sized PROCESS_MEMORY_COUNTERS for the call to fill.
         let ok = unsafe { sys::K32GetProcessMemoryInfo(sys::GetCurrentProcess(), &mut c, c.cb) };
-        return (ok != 0).then(|| c.working_set_size as u64 / (1 << 20));
+        return (ok != 0).then_some(c.working_set_size as u64 / (1 << 20));
     }
     #[allow(unreachable_code)]
     None

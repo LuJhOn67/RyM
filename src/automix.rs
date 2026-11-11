@@ -117,7 +117,7 @@ pub fn beat(env: &[f32]) -> Option<Beat> {
     let top = scores[best];
     for (num, den) in [(1, 2), (2, 3)] {
         let lag = (lo - 1 + best) * num / den;
-        if lag > lo && lag + 1 <= hi {
+        if lag > lo && lag < hi {
             let i = (lag - 1 - (lo - 1)..=lag + 1 - (lo - 1)).max_by(|a, b| scores[*a].total_cmp(&scores[*b])).unwrap_or(best);
             if scores[i] >= 0.8 * top && i < best {
                 best = i;
@@ -519,7 +519,7 @@ impl<S: Source<Item = f32>> Tap<S> {
                 }
             }
         }
-        if self.count % 256 == 0 {
+        if self.count.is_multiple_of(256) {
             let want = f32::from_bits(self.meter.highpass.load(Ordering::Relaxed));
             if (want - self.cutoff).abs() > 0.5 {
                 if self.cutoff < 1.0 {

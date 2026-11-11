@@ -563,17 +563,14 @@ async fn innertube(video_id: &str, dir: &Path) -> Result<(Option<f32>, PathBuf)>
 /// yt-dlp finds the link (with the signed-in account), the song downloads over our parallel
 /// connections into `base` plus its extension. If that fails, yt-dlp downloads it itself.
 async fn ytdlp_parallel(video_id: &str, base: &Path) -> Result<(Option<f32>, PathBuf)> {
-    match ytdlp_link(video_id).await {
-        Ok((url, headers, ext, secs)) => {
-            let path = PathBuf::from(format!("{}.{ext}", base.display()));
-            match save(&url, &headers, &path).await {
-                Ok(()) => return Ok((secs, path)),
-                Err(_) => {
-                    let _ = std::fs::remove_file(&path);
-                }
+    if let Ok((url, headers, ext, secs)) = ytdlp_link(video_id).await {
+        let path = PathBuf::from(format!("{}.{ext}", base.display()));
+        match save(&url, &headers, &path).await {
+            Ok(()) => return Ok((secs, path)),
+            Err(_) => {
+                let _ = std::fs::remove_file(&path);
             }
         }
-        Err(_) => {}
     }
     ytdlp(video_id, &PathBuf::from(format!("{}.%(ext)s", base.display()))).await
 }

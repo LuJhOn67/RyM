@@ -57,7 +57,7 @@ pub fn cover_lights(texture: &gdk::Texture) -> Option<[(f64, f64, f64); 4]> {
     let mut px = vec![0u8; w * h * 4];
     texture.download(&mut px, w * 4);
     // BGRA as RGBA.
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
     }
     let c = rymplayer::themes::cover_colors(&px, 4);

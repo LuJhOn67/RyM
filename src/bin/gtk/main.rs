@@ -4085,6 +4085,9 @@ fn song_menu_on(ui: &Shared, widget: &impl IsA<gtk::Widget>, t: Track) {
     widget.add_controller(hold);
 }
 
+/// What a song menu row does when picked.
+type MenuAction = Box<dyn Fn(&Shared, &Track)>;
+
 fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
     let pop = gtk::Popover::new();
     pop.set_parent(anchor);
@@ -4092,7 +4095,7 @@ fn song_menu(ui: &Shared, anchor: &gtk::Widget, x: f64, y: f64, t: &Track) {
     pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
     let col = gtk::Box::new(Orientation::Vertical, 0);
     let liked = ui.borrow().liked.contains(&t.video_id);
-    let mut items: Vec<(&str, Box<dyn Fn(&Shared, &Track)>)> = vec![
+    let mut items: Vec<(&str, MenuAction)> = vec![
         (tr("Play next"), Box::new(|ui: &Shared, t: &Track| play_next(ui, t.clone()))),
         (tr("Add to queue"), Box::new(|ui: &Shared, t: &Track| add_to_queue(ui, t.clone()))),
         (tr("Start radio"), Box::new(|ui: &Shared, t: &Track| play_with_radio(ui, t.clone()))),

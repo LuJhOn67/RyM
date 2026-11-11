@@ -12,7 +12,7 @@ fn command(program: &str) -> tokio::process::Command {
 
 fn last_line(out: &std::process::Output) -> String {
     let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    text.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or_default().to_string()
+    text.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or_default().to_string()
 }
 
 /// Updates yt-dlp; what it said in the end ("yt-dlp is up to date"...).

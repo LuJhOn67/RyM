@@ -24,8 +24,11 @@ pub enum Show {
     Off,
 }
 
-fn sender() -> &'static Mutex<Option<(String, Sender<Show>)>> {
-    static S: OnceLock<Mutex<Option<(String, Sender<Show>)>>> = OnceLock::new();
+/// The thread that talks to Discord: its application id, and where to send what to show.
+type Talker = Mutex<Option<(String, Sender<Show>)>>;
+
+fn sender() -> &'static Talker {
+    static S: OnceLock<Talker> = OnceLock::new();
     S.get_or_init(|| Mutex::new(None))
 }
 

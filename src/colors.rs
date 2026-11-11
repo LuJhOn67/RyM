@@ -10,7 +10,7 @@ pub const PLAIN: (u8, u8, u8) = (72, 72, 80);
 /// From RGBA pixels: greys count a little, so black-and-white covers give a neutral shade.
 pub fn lyrics_background(rgba: &[u8]) -> (u8, u8, u8) {
     let (mut r, mut g, mut b, mut w) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    for px in rgba.chunks_exact(4).step_by(3) {
+    for px in rgba.as_chunks::<4>().0.iter().step_by(3) {
         let [pr, pg, pb] = [px[0], px[1], px[2]].map(|c| c as f32 / 255.0);
         let max = pr.max(pg).max(pb);
         let min = pr.min(pg).min(pb);

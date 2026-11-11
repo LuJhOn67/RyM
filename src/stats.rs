@@ -103,7 +103,7 @@ pub fn recap() -> Recap {
     let s = load();
     let month = s.months.get(&month_of(crate::updates::now())).cloned().unwrap_or_default();
     let mut artists: Vec<(String, u64)> = month.artists.into_iter().collect();
-    artists.sort_by(|a, b| b.1.cmp(&a.1));
+    artists.sort_by_key(|a| std::cmp::Reverse(a.1));
     let mut played = crate::recent::load();
     played.sort_by(|a, b| b.plays.cmp(&a.plays).then(b.last.cmp(&a.last)));
     Recap {

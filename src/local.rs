@@ -48,7 +48,7 @@ pub fn scan(folders: &[PathBuf]) -> Vec<Track> {
     files.sort();
     files.dedup();
     let mut songs: Vec<(String, String, u32, Track)> = files.iter().map(|p| read(p)).collect();
-    songs.sort_by(|a, b| (a.0.to_lowercase(), a.1.to_lowercase(), a.2).cmp(&(b.0.to_lowercase(), b.1.to_lowercase(), b.2)));
+    songs.sort_by_key(|a| (a.0.to_lowercase(), a.1.to_lowercase(), a.2));
     songs.into_iter().map(|(_, _, _, t)| t).collect()
 }
 

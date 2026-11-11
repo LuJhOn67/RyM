@@ -56,12 +56,11 @@ static SETTINGS: RwLock<Settings> = RwLock::new(Settings { eq: [0.0; 5], normali
 static VERSION: AtomicU64 = AtomicU64::new(1);
 
 pub fn set(s: Settings) {
-    if let Ok(mut cur) = SETTINGS.write() {
-        if *cur != s {
+    if let Ok(mut cur) = SETTINGS.write()
+        && *cur != s {
             *cur = s;
             VERSION.fetch_add(1, Ordering::Release);
         }
-    }
 }
 
 pub fn get() -> Settings {
@@ -295,7 +294,7 @@ impl<S: Source<Item = f32>> Effects<S> {
 
     /// The next frame, processed; `None` at the end.
     fn next_frame(&mut self) -> Option<()> {
-        if self.frames % 512 == 0 {
+        if self.frames.is_multiple_of(512) {
             self.update();
         }
         loop {
