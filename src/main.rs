@@ -24,6 +24,13 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().any(|a| a == "--login") {
         login::run();
     }
+    // "Play in RyM": a link given here goes to the window app when it's open (it plays it there).
+    if let Some(link) = std::env::args().skip(1).find(|a| rymplayer::links::is_incoming(a))
+        && rymplayer::link::hand_over(&link)
+    {
+        println!("{}", tr("Sent to RyM"));
+        return Ok(());
+    }
     let rt = tokio::runtime::Runtime::new()?;
     let _guard = rt.enter();
 

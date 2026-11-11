@@ -103,6 +103,22 @@ object RamPoints {
 
     fun firstArtist(artist: String): String = Radio.firstArtist(artist)
 
+    /**
+     * Points for how much of a song was heard (the same as the PC's heard_points): skipped in
+     * its first 30 seconds, SKIP; left before 30%, up to EARLY_LEAVE (the earlier the more); from
+     * 30% to 80%, from 0 up to FINISH; 80% or more, FINISH.
+     */
+    fun heardPoints(listened: Float, length: Float): Float {
+        if (listened < 30f && (length <= 0f || listened < length * 0.5f)) return SKIP
+        if (length <= 0f) return 0f
+        val f = (listened / length).coerceIn(0f, 1f)
+        return when {
+            f < 0.3f -> EARLY_LEAVE * (0.3f - f) / 0.3f
+            f < 0.8f -> FINISH * (f - 0.3f) / 0.5f
+            else -> FINISH
+        }
+    }
+
     /** What RyM has learned about artists: how much each kind was seen with them. */
     /** [fixed]: artists the user put in a kind by hand (a song's menu); it wins. */
     /** [bias]: points added to (or taken from) an artist ("Recommend more" / "Don't recommend"); [hidden]: songs never suggested again. */
@@ -139,8 +155,8 @@ object RamPoints {
 
         /** The song stopped after [listened] of its [length] seconds: a quick skip loses points, hearing it to the end gives some. */
         fun left(t: Track, listened: Float, length: Float) {
-            if (listened < 30f && (length <= 0f || listened < length * 0.5f)) give(t, SKIP)
-            else if (length > 0f && listened >= length * 0.8f) give(t, FINISH)
+            val points = heardPoints(listened, length)
+            if (points != 0f) give(t, points)
         }
 
         /** The song's points now: 5% less each day since it played, a third for 6 hours after. */
@@ -239,6 +255,8 @@ object RamPoints {
 
     private const val PLAY = 10f
     private const val FINISH = 6f
+    /** Left early (past the first 30 s, before 30% of the song), at most. */
+    private const val EARLY_LEAVE = -6f
     private const val SKIP = -15f
     private const val TO_ARTIST = 0.3f
     private const val COOLDOWN = 0.35f

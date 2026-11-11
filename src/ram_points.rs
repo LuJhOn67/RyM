@@ -240,6 +240,30 @@ pub struct Score {
     pub last: u64,
 }
 
+/// Points for how much of a song was heard before it ended or was left:
+/// - skipped in its first 30 seconds (and before its half): [`SKIP`];
+/// - left before 30% of it: up to [`EARLY`], the earlier the more;
+/// - from 30% to 80%: from 0 up to [`FINISH`], little by little;
+/// - 80% or more: [`FINISH`].
+pub fn heard_points(listened: f32, length: f32) -> f32 {
+    if listened < 30.0 && (length <= 0.0 || listened < length * 0.5) {
+        return SKIP;
+    }
+    if length <= 0.0 {
+        return 0.0;
+    }
+    let f = (listened / length).clamp(0.0, 1.0);
+    if f < 0.3 {
+        EARLY * (0.3 - f) / 0.3
+    } else if f < 0.8 {
+        FINISH * (f - 0.3) / 0.5
+    } else {
+        FINISH
+    }
+}
+
+/// Left early (past the first 30 s, before 30% of the song), at most.
+const EARLY: f32 = -6.0;
 /// A song played.
 const PLAY: f32 = 10.0;
 /// Heard to the end (80% or more).
@@ -454,10 +478,9 @@ impl Notes {
     /// The song stopped after `listened` of its `length` seconds: a quick skip loses points,
     /// hearing it to the end gives some.
     pub fn left(&mut self, t: &Track, listened: f32, length: f32) {
-        if listened < 30.0 && (length <= 0.0 || listened < length * 0.5) {
-            self.give(t, SKIP);
-        } else if length > 0.0 && listened >= length * 0.8 {
-            self.give(t, FINISH);
+        let points = heard_points(listened, length);
+        if points != 0.0 {
+            self.give(t, points);
         }
     }
 
@@ -1080,6 +1103,26 @@ mod tests {
         assert_eq!(notes.affinity.len(), 1);
         assert_eq!(notes.bias.get("adele"), Some(&3));
         assert_eq!(notes.artists.get("adele"), Some(&[3, 0, 0, 0, 1]));
+    }
+
+
+    #[test]
+    fn points_follow_how_much_was_heard() {
+        use super::heard_points as p;
+        assert_eq!(p(10.0, 240.0), super::SKIP, "a skip in the first seconds");
+        assert!(p(36.0, 240.0) < 0.0 && p(36.0, 240.0) > super::EARLY, "left at 15%: a little minus");
+        assert!((p(72.0, 240.0) - 0.0).abs() < 1e-4, "left at 30%: nothing");
+        assert!((p(132.0, 240.0) - 3.0).abs() < 1e-3, "left at 55%: halfway to finishing");
+        assert_eq!(p(200.0, 240.0), super::FINISH, "80% and more: finished");
+        assert_eq!(p(240.0, 240.0), super::FINISH);
+        assert_eq!(p(45.0, 0.0), 0.0, "length unknown, past the skip: nothing");
+        // More heard is never worth less.
+        let mut last = f32::MIN;
+        for s in (30..=240).step_by(5) {
+            let now = p(s as f32, 240.0);
+            assert!(now >= last, "at {s} s");
+            last = now;
+        }
     }
 
 }

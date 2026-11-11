@@ -24,6 +24,15 @@ object SoundCloud {
     /** A link anyone can open: SoundCloud's player with the song. */
     fun shareLink(id: String) = "https://w.soundcloud.com/player/?url=https%3A//api.soundcloud.com/tracks/${id.removePrefix(PREFIX)}"
 
+    /** soundcloud.com/<artist>/<song>: one song (not a set, the artist's likes or their songs). */
+    fun isSong(text: String): Boolean {
+        if (!isLink(text)) return false
+        val uri = runCatching { java.net.URI(text.trim()) }.getOrNull() ?: return false
+        if (uri.host?.startsWith("on.") == true) return false
+        val parts = uri.rawPath.orEmpty().split('/').filter { it.isNotEmpty() }
+        return parts.size == 2 && parts[1] !in setOf("sets", "likes", "tracks", "albums", "reposts", "popular-tracks", "followers", "following")
+    }
+
     /** A SoundCloud page: a song, a set, an artist. */
     fun isLink(text: String): Boolean {
         val t = text.trim().removePrefix("https://").removePrefix("http://")

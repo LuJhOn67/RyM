@@ -31,4 +31,18 @@ class YouTubeLinksTest {
         assertNull(YouTubeLinks.parse("https://www.youtube.com/feed/library"))
         assertNull(YouTubeLinks.parse("not a link"))
     }
+
+    @Test
+    fun rymLinks() {
+        assertEquals(Target.Song("dQw4w9WgXcQ"), YouTubeLinks.parse("rym://play?url=https%3A%2F%2Fmusic.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ"))
+        assertEquals(Target.Song("dQw4w9WgXcQ"), YouTubeLinks.parse("rym://play?v=dQw4w9WgXcQ"))
+        assertEquals(Target.Song("dQw4w9WgXcQ"), YouTubeLinks.parse("rym://play/dQw4w9WgXcQ"))
+        assertEquals(Target.Playlist("PLxyz"), YouTubeLinks.parse("rym://play?list=PLxyz"))
+        assertEquals("https://open.spotify.com/track/abc", YouTubeLinks.unwrapRym("rym://play?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2Fabc"))
+        // Not twice: rym:// inside rym:// is refused.
+        assertNull(YouTubeLinks.parse("rym://play?url=rym%3A%2F%2Fplay%3Fv%3DdQw4w9WgXcQ"))
+        assertEquals("rym://play?v=dQw4w9WgXcQ", YouTubeLinks.firstLink("open rym://play?v=dQw4w9WgXcQ"))
+        assertEquals(true, SoundCloud.isSong("https://soundcloud.com/artist/a-song"))
+        assertEquals(false, SoundCloud.isSong("https://soundcloud.com/artist/sets/a-set"))
+    }
 }

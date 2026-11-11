@@ -55,6 +55,9 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Look" => "المظهر",
         // ---- kinds and columns
         "Playlist" => "قائمة تشغيل",
+        "Not a YouTube Music link" => "هذا مو رابط يوتيوب ميوزك",
+        "Sent to RyM" => "انرسل إلى RyM",
+        "Play in RyM" => "تشغيل في RyM",
         "PLAYLIST" => "قائمة تشغيل",
         "Album" => "ألبوم",
         "ALBUM" => "ألبوم",

@@ -14,10 +14,11 @@ cat > rym.desktop <<'EOF'
 Type=Application
 Name=RyM
 Comment=YouTube Music player
-Exec=RymPlayer-GTK
+Exec=RymPlayer-GTK %u
 Icon=rym
 Categories=AudioVideo;Audio;Player;
 Terminal=false
+MimeType=x-scheme-handler/rym;
 EOF
 cp ~/RyM/assets/icons/rym-gui.png rym.png
 export APPIMAGE_EXTRACT_AND_RUN=1 DEPLOY_GTK_VERSION=4 NO_STRIP=1

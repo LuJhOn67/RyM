@@ -192,6 +192,19 @@ pub fn control_of(query: &str) -> Option<(String, f32)> {
     what.map(|w| (w, value))
 }
 
+/// This computer's address on its network: the one its internet goes through (nothing is sent:
+/// a UDP "connect" only picks the way). A note sent from a socket on it leaves by that network,
+/// not by another one Windows may pick for 255.255.255.255 (VirtualBox's or Hyper-V's adapter,
+/// a Wi-Fi that isn't connected), where the phone would never hear it.
+pub fn lan_ipv4() -> Option<std::net::Ipv4Addr> {
+    let s = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    s.connect(("192.0.2.1", 9)).ok()?;
+    match s.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if !ip.is_unspecified() && !ip.is_loopback() => Some(ip),
+        _ => None,
+    }
+}
+
 /// Tells the phones what this computer plays (a note every 3 seconds; every second while it
 /// plays, so "Play along" keeps in step) and answers their `/state`, `/pause` and `/control`
 /// (with the account's key); `pause` runs when a phone took the music, `control` for the remote.
@@ -243,10 +256,19 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
         .spawn(move || {
             let Ok(socket) = UdpSocket::bind(("0.0.0.0", 0)) else { return };
             let _ = socket.set_broadcast(true);
+            // A socket on the network's own address too (see [`lan_ipv4`]), made again when it changes.
+            let mut lan: Option<(std::net::Ipv4Addr, UdpSocket)> = None;
             loop {
                 let (note, often) = playing.lock().ok().map(|p| (p.note(&device, port), p.playing)).unwrap_or((None, false));
                 if let Some(n) = note {
                     let _ = socket.send_to(n.as_bytes(), ("255.255.255.255", PORT));
+                    let ip = lan_ipv4();
+                    if lan.as_ref().map(|(a, _)| *a) != ip {
+                        lan = ip.and_then(|ip| UdpSocket::bind((ip, 0)).ok().filter(|s| s.set_broadcast(true).is_ok()).map(|s| (ip, s)));
+                    }
+                    if let Some((_, s)) = &lan {
+                        let _ = s.send_to(n.as_bytes(), ("255.255.255.255", PORT));
+                    }
                 }
                 std::thread::sleep(Duration::from_secs(if often { 1 } else { 3 }));
             }
@@ -254,9 +276,105 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
         .is_ok()
 }
 
+// ---------------------------------------------------------------- one RyM: links handed over
+
+/// The port on this computer (127.0.0.1 only) where the running RyM takes links from another
+/// copy started with one ("Play in RyM": a `rym://` link, a link on the command line).
+pub const OPEN_PORT: u16 = 47819;
+const OPEN_HELLO: &str = "RYM-OPEN ";
+
+/// Hands `link` to the RyM already running here; true when it took it (this copy can quit).
+pub fn hand_over(link: &str) -> bool {
+    use std::io::{BufRead, BufReader, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], OPEN_PORT));
+    let Ok(mut c) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else { return false };
+    let _ = c.set_read_timeout(Some(Duration::from_secs(2)));
+    let one_line: String = link.chars().filter(|c| !c.is_control()).take(4000).collect();
+    if write!(c, "{OPEN_HELLO}{one_line}\n").is_err() {
+        return false;
+    }
+    let mut answer = String::new();
+    BufReader::new(&c).read_line(&mut answer).is_ok() && answer.trim() == "OK"
+}
+
+/// Takes the links other copies hand over (see [`hand_over`]), on its own thread; `got` gets
+/// each one. False when another RyM takes them already.
+pub fn take_handed_links(got: impl Fn(String) + Send + 'static) -> bool {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let Ok(server) = std::net::TcpListener::bind(("127.0.0.1", OPEN_PORT)) else { return false };
+    std::thread::Builder::new()
+        .name("rym-open".into())
+        .spawn(move || {
+            for client in server.incoming().flatten() {
+                let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut line = String::new();
+                if BufReader::new((&client).take(4200)).read_line(&mut line).is_err() {
+                    continue;
+                }
+                let Some(link) = line.trim_end().strip_prefix(OPEN_HELLO).map(str::to_string) else { continue };
+                let mut c = &client;
+                let _ = c.write_all(b"OK\n");
+                if !link.is_empty() {
+                    got(link);
+                }
+            }
+        })
+        .is_ok()
+}
+
+/// Windows: `rym://` links open this RyM (HKEY_CURRENT_USER\Software\Classes\rym, which Windows
+/// shows as HKEY_CLASSES_ROOT\rym for this user; no administrator needed). Written only when it
+/// points elsewhere; not for a build in a `target` folder.
+#[cfg(windows)]
+pub fn register_rym_links() {
+    use std::os::windows::process::CommandExt;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let exe = exe.to_string_lossy().to_string();
+    if exe.to_ascii_lowercase().contains(r"\target\") {
+        return;
+    }
+    let key = r"HKCU\Software\Classes\rym";
+    let command = format!("\"{exe}\" \"%1\"");
+    let reg = |args: &[&str]| std::process::Command::new("reg").args(args).creation_flags(0x0800_0000).output();
+    let now = reg(&["query", &format!(r"{key}\shell\open\command"), "/ve"]).map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    if now.contains(&command) {
+        return;
+    }
+    let icon = format!("\"{exe}\",0");
+    let _ = reg(&["add", key, "/ve", "/d", "URL:RyM", "/f"]);
+    let _ = reg(&["add", key, "/v", "URL Protocol", "/d", "", "/f"]);
+    let _ = reg(&["add", &format!(r"{key}\DefaultIcon"), "/ve", "/d", &icon, "/f"]);
+    let _ = reg(&["add", &format!(r"{key}\shell\open\command"), "/ve", "/d", &command, "/f"]);
+}
+
+/// Elsewhere the `.desktop` file says it (`MimeType=x-scheme-handler/rym;`).
+#[cfg(not(windows))]
+pub fn register_rym_links() {}
+
 #[cfg(test)]
 mod pc_tests {
     use super::*;
+
+    #[test]
+    fn the_networks_own_address() {
+        // A PC with a network has one; it's never 0.0.0.0 or 127.x.
+        if let Some(ip) = lan_ipv4() {
+            println!("lan {ip}");
+            assert!(!ip.is_loopback() && !ip.is_unspecified());
+            assert!(UdpSocket::bind((ip, 0)).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_link_is_handed_over() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if !take_handed_links(move |l| tx.send(l).unwrap()) {
+            println!("port {OPEN_PORT} taken (RyM open?): not checked");
+            return;
+        }
+        assert!(hand_over("rym://play?v=dQw4w9WgXcQ\nsecond line"));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "rym://play?v=dQw4w9WgXcQsecond line");
+    }
 
     #[test]
     fn remote_requests() {

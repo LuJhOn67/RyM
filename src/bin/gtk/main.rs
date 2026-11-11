@@ -530,6 +530,10 @@ enum Sleep {
 
 enum Ev {
     Auth(AuthMode, anyhow::Result<Api>),
+    /// "Play in RyM": a link handed over by another copy (see `open_incoming`).
+    Incoming(String),
+    /// The songs of a link from outside, to play now (picked by hand).
+    Handed(anyhow::Result<Vec<Track>>),
     /// The signed-in Google account, then its picture's bytes.
     Account(anyhow::Result<rymplayer::api::Account>),
     Avatar(String, anyhow::Result<Vec<u8>>),
@@ -711,6 +715,8 @@ struct Ui {
     saving_at: Option<Instant>,
     /// The next song was picked by hand (RaM points: its minus points go).
     user_pick: bool,
+    /// A link from outside that came before the sign-in was ready: opened once it is.
+    pending_link: Option<String>,
     audio: Option<Audio>,
     vlc: Option<std::process::Child>,
     lyrics: Option<Lyrics>,
@@ -827,11 +833,26 @@ fn main() {
     if std::env::args().any(|arg| arg == "--login") {
         login::run();
     }
+    // "Play in RyM": a link on the command line (a rym:// link from the browser too) goes to the
+    // RyM already open, which plays it; this copy then quits.
+    let args: Vec<String> = std::env::args().collect();
+    let incoming = args.iter().skip(1).find(|a| rymplayer::links::is_incoming(a)).cloned();
+    if let Some(link) = &incoming {
+        if rymplayer::link::hand_over(link) {
+            return;
+        }
+        let _ = INCOMING.set(link.clone());
+    }
     // Each start is its own window (like the other apps), not a second window of the first.
     let app = Application::builder().application_id(APP_ID).flags(gtk::gio::ApplicationFlags::NON_UNIQUE).build();
     app.connect_activate(build);
-    app.run();
+    // GTK would take the link for a file to open (and refuse it): it's left out of what GTK reads.
+    let gtk_args: Vec<String> = args.into_iter().filter(|a| Some(a) != incoming.as_ref()).collect();
+    app.run_with_args(&gtk_args);
 }
+
+/// The link this copy was started with (and no other RyM took), opened once the window is up.
+static INCOMING: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Windows: a portable GTK runtime beside the program (its DLLs next to the .exe, its data in
 /// `share` and `lib`) instead of a system install.
@@ -1540,6 +1561,7 @@ fn build(app: &Application) {
         saving: false,
         saving_at: None,
         user_pick: false,
+        pending_link: None,
         audio,
         vlc: None,
         lyrics: None,
@@ -1944,6 +1966,15 @@ fn build(app: &Application) {
     redraw_after_display_changes(&ui.borrow().w.window);
     window.present();
     offer_crash_report(&ui);
+    {
+        let tx = ui.borrow().tx.clone();
+        rymplayer::link::take_handed_links(move |link| {
+            let _ = tx.send(Ev::Incoming(link));
+        });
+    }
+    if let Some(link) = INCOMING.get().cloned() {
+        open_incoming(&ui, link);
+    }
 }
 
 /// Frames that took long to lay out or draw, with the window's size and what was on screen, go
@@ -2877,6 +2908,48 @@ fn open_songs(ui: &Shared, title: String, load: impl Future<Output = anyhow::Res
         spawn(&s, async move { Ev::Tracks(id, load.await) });
     }
     render(ui);
+}
+
+/// "Play in RyM": a link from outside (the command line, a `rym://` link, another copy of RyM).
+/// A song plays now, as one picked by hand (RaM points: a song below zero comes back to zero),
+/// with its radio after it; a playlist, an album, a mix or an artist opens.
+fn open_incoming(ui: &Shared, link: String) {
+    use rymplayer::links::Target;
+    use rymplayer::{plugins, soundcloud, spotify};
+    let Some(target) = rymplayer::links::parse(&link) else {
+        toast(ui, tr("Not a YouTube Music link"));
+        return;
+    };
+    let Some(api) = api_of(ui) else {
+        ui.borrow_mut().pending_link = Some(link);
+        return;
+    };
+    match target {
+        Target::Song(id) => {
+            toast(ui, &format!("{}…", tr("Loading")));
+            post(ui, async move {
+                let mut radio = api.radio(id.clone()).await.unwrap_or_default();
+                let song = match radio.iter().position(|t| t.video_id == id) {
+                    Some(i) => radio.remove(i),
+                    None => Track { video_id: id.clone(), title: tr("Song").into(), artist: String::new(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None },
+                };
+                radio.retain(|t| t.video_id != id);
+                radio.insert(0, song);
+                Ev::Handed(Ok(radio))
+            });
+        }
+        Target::Playlist(id) => open_paged(ui, tr("Playlist").into(), api.playlist_paged(id)),
+        Target::Album(id) => open_songs(ui, tr("Album").into(), api.album_tracks(id)),
+        Target::Mix(id) => open_songs(ui, tr("Mix").into(), api.mix_tracks(id)),
+        Target::Artist(id) => open_songs(ui, tr("Artist").into(), api.artist_page(id)),
+        Target::Spotify { link, one_song: true } if has_plugin(ui, plugins::SPOTIFY) => {
+            toast(ui, tr("Finding the Spotify songs on YouTube Music..."));
+            post(ui, async move { Ev::Handed(spotify::import(api, link).await) });
+        }
+        Target::SoundCloud { link, one_song: true } if has_plugin(ui, plugins::SOUNDCLOUD) => post(ui, async move { Ev::Handed(soundcloud::open_link(link).await) }),
+        // A Spotify or SoundCloud list (or its plugin isn't there: the search says so).
+        Target::Spotify { link, .. } | Target::SoundCloud { link, .. } => search_songs(ui, link),
+    }
 }
 
 fn open_link(ui: &Shared, t: &Track) {
@@ -5783,7 +5856,25 @@ fn poll_events(ui: &Shared) {
                 if ui.borrow().page == Page::Settings {
                     render(ui);
                 }
+                let waiting = ui.borrow_mut().pending_link.take();
+                if let Some(link) = waiting {
+                    open_incoming(ui, link);
+                }
             }
+            Ev::Incoming(link) => {
+                let window = ui.borrow().w.window.clone();
+                window.present();
+                open_incoming(ui, link);
+            }
+            Ev::Handed(Ok(songs)) => {
+                let songs: Vec<Track> = songs.into_iter().filter(|t| !t.video_id.is_empty() && t.link.is_none()).collect();
+                if songs.is_empty() {
+                    toast(ui, tr("No songs in"));
+                } else {
+                    play_list(ui, &songs, 0);
+                }
+            }
+            Ev::Handed(Err(e)) => toast(ui, &e.to_string()),
             Ev::Auth(mode, Err(e)) => match mode {
                 AuthMode::Saved => {
                     toast(ui, tr("Your saved sign-in ended: continuing as a guest"));

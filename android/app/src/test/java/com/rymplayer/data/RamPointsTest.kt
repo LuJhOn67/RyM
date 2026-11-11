@@ -124,4 +124,21 @@ class RamPointsTest {
         val back = RamPoints.Notes.decode(notes.encode())
         assertEquals(RamPoints.Kind.Husseini, back.artistKind("رادود"))
     }
+
+    @Test
+    fun pointsFollowHowMuchWasHeard() {
+        assertEquals(-15f, RamPoints.heardPoints(10f, 240f))
+        val early = RamPoints.heardPoints(36f, 240f)
+        assertTrue("left at 15%: a little minus", early < 0f && early > -6f)
+        assertEquals(0f, RamPoints.heardPoints(72f, 240f), 1e-4f)
+        assertEquals(3f, RamPoints.heardPoints(132f, 240f), 1e-3f)
+        assertEquals(6f, RamPoints.heardPoints(200f, 240f))
+        assertEquals(0f, RamPoints.heardPoints(45f, 0f))
+        var last = -100f
+        for (s in 30..240 step 5) {
+            val now = RamPoints.heardPoints(s.toFloat(), 240f)
+            assertTrue("at $s s", now >= last)
+            last = now
+        }
+    }
 }

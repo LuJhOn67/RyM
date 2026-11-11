@@ -18,15 +18,35 @@ object YouTubeLinks {
 
     private val hosts = setOf("music.youtube.com", "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be")
     private val videoId = Regex("^[A-Za-z0-9_-]{11}$")
-    private val url = Regex("""https?://\S+""")
+    private val url = Regex("""(?:https?://|rym://|spotify:)\S+""", RegexOption.IGNORE_CASE)
 
     /** The first link in shared text (apps share "Song name – https://…"). */
     fun firstLink(text: String): String? = url.find(text)?.value?.trimEnd('.', ',', ')', '"', '\'')
 
     fun isLink(text: String) = firstLink(text)?.let(::parse) != null
 
+    /** rym://play?url=<a link>: that link (not another rym:// one); null for anything else. */
+    fun unwrapRym(link: String): String? {
+        val uri = runCatching { URI(link.trim()) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() != "rym") return null
+        return query(uri)["url"]?.trim()?.takeIf { it.isNotEmpty() && !it.lowercase().startsWith("rym:") }
+    }
+
+    private fun query(uri: URI): Map<String, String> = uri.rawQuery.orEmpty().split('&').mapNotNull {
+        val (k, v) = it.split('=', limit = 2).takeIf { p -> p.size == 2 } ?: return@mapNotNull null
+        k to URLDecoder.decode(v, "UTF-8")
+    }.toMap()
+
     fun parse(link: String): Target? {
         val uri = runCatching { URI(link.trim()) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() == "rym") {
+            // rym://play?url=… (one level), rym://play?v=…, rym://play?list=…, rym://play/<id>.
+            unwrapRym(link)?.let { return parse(it) }
+            val q = query(uri)
+            q["v"]?.takeIf { videoId.matches(it) }?.let { return Target.Song(it) }
+            q["list"]?.takeIf { it.isNotEmpty() }?.let { return listTarget(it) }
+            return uri.rawPath.orEmpty().split('/').firstOrNull { it.isNotEmpty() }?.takeIf { videoId.matches(it) }?.let { Target.Song(it) }
+        }
         val host = uri.host?.lowercase() ?: return null
         if (host !in hosts) return null
         val segments = uri.rawPath.orEmpty().split('/').filter { it.isNotEmpty() }

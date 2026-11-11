@@ -39,8 +39,15 @@
                 <data android:host="m.youtube.com" />
                 <data android:host="youtu.be" />
             </intent-filter>
-            <!-- Shared to RyM from other apps (a link, or words to search for). -->
+            <!-- rym://play?url=<a link>, rym://play?v=<video id>, rym://play?list=<list id>. -->
             <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="rym" android:host="play" />
+            </intent-filter>
+            <!-- "Play in RyM" in the share menu of other apps (a link, or words to search for). -->
+            <intent-filter android:label="@string/play_in_rym">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />

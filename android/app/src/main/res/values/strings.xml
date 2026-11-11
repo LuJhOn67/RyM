@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The share menu's entry for RyM. -->
+    <string name="play_in_rym">Play in RyM</string>
+</resources>

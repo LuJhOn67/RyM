@@ -15,10 +15,11 @@ cat > rym-slint.desktop <<'EOF'
 Type=Application
 Name=RyM Slint
 Comment=YouTube Music player
-Exec=RyM-Slint
+Exec=RyM-Slint %u
 Icon=rym-slint
 Categories=AudioVideo;Audio;Player;
 Terminal=false
+MimeType=x-scheme-handler/rym;
 EOF
 cp ~/RyM/assets/icons/rym-slint.png rym-slint.png
 export APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1

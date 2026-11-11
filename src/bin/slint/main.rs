@@ -60,6 +60,10 @@ enum Ev {
     Radio(anyhow::Result<Vec<Track>>),
     /// An album, playlist or mix's songs, to play (0), play next (1) or add to the queue (2).
     LinkSongs(u8, String, anyhow::Result<Vec<Track>>),
+    /// "Play in RyM": a link handed over by another copy (see `open_incoming`).
+    Incoming(String),
+    /// The songs of a link from outside, to play now (picked by hand).
+    Handed(anyhow::Result<Vec<Track>>),
     Similar(String, anyhow::Result<Vec<Track>>),
     SameArtist(String, anyhow::Result<Vec<Track>>),
     ArtistFound(String, anyhow::Result<Option<String>>),
@@ -267,6 +271,8 @@ struct State {
     results_filter: i32,
     /// A phone took the music: until then, its songs aren't taken back here (no ping-pong).
     link_quiet_until: Option<Instant>,
+    /// A link from outside that came before the sign-in was ready: opened once it is.
+    pending_link: Option<String>,
     /// Seamless Music, asked first: the phone waiting for an answer (address, port, key, name).
     peer_pending: Option<(std::net::IpAddr, u16, String, String)>,
     /// What the text box question is for ("save-queue", "link").
@@ -358,6 +364,14 @@ fn main() {
         render_sample(&out, dark, page, theme);
         return;
     }
+    // "Play in RyM": a link on the command line (a rym:// link from the browser too) goes to the
+    // RyM already open, which plays it; this copy then quits.
+    let incoming = args.iter().skip(1).find(|a| rymplayer::links::is_incoming(a)).cloned();
+    if let Some(link) = &incoming
+        && rymplayer::link::hand_over(link)
+    {
+        return;
+    }
     rymplayer::updates::clean_old();
     // Linux: the Japanese and dot-digit fonts that come with RyM (beside it or in its AppImage).
     rymplayer::fonts::add_bundled();
@@ -399,6 +413,11 @@ fn main() {
     let files: Vec<Track> = args.iter().skip(1).map(std::path::PathBuf::from).filter(|p| p.is_file()).map(|p| rymplayer::local::track(&p)).collect();
     if !files.is_empty() {
         play_list(&st, files, 0);
+    }
+    rymplayer::link::take_handed_links(|link| send(Ev::Incoming(link)));
+    std::thread::spawn(rymplayer::link::register_rym_links);
+    if let Some(link) = incoming {
+        open_incoming(&st, link);
     }
     let ticker = slint::Timer::default();
     {
@@ -584,6 +603,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         results_shown: Vec::new(),
         results_filter: 0,
         link_quiet_until: None,
+        pending_link: None,
         peer_pending: None,
         prompt_for: String::new(),
         vlc: None,
@@ -2616,6 +2636,49 @@ fn open_link(st: &Shared, t: &Track) {
     }
 }
 
+/// "Play in RyM": a link from outside (the command line, a `rym://` link, another copy of RyM).
+/// A song plays now, as one picked by hand (RaM points: a song below zero comes back to zero),
+/// with its radio after it; a playlist, an album, a mix or an artist opens.
+fn open_incoming(st: &Shared, link: String) {
+    use rymplayer::links::Target;
+    use rymplayer::{plugins, soundcloud, spotify};
+    let Some(target) = rymplayer::links::parse(&link) else {
+        toast(st, tr("Not a YouTube Music link"));
+        return;
+    };
+    let Some(api) = st.borrow().api.clone() else {
+        st.borrow_mut().pending_link = Some(link);
+        return;
+    };
+    let has = |p: &str| st.borrow().config.plugins.contains_key(p);
+    match target {
+        Target::Song(id) => {
+            toast(st, &format!("{}…", tr("Loading")));
+            post(async move {
+                let mut radio = api.radio(id.clone()).await.unwrap_or_default();
+                let song = match radio.iter().position(|t| t.video_id == id) {
+                    Some(i) => radio.remove(i),
+                    None => Track { video_id: id.clone(), title: tr("Song").into(), artist: String::new(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None },
+                };
+                radio.retain(|t| t.video_id != id);
+                radio.insert(0, song);
+                Ev::Handed(Ok(radio))
+            });
+        }
+        Target::Playlist(id) => open_paged(st, tr("Playlist").into(), api.playlist_paged(id)),
+        Target::Album(id) => open_list(st, tr("Album").into(), api.album_tracks(id)),
+        Target::Mix(id) => open_list(st, tr("Mix").into(), api.mix_tracks(id)),
+        Target::Artist(id) => open_list(st, tr("Artist").into(), api.artist_page(id)),
+        Target::Spotify { link, one_song: true } if has(plugins::SPOTIFY) => {
+            toast(st, tr("Finding the Spotify songs on YouTube Music..."));
+            post(async move { Ev::Handed(spotify::import(api, link).await) });
+        }
+        Target::SoundCloud { link, one_song: true } if has(plugins::SOUNDCLOUD) => post(async move { Ev::Handed(soundcloud::open_link(link).await) }),
+        // A Spotify or SoundCloud list (or its plugin isn't there: the search says so).
+        Target::Spotify { link, .. } | Target::SoundCloud { link, .. } => search(st, link),
+    }
+}
+
 fn go_artist(st: &Shared, t: &Track) {
     let Some(api) = st.borrow().api.clone() else { return };
     let name = t.artist.split([',', '&']).next().unwrap_or_default().trim().to_string();
@@ -4200,6 +4263,10 @@ fn handle(st: &Shared, ev: Ev) {
                 toast(st, tr("Signed in"));
             }
             refresh_home(st);
+            let waiting = st.borrow_mut().pending_link.take();
+            if let Some(link) = waiting {
+                open_incoming(st, link);
+            }
             let now = st.borrow().q.now().cloned();
             if let Some(t) = now {
                 similar_and_artist(st, &t);
@@ -4506,6 +4573,22 @@ fn handle(st: &Shared, ev: Ev) {
                 rymplayer::lyrics::remember(&vid, &l);
                 show_lyrics(st, Some(l));
             }
+        }
+        Ev::Incoming(link) => {
+            show_window(st);
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                use slint::winit_030::WinitWindowAccessor;
+                ui.window().with_winit_window(|w| w.focus_window());
+            }
+            open_incoming(st, link);
+        }
+        Ev::Handed(result) => {
+            {
+                let mut s = st.borrow_mut();
+                s.user_pick = true;
+                s.link_quiet_until = None;
+            }
+            handle(st, Ev::LinkSongs(0, "RyM".into(), result));
         }
         Ev::LinkSongs(what, title, result) => match result {
             Ok(songs) => {

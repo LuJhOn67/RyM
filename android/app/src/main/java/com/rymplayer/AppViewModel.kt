@@ -658,7 +658,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** A YouTube Music (or YouTube) link opened in RyM: the song plays, a list opens. */
+    /**
+     * "Play in RyM" (a link opened in RyM, rym://, or shared to it): a song plays now, picked by
+     * hand (RaM points: a song below zero comes back to zero, see Player.start); a list opens.
+     */
     fun openLink(link: String) {
+        com.rymplayer.data.YouTubeLinks.unwrapRym(link)?.let { return openShared(it) }
         val target = com.rymplayer.data.YouTubeLinks.parse(link)
         if (target == null) {
             status = tr("Not a YouTube Music link")
@@ -676,14 +681,53 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Shared to RyM: a YouTube Music link opens; anything else (a Spotify link, words) is searched. */
+    /**
+     * Shared to RyM ("Play in RyM"): a YouTube Music link opens (a song plays); a Spotify or
+     * SoundCloud song plays once it's found; anything else (a list there, words) is searched.
+     */
     fun openShared(text: String) {
         val link = com.rymplayer.data.YouTubeLinks.firstLink(text)
-        if (link != null && com.rymplayer.data.YouTubeLinks.parse(link) != null) return openLink(link)
-        query = text.trim()
+        if (link != null) {
+            com.rymplayer.data.YouTubeLinks.unwrapRym(link)?.let { return openShared(it) }
+            if (com.rymplayer.data.YouTubeLinks.parse(link) != null) return openLink(link)
+            if (playSharedSong(link)) return
+        }
+        query = (link?.takeIf { com.rymplayer.data.Spotify.isLink(it) || com.rymplayer.data.SoundCloud.isLink(it) } ?: text).trim()
         playerOpen = false
         selectTab(Screen.Search)
         search()
+    }
+
+    /** A list that plays as soon as it's loaded (a Spotify or SoundCloud song shared to RyM). */
+    private var playWhenLoaded: Screen.Songs? = null
+
+    /** A Spotify or SoundCloud song (with its plugin): found, then played. False for anything else. */
+    private fun playSharedSong(link: String): Boolean {
+        val plugins = com.rymplayer.data.Plugins
+        val spotify = com.rymplayer.data.Spotify.parseLink(link)?.first == "track" && hasPlugin(plugins.SPOTIFY)
+        val soundCloud = com.rymplayer.data.SoundCloud.isSong(link) && hasPlugin(plugins.SOUNDCLOUD)
+        if (!spotify && !soundCloud) return false
+        settingsOpen = false
+        storeOpen = false
+        recapOpen = false
+        if (spotify) status = tr("Finding the Spotify songs on YouTube Music...")
+        val page = if (spotify) Screen.Songs(Screen.Kind.Spotify, link, "Spotify") else Screen.Songs(Screen.Kind.SoundCloudLink, link, "SoundCloud")
+        val ready = pages[page]
+        if (ready != null) {
+            open(page)
+            playLoaded(ready)
+        } else {
+            playWhenLoaded = page
+            open(page)
+        }
+        return true
+    }
+
+    private fun playLoaded(list: List<Track>) {
+        val i = list.indexOfFirst { it.link == null }
+        if (i < 0) return
+        playFrom(list, i)
+        playerOpen = true
     }
 
     /** A song by its id (from a link): its details and songs like it come from its radio. */
@@ -1036,6 +1080,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 status = it.message ?: it.javaClass.simpleName
             }
             pages[page] = r.getOrDefault(emptyList())
+            if (playWhenLoaded == page) {
+                playWhenLoaded = null
+                playLoaded(pages[page].orEmpty())
+            }
             com.rymplayer.playback.Streams.prefetchLinks(pages[page].orEmpty().filter { it.link == null }.take(8).map { it.videoId })
         }
     }
