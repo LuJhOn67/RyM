@@ -241,7 +241,7 @@ fun FullPlayer(vm: AppViewModel, coverTint: Color) {
                                 .shadow(if (colors?.glow == true) 36.dp else 24.dp, shape, ambientColor = if (colors?.glow == true) accent else Color.Black, spotColor = if (colors?.glow == true) accent else Color.Black)
                                 .then(if (colors?.coverBorder == true) Modifier.border(2.dp, tint, shape) else Modifier)
                                 .clickable { panel = Panel.Lyrics },
-                        ) { Cover(t.thumb, side, 720, 16.dp * (colors?.round ?: 1f), muted = colors?.muted == true) }
+                        ) { Cover(t.thumb, side, 1080, 16.dp * (colors?.round ?: 1f), muted = colors?.muted == true) }
                     }
                 }
                 Panel.Lyrics -> LyricsView(vm, tint)

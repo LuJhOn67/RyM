@@ -159,12 +159,23 @@ private fun ResetDatePicker(current: String, onDismiss: () -> Unit, onPick: (Str
 }
 
 @Composable
-private fun TapRow(icon: ImageVector, title: String, about: String, value: String = "", onClick: () -> Unit) {
+private fun TapRow(icon: ImageVector, title: String, about: String, value: String = "", onPrev: (() -> Unit)? = null, onClick: () -> Unit) {
     ListItem(
         headlineContent = { Text(title, fontWeight = FontWeight.SemiBold) },
         supportingContent = if (about.isNotEmpty()) ({ Text(about, fontSize = 13.sp) }) else null,
         leadingContent = { Icon(icon, null) },
-        trailingContent = if (value.isNotEmpty()) ({ Text(value, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }) else null,
+        trailingContent = when {
+            value.isEmpty() -> null
+            // A setting with steps: ‹ value › like the PC (tapping the row still moves forward).
+            onPrev != null -> ({
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onPrev, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(36.dp)) { Text("‹", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                    Text(value, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    TextButton(onClick, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(36.dp)) { Text("›", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                }
+            })
+            else -> ({ Text(value, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) })
+        },
         colors = itemColors,
         modifier = Modifier.clickable(onClick = onClick),
     )
@@ -214,7 +225,7 @@ fun SettingsPage(vm: AppViewModel) {
                 SwitchRow(Icons.Default.Devices, "Seamless Music", tr("Music moves between this phone and RyM on your PC (same Wi-Fi and Google account): to the PC when it's idle, and here when this phone is idle"), vm.crossEars) { vm.toggleCrossEars() }
             }
             Section(tr("Suggestions (RaM points)")) {
-                TapRow(Icons.Default.Tune, tr("Only this kind"), tr("For you shows only this kind (a Muharram, say) · tap to change"), vm.onlyKind?.let { tr(it.title) } ?: tr("Every kind heard")) { vm.cycleOnlyKind() }
+                TapRow(Icons.Default.Tune, tr("Only this kind"), tr("For you shows only this kind (a Muharram, say) · tap to change"), vm.onlyKind?.let { tr(it.title) } ?: tr("Every kind heard"), onPrev = { vm.cycleOnlyKind(-1) }) { vm.cycleOnlyKind() }
                 androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshRamSummary() }
                 val sum = vm.ramSummary
                 val about = if (sum.tracked == 0) tr("Nothing learned yet") else
@@ -249,7 +260,7 @@ fun SettingsPage(vm: AppViewModel) {
                 }
             }
             Section(tr("Network & Parsers")) {
-                TapRow(Icons.Default.Search, tr("Song finder"), tr("Search, radio and mixes; the built-in one is the rollback if a YouTube change breaks ytmusicapi") + " · " + tr("tap to change"), tr(vm.musicEngine.label)) { vm.cycleEngine() }
+                TapRow(Icons.Default.Search, tr("Song finder"), tr("Search, radio and mixes; the built-in one is the rollback if a YouTube change breaks ytmusicapi") + " · " + tr("tap to change"), tr(vm.musicEngine.label), onPrev = { vm.cycleEngine(-1) }) { vm.cycleEngine() }
                 Divider()
                 val why = com.rymplayer.data.YtMusicApi.lastFailure
                 TapRow(Icons.Default.Sync, tr("Update parsers"), vm.parsersStatus.ifEmpty { why?.let { "${tr("Last fallback")}: $it" } ?: tr("yt-dlp and ytmusicapi to their newest, saved answers cleared") }, tr("Update")) { vm.updateParsers() }
@@ -261,18 +272,18 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section(tr("Theme")) {
                 TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }
-                TapRow(Icons.Default.Palette, tr("Colors"), tr("12 looks, the same as on the PC · tap to change"), vm.palette.ifEmpty { tr("The layout's own") }) { vm.cyclePalette() }
+                TapRow(Icons.Default.Palette, tr("Colors"), tr("12 looks, the same as on the PC · tap to change"), vm.palette.ifEmpty { tr("The layout's own") }, onPrev = { vm.cyclePalette(-1) }) { vm.cyclePalette() }
                 SwitchRow(Icons.Default.AutoAwesome, tr("Liquid Aurora"), tr("The cover's colors move behind the player with the bass"), vm.aurora) { vm.toggleAurora() }
                 SwitchRow(Icons.Default.GraphicEq, tr("Vinyl record"), tr("The cover turns like a record: faster with Nightcore, slower with Slowed"), vm.vinyl) { vm.toggleVinyl() }
                 TapRow(Icons.Default.Download, tr("Import colors"), tr("Copy a theme's JSON (from the PC's export), then tap here"), tr("Import")) { vm.importTheme() }
                 TapRow(Icons.Default.SwapHoriz, tr("Export colors"), tr("Copies these colors as JSON"), tr("Export")) { vm.exportTheme() }
-                TapRow(Icons.Default.Tune, tr("Animation frame rate"), tr("Animations stop on battery saver or under 20% · tap to change"), if (vm.fpsCap == 0) tr("As fast as the screen") else "${vm.fpsCap} FPS") { vm.cycleFps() }
+                TapRow(Icons.Default.Tune, tr("Animation frame rate"), tr("Animations stop on battery saver or under 20% · tap to change"), if (vm.fpsCap == 0) tr("As fast as the screen") else "${vm.fpsCap} FPS", onPrev = { vm.cycleFps(-1) }) { vm.cycleFps() }
                 SwitchRow(Icons.Default.Tune, tr("Performance monitor"), tr("Frames a second, frame time and memory in a corner"), vm.perfBadge) { vm.togglePerfBadge() }
                 SwitchRow(Icons.Default.GraphicEq, tr("Prefer lossless (FLAC)"), tr("Looks for the song as FLAC on the Internet Archive first (free and legal); YouTube when it isn't there"), vm.preferLossless) { vm.togglePreferLossless() }
             }
             Section(tr("Sound")) {
                 val snd = vm.sound
-                TapRow(Icons.Default.SwapHoriz, tr("Crossfade"), tr("The end of a song fades out as the next fades in · tap to change"), if (snd.crossfade == 0) tr("Off") else "${snd.crossfade} s") {
+                TapRow(Icons.Default.SwapHoriz, tr("Crossfade"), tr("The end of a song fades out as the next fades in · tap to change"), if (snd.crossfade == 0) tr("Off") else "${snd.crossfade} s", onPrev = { vm.changeSound(snd.copy(crossfade = Math.floorMod(snd.crossfade - 1, 11))) }) {
                     vm.changeSound(snd.copy(crossfade = (snd.crossfade + 1) % 11))
                 }
                 Divider()
@@ -282,7 +293,7 @@ fun SettingsPage(vm: AppViewModel) {
                 Divider()
                 SwitchRow(Icons.Default.GraphicEq, tr("Even loudness"), tr("Every song at about the same loudness, without sudden loud parts"), snd.normalize) { vm.changeSound(snd.copy(normalize = !snd.normalize)) }
                 Divider()
-                TapRow(Icons.Default.Equalizer, tr("Equalizer"), tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own (move a band)"), tr(com.rymplayer.playback.Sound.PRESETS[snd.eqPreset].first)) {
+                TapRow(Icons.Default.Equalizer, tr("Equalizer"), tr("Flat, Bass Boost, Vocal, Rock, Pop, or your own (move a band)"), tr(com.rymplayer.playback.Sound.PRESETS[snd.eqPreset].first), onPrev = { vm.changeSound(snd.copy(eqPreset = Math.floorMod(snd.eqPreset - 1, com.rymplayer.playback.Sound.PRESETS.size))) }) {
                     vm.changeSound(snd.copy(eqPreset = (snd.eqPreset + 1) % com.rymplayer.playback.Sound.PRESETS.size))
                 }
                 Column(Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {

@@ -29,7 +29,8 @@ const MINI_TITLE: &str = "RyM mini player";
 /// Covers asked for at these sizes (pixels): rows, cards, and the big one.
 const ROW_PX: u32 = 120;
 const CARD_PX: u32 = 200;
-const ART_PX: u32 = 600;
+/// The playing song's big cover (drawn at 506 px; twice that stays sharp on 150-200% screens).
+const ART_PX: u32 = 1200;
 /// Covers kept in memory, at most (the oldest go first).
 const COVERS_KEPT: usize = 400;
 /// Up next rows on the window, at most.

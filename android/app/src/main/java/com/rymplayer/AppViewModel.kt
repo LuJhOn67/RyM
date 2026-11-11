@@ -226,9 +226,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         player.message = tr("Negative points are back to 0")
     }
 
-    fun cycleOnlyKind() {
+    fun cycleOnlyKind(step: Int = 1) {
         val all = listOf<com.rymplayer.data.RamPoints.Kind?>(null) + com.rymplayer.data.RamPoints.Kind.entries
-        onlyKind = all[(all.indexOf(onlyKind) + 1) % all.size]
+        onlyKind = all[Math.floorMod(all.indexOf(onlyKind) + step, all.size)]
         com.rymplayer.data.RamPoints.setOnlyKind(getApplication(), onlyKind)
     }
 
@@ -268,9 +268,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var parsersStatus by mutableStateOf("")
 
-    fun cycleEngine() {
+    fun cycleEngine(step: Int = 1) {
         val all = com.rymplayer.data.YtMusicApi.Engine.entries
-        musicEngine = all[(musicEngine.ordinal + 1) % all.size]
+        musicEngine = all[Math.floorMod(musicEngine.ordinal + step, all.size)]
         com.rymplayer.data.YtMusicApi.setEngine(getApplication(), musicEngine)
     }
 
@@ -319,9 +319,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putString("palette", name).apply()
     }
 
-    fun cyclePalette() {
+    fun cyclePalette(step: Int = 1) {
         val names = listOf("") + com.rymplayer.data.Themes.presets.map { it.name } + (if (customTheme != null) listOf("Custom") else emptyList())
-        choosePalette(names[(names.indexOf(palette).coerceAtLeast(0) + 1) % names.size])
+        choosePalette(names[Math.floorMod(names.indexOf(palette).coerceAtLeast(0) + step, names.size)])
     }
 
     /** "Prefer lossless (FLAC)": the Internet Archive's FLAC first, YouTube when it isn't there. */
@@ -350,9 +350,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var perfBadge by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("perf_badge", false))
         private set
 
-    fun cycleFps() {
+    fun cycleFps(step: Int = 1) {
         val steps = listOf(24, 30, 60, 120, 144, 240, 0)
-        fpsCap = steps[(steps.indexOf(fpsCap).coerceAtLeast(0) + 1) % steps.size]
+        fpsCap = steps[Math.floorMod(steps.indexOf(fpsCap).coerceAtLeast(0) + step, steps.size)]
         com.rymplayer.ui.animFps = fpsCap
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putInt("fps_cap", fpsCap).apply()
     }
