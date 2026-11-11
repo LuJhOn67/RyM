@@ -301,8 +301,79 @@ fn ask_blocking(req: Value, cookie: Option<String>) -> Result<Value> {
     answer
 }
 
+/// A request waiting for the bridge: searches (priority 0) go before radios and mixes (1).
+struct Job {
+    priority: u8,
+    seq: u64,
+    req: Value,
+    cookie: Option<String>,
+    done: tokio::sync::oneshot::Sender<Result<Value>>,
+}
+
+impl PartialEq for Job {
+    fn eq(&self, other: &Self) -> bool {
+        (self.priority, self.seq) == (other.priority, other.seq)
+    }
+}
+
+impl Eq for Job {}
+
+impl PartialOrd for Job {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Job {
+    /// The heap pops the greatest: the lowest priority number, then the oldest.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (other.priority, other.seq).cmp(&(self.priority, self.seq))
+    }
+}
+
+struct Jobs {
+    heap: Mutex<std::collections::BinaryHeap<Job>>,
+    ready: std::sync::Condvar,
+}
+
+/// One thread answers the jobs in order of priority (a search typed now doesn't wait behind
+/// the home page's radios).
+fn jobs() -> &'static Jobs {
+    static J: OnceLock<&'static Jobs> = OnceLock::new();
+    J.get_or_init(|| {
+        let jobs: &'static Jobs = Box::leak(Box::new(Jobs { heap: Mutex::new(std::collections::BinaryHeap::new()), ready: std::sync::Condvar::new() }));
+        std::thread::Builder::new()
+            .name("ytmusicapi".into())
+            .spawn(move || {
+                loop {
+                    let job = {
+                        let Ok(mut heap) = jobs.heap.lock() else { return };
+                        loop {
+                            if let Some(job) = heap.pop() {
+                                break job;
+                            }
+                            heap = match jobs.ready.wait(heap) {
+                                Ok(h) => h,
+                                Err(_) => return,
+                            };
+                        }
+                    };
+                    let _ = job.done.send(ask_blocking(job.req, job.cookie));
+                }
+            })
+            .expect("ytmusicapi thread");
+        jobs
+    })
+}
+
 async fn ask(req: Value, cookie: Option<String>) -> Result<Value> {
-    tokio::task::spawn_blocking(move || ask_blocking(req, cookie)).await?
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let priority = if req["op"] == "search" { 0 } else { 1 };
+    let (done, answer) = tokio::sync::oneshot::channel();
+    let j = jobs();
+    j.heap.lock().map_err(|_| anyhow!("ytmusicapi lock"))?.push(Job { priority, seq: SEQ.fetch_add(1, Ordering::Relaxed), req, cookie, done });
+    j.ready.notify_one();
+    answer.await.map_err(|_| anyhow!("ytmusicapi stopped"))?
 }
 
 fn to_tracks(v: Value) -> Result<Vec<Track>> {
@@ -398,6 +469,19 @@ mod tests {
         println!("radio: {} songs", radio.len());
         assert!(radio.len() > 10);
         println!("status: {}", status().await);
+    }
+
+    /// Live, signed in: the same with your account (needs a sign-in; the cookie is never printed):
+    /// `cargo test --lib ytmusicapi_signed_in -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn ytmusicapi_signed_in() {
+        let cookie = crate::secret::read_cookie().expect("signed in");
+        let found = search("Basim Karbalaei".into(), "songs", Some(cookie.clone())).await.expect("signed-in search");
+        println!("signed-in search: {} songs, first {:?}", found.len(), found[0].title);
+        let radio = radio(found[0].video_id.clone(), Some(cookie)).await.expect("signed-in radio");
+        println!("signed-in radio: {} songs", radio.len());
+        assert!(radio.len() > 10);
     }
 
     #[tokio::test]

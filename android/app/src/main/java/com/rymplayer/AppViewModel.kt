@@ -124,6 +124,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         I18n.arabic = prefs.getBoolean("arabic", false)
+        com.rymplayer.data.YtMusicApi.init(app)
+        com.rymplayer.data.YtMusicApi.arabic = I18n.arabic
         com.rymplayer.playback.Streams.warmUp()
         com.rymplayer.playback.Streams.connections = prefs.getInt("dl_connections", 8)
         com.rymplayer.playback.Streams.pieceMb = prefs.getInt("dl_piece_mb", 0)
@@ -259,6 +261,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleYtdlpNightly() {
         ytdlpNightly = !ytdlpNightly
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("ytdlp_nightly", ytdlpNightly).apply()
+    }
+
+    /** Settings > Network & Parsers: which engine finds songs (ytmusicapi, the built-in one as the rollback). */
+    var musicEngine by mutableStateOf(com.rymplayer.data.YtMusicApi.engine)
+        private set
+    var parsersStatus by mutableStateOf("")
+
+    fun cycleEngine() {
+        val all = com.rymplayer.data.YtMusicApi.Engine.entries
+        musicEngine = all[(musicEngine.ordinal + 1) % all.size]
+        com.rymplayer.data.YtMusicApi.setEngine(getApplication(), musicEngine)
+    }
+
+    /** yt-dlp and ytmusicapi to their newest, saved links and pages forgotten. */
+    fun updateParsers() {
+        parsersStatus = tr("Updating…")
+        val nightly = ytdlpNightly
+        viewModelScope.launch {
+            val text = com.rymplayer.data.YtMusicApi.updateParsers(nightly)
+            parsersStatus = "${tr("Up to date")} · $text"
+        }
     }
 
     fun updateYtDlp() {

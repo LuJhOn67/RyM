@@ -24,6 +24,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Palette
@@ -245,6 +247,12 @@ fun SettingsPage(vm: AppViewModel) {
                         dismissButton = { androidx.compose.material3.TextButton({ askReset = false }) { androidx.compose.material3.Text(tr("Cancel")) } },
                     )
                 }
+            }
+            Section(tr("Network & Parsers")) {
+                TapRow(Icons.Default.Search, tr("Song finder"), tr("Search, radio and mixes; the built-in one is the rollback if a YouTube change breaks ytmusicapi") + " · " + tr("tap to change"), tr(vm.musicEngine.label)) { vm.cycleEngine() }
+                Divider()
+                val why = com.rymplayer.data.YtMusicApi.lastFailure
+                TapRow(Icons.Default.Sync, tr("Update parsers"), vm.parsersStatus.ifEmpty { why?.let { "${tr("Last fallback")}: $it" } ?: tr("yt-dlp and ytmusicapi to their newest, saved answers cleared") }, tr("Update")) { vm.updateParsers() }
             }
             Section("yt-dlp") {
                 SwitchRow(Icons.Default.NewReleases, tr("Nightly builds"), tr("The newest yt-dlp every day (fixes come sooner)"), vm.ytdlpNightly) { vm.toggleYtdlpNightly() }

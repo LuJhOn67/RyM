@@ -139,7 +139,19 @@ class MusicApi(private val cookie: String?) {
      * (songs that are only on YouTube, not on YouTube Music), each once. Both asked at once; one
      * failing still gives the other.
      */
-    suspend fun searchPaged(q: String): Paged = kotlinx.coroutines.coroutineScope {
+    suspend fun searchPaged(q: String): Paged = YtMusicApi.hybrid("search", { it.tracks.isNotEmpty() }, {
+        kotlinx.coroutines.coroutineScope {
+            val songs = async { YtMusicApi.search(q, "songs", cookie) }
+            val videos = async { runCatching { YtMusicApi.search(q, "videos", cookie) }.getOrDefault(emptyList()) }
+            val found = songs.await().toMutableList()
+            val seen = found.map { it.videoId }.toHashSet()
+            videos.await().filter { seen.add(it.videoId) }.forEach { found += if (it.album.endsWith("views") || it.album.endsWith("view")) it.copy(album = "") else it }
+            Paged(found, null)
+        }
+    }) { builtinSearchPaged(q) }
+
+    /** The built-in engine's search results (InnerTube), with their next pages. */
+    suspend fun builtinSearchPaged(q: String): Paged = kotlinx.coroutines.coroutineScope {
         val songs = async { runCatching { post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }) } }
         val videos = async { runCatching { post("search", buildJsonObject { put("query", q); put("params", VIDEOS_FILTER) }) } }
         val songPage = songs.await()
@@ -251,6 +263,9 @@ class MusicApi(private val cookie: String?) {
     }
 
     suspend fun search(q: String): List<Track> =
+        YtMusicApi.hybrid("search", { it.isNotEmpty() }, { YtMusicApi.search(q, "songs", cookie) }) { builtinSearch(q) }
+
+    suspend fun builtinSearch(q: String): List<Track> =
         songRows(post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }))
 
     /**
@@ -326,10 +341,17 @@ class MusicApi(private val cookie: String?) {
     }
 
     /** YouTube Music's radio for a song (the song first). */
+    /** A song's radio: ytmusicapi, with the built-in engine as the fallback. */
     suspend fun radio(videoId: String): List<Track> =
+        YtMusicApi.hybrid("radio", { it.isNotEmpty() }, { YtMusicApi.radio(videoId, cookie) }) { builtinRadio(videoId) }
+
+    suspend fun builtinRadio(videoId: String): List<Track> =
         queue(post("next", buildJsonObject { put("videoId", videoId); put("playlistId", "RDAMVM$videoId"); put("isAudioOnly", true) }))
 
     suspend fun mix(playlistId: String): List<Track> =
+        YtMusicApi.hybrid("mix", { it.isNotEmpty() }, { YtMusicApi.mix(playlistId, cookie) }) { builtinMix(playlistId) }
+
+    suspend fun builtinMix(playlistId: String): List<Track> =
         queue(post("next", buildJsonObject { put("playlistId", playlistId); put("isAudioOnly", true) }))
 
     /** YouTube Music's own (unsynced) lyrics. */

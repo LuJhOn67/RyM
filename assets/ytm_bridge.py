@@ -86,7 +86,15 @@ for line in sys.stdin:
         if op == "auth":
             cookie = req.get("cookie") or ""
             if cookie:
-                yt = YTMusic(auth={"cookie": cookie, "x-goog-authuser": "0", "origin": "https://music.youtube.com"}, language=lang)
+                # "SAPISIDHASH" marks it as a browser sign-in; ytmusicapi works out the real value
+                # from the cookie's SAPISID for every request.
+                headers = {
+                    "cookie": cookie,
+                    "authorization": "SAPISIDHASH 0_0",
+                    "x-goog-authuser": "0",
+                    "origin": "https://music.youtube.com",
+                }
+                yt = YTMusic(auth=headers, language=lang)
             else:
                 yt = YTMusic(language=lang)
             data = True

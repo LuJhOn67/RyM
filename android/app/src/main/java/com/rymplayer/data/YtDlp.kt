@@ -14,6 +14,16 @@ object YtDlp {
     @Volatile private var ready = false
     @Volatile private var updatedAt = 0L
 
+    /** youtubedl-android's Python and yt-dlp unpacked (the ytmusicapi bridge runs on that Python). Blocking. */
+    fun ready(ctx: Context) {
+        if (!ready) synchronized(this) {
+            if (!ready) {
+                YoutubeDL.getInstance().init(ctx)
+                ready = true
+            }
+        }
+    }
+
     /** Updates yt-dlp now (stable or nightly builds): what happened, to show. Blocking. */
     fun update(ctx: Context, nightly: Boolean): String {
         if (!ready) synchronized(this) {

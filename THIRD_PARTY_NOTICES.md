@@ -24,6 +24,13 @@ open-source work listed here, each under its own license.
 | yt-dlp's challenge solver (github.com/yt-dlp/ejs) | Unlicense | `assets/ejs/LICENSE` |
 | meriyah (inside the solver) | ISC | `assets/ejs/LICENSE` |
 | astring (inside the solver) | MIT | `assets/ejs/LICENSE` |
+| The ytmusicapi bridge (`assets/ytm_bridge.py`) | MIT (RyM's own) | — |
+| ytmusicapi, by sigma67 (github.com/sigma67/ytmusicapi): on the PC installed with pip, on the phone inside `assets/ytmusicapi.zip` | MIT | its `ytmusicapi-*.dist-info/licenses` folder |
+| requests (phone, in `ytmusicapi.zip`) | Apache-2.0 | its `requests-*.dist-info/licenses` folder |
+| urllib3 (phone, in `ytmusicapi.zip`) | MIT | its `urllib3-*.dist-info/licenses` folder |
+| idna (phone, in `ytmusicapi.zip`) | BSD-3-Clause | its `idna-*.dist-info/licenses` folder |
+| certifi (phone, in `ytmusicapi.zip`) | MPL-2.0 | its `certifi-*.dist-info/licenses` folder |
+| charset-normalizer (phone, in `ytmusicapi.zip`) | MIT | its `charset_normalizer-*.dist-info/licenses` folder |
 
 ## Rust libraries (PC apps)
 

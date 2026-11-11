@@ -176,6 +176,11 @@ object Streams {
         }
     }
 
+    /** "Update parsers": every saved link is looked up again. */
+    fun forgetAllLinks() {
+        links.clear()
+    }
+
     /** The link stopped working: look it up again next time. */
     fun forgetLink(videoId: String) {
         links.remove(videoId)
