@@ -93,9 +93,37 @@ pub fn pick(releases: &[Value], beta: bool, current: &str) -> Option<Release> {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|a| Some((a["name"].as_str()?.to_string(), a["browser_download_url"].as_str()?.to_string())))
+                .filter_map(|a| {
+                    let url = a["browser_download_url"].as_str()?.to_string();
+                    // GitHub's own SHA-256 of the file ("sha256:..."), checked before installing.
+                    if let Some(sum) = a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:"))
+                        && let Ok(mut d) = digests().lock()
+                    {
+                        d.insert(url.clone(), sum.to_lowercase());
+                    }
+                    Some((a["name"].as_str()?.to_string(), url))
+                })
                 .collect(),
         })
+}
+
+/// Each release file's SHA-256 (download link -> hex), as GitHub gave it.
+fn digests() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    D.get_or_init(Default::default)
+}
+
+/// The download is the file GitHub has (its SHA-256 matches GitHub's); a file GitHub gave no
+/// checksum for passes (older uploads).
+fn verify(url: &str, data: &[u8]) -> Result<()> {
+    use sha2::Digest;
+    let Some(want) = digests().lock().ok().and_then(|d| d.get(url).cloned()) else { return Ok(()) };
+    let got = sha2::Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect::<String>();
+    if got == want {
+        Ok(())
+    } else {
+        Err(anyhow!("the update didn't match GitHub's checksum (SHA-256), so it wasn't installed; try again"))
+    }
 }
 
 pub(crate) fn github() -> &'static reqwest::Client {
@@ -154,6 +182,7 @@ pub async fn install(url: &str, progress: impl Fn(f32) + Send + 'static) -> Resu
             progress((data.len() as f32 / total).min(1.0));
         }
     }
+    verify(url, &data)?;
     let exe = std::env::current_exe()?;
     let dir = exe.parent().ok_or_else(|| anyhow!("no folder for the program"))?.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf> {
@@ -440,4 +469,18 @@ mod install_tests {
         let exe = files.iter().find(|(n, _)| n.ends_with("RymPlayer-GTK.exe")).unwrap();
         println!("{} files from {}; the program is {} bytes and starts with MZ: {}", files.len(), r.version, exe.1.len(), exe.1.starts_with(b"MZ"));
     }
+
+    #[test]
+    fn checks_the_download_against_github() {
+        let url = "https://github.com/x/releases/download/v1/RyM.exe";
+        let r = vec![serde_json::json!({ "tag_name": "v99.0", "prerelease": false, "draft": false, "name": "RyM 99", "body": "", "html_url": "p",
+            "assets": [{ "name": "RyM.exe", "browser_download_url": url,
+                // SHA-256 of "hello"
+                "digest": "sha256:2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824" }] })];
+        assert!(super::pick(&r, false, "1.0").is_some());
+        assert!(super::verify(url, b"hello").is_ok());
+        assert!(super::verify(url, b"tampered").is_err());
+        assert!(super::verify("https://elsewhere/file", b"anything").is_ok(), "no checksum given: it passes");
+    }
+
 }
