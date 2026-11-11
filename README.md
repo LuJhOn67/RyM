@@ -103,6 +103,19 @@ settings and plugins.
 **Between your devices**
 - **Seamless Music**: open RyM on the phone and it takes the song playing on the PC, at the same second, and the other way round (same Wi-Fi and account).
 
+**Finding songs: ytmusicapi, with a fallback**
+- Search, radio and mixes come from [ytmusicapi](https://github.com/sigma67/ytmusicapi) on the PC and the phone.
+- If it fails or a YouTube change breaks it, RyM's built-in engine (InnerTube) answers on its own, without interrupting you.
+- **Settings → Network & Parsers:**
+  - **Song finder:** Auto (ytmusicapi, the built-in one when it fails), ytmusicapi only, or the built-in one only (the rollback).
+  - **Update parsers:** brings yt-dlp and ytmusicapi to their newest and clears saved answers.
+- On the PC it runs on your Python and installs ytmusicapi by itself the first time. On the phone it comes with the app.
+
+**Your sign-in stays yours**
+- **Windows:** your Google sign-in is encrypted with DPAPI, tied to your Windows account. Copied to another PC or opened from another Windows account, it can't be read.
+- **Android:** it's encrypted with a key kept in the Android Keystore, which never leaves the phone.
+- **Linux:** the file is readable only by your user.
+
 **More**
 - Your listening stats: time this month and in all, your top songs and artists, and what kinds you listen to.
 - Share a song as a picture or copy its link. Discord status with "Play this song" and "Get RyM" buttons. Last.fm scrobbling.
@@ -129,7 +142,8 @@ Get the files from [Releases](../../releases/latest):
 
 **Optional:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install -U yt-dlp`, with Node.js) for
 the best download quality, the SoundCloud and video plugins, and as a backup when YouTube refuses a
-stream. The Google sign-in window on Windows needs WebView2 (built into Windows 11).
+stream. [Python](https://www.python.org) on the PC lets RyM use ytmusicapi; without it, the built-in
+engine finds the songs. The Google sign-in window on Windows needs WebView2 (built into Windows 11).
 
 Settings, sign-in data and the song cache live in `%LOCALAPPDATA%\RymPlayer` (Windows) and
 `~/.local/share/rymplayer` (Linux).
@@ -238,6 +252,19 @@ cd android && ./gradlew assembleRelease                                         
 **بين أجهزتك**
 - **الموسيقى المتصلة (Seamless Music)**: افتح RyM على الهاتف فيأخذ الأغنية التي تعمل على الحاسوب من الثانية نفسها، والعكس صحيح (على شبكة Wi-Fi نفسها والحساب نفسه).
 
+**البحث عن الأغاني: ytmusicapi مع بديل احتياطي**
+- يأتي البحث والراديو والمزيجات من [ytmusicapi](https://github.com/sigma67/ytmusicapi) على الحاسوب والهاتف.
+- إن فشل أو أفسده تغيير من YouTube، يجيب محرّك RyM المدمج (InnerTube) وحده دون أن يقطع استماعك.
+- **الإعدادات ← الشبكة والمحلّلات:**
+  - **محرّك البحث عن الأغاني:** تلقائي (ytmusicapi، والمدمج حين يفشل)، أو ytmusicapi فقط، أو المدمج فقط (للرجوع إلى القديم).
+  - **تحديث المحلّلات:** يحدّث yt-dlp وytmusicapi إلى أحدث نسخة ويمسح الإجابات المحفوظة.
+- على الحاسوب يعمل على Python الموجودة لديك ويثبّت ytmusicapi وحده أول مرة، وعلى الهاتف يأتي مع التطبيق.
+
+**تسجيل دخولك يبقى لك**
+- **ويندوز:** يُشفَّر تسجيل دخول Google بتقنية DPAPI ويرتبط بحساب ويندوز الخاص بك، فلا يُقرأ إن نُسخ إلى حاسوب آخر أو فُتح من حساب ويندوز آخر.
+- **أندرويد:** يُشفَّر بمفتاح يحفظه Android Keystore ولا يغادر الهاتف أبدًا.
+- **لينكس:** لا يقرأ الملف إلا مستخدمك.
+
 **وأكثر**
 - إحصاءات استماعك: الوقت هذا الشهر وإجمالًا، وأكثر الأغاني والفنانين، والأنواع التي تسمعها.
 - مشاركة الأغنية كصورة أو نسخ رابطها، وحالة Discord مع زرّي «شغّل هذه الأغنية» و«احصل على RyM»، وتسجيل الاستماع في Last.fm.
@@ -263,7 +290,8 @@ cd android && ./gradlew assembleRelease                                         
 وتعمل أزرار الوسائط عبر MPRIS.
 
 **اختياري:** أداة [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install -U yt-dlp` مع Node.js)
-لأعلى جودة تنزيل، ولإضافتَي SoundCloud والفيديو، وكبديل حين يرفض YouTube إرسال الأغنية.
+لأعلى جودة تنزيل، ولإضافتَي SoundCloud والفيديو، وكبديل حين يرفض YouTube إرسال الأغنية. ووجود
+[Python](https://www.python.org) على الحاسوب يتيح لـ RyM استخدام ytmusicapi، ودونها يبحث المحرّك المدمج عن الأغاني.
 
 </div>
 
