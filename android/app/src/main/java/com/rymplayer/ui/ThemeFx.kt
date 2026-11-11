@@ -60,6 +60,11 @@ private suspend fun frameGap() {
     if (animFps > 0) kotlinx.coroutines.delay(1000L / animFps)
 }
 
+/** The same for slow drifts (Liquid Aurora): at most 30 frames a second, which looks the same and costs half. */
+private suspend fun slowGap() {
+    kotlinx.coroutines.delay(1000L / (if (animFps in 1..30) animFps else 30))
+}
+
 /** A drawing only once its size is real (0 or NaN right after unlocking drew stray lines). */
 private fun ready(s: androidx.compose.ui.geometry.Size) = s.width.isFinite() && s.height.isFinite() && s.width > 1f && s.height > 1f
 
@@ -119,7 +124,7 @@ fun Aurora(lights: List<Color>, energy: Float, playing: Boolean, dark: Boolean, 
         var last = 0L
         while (playing && !animPaused) {
             withFrameNanos { now -> if (last > 0) t += (now - last) / 1e9f / 6f; last = now }
-            frameGap()
+            slowGap()
         }
     }
     Canvas(modifier.fillMaxSize()) {

@@ -31,8 +31,8 @@ const ROW_PX: u32 = 120;
 const CARD_PX: u32 = 200;
 /// The playing song's big cover (drawn at 506 px; twice that stays sharp on 150-200% screens).
 const ART_PX: u32 = 1200;
-/// Covers kept in memory, at most (the oldest go first).
-const COVERS_KEPT: usize = 400;
+/// Covers kept in memory, at most (the oldest go first; each up to about 160 KB).
+const COVERS_KEPT: usize = 250;
 /// Up next rows on the window, at most.
 const QUEUE_SHOWN: usize = 60;
 
@@ -1145,7 +1145,8 @@ fn show_now(st: &Shared) {
             let sized = rymplayer::api::thumb_sized(&url, ART_PX);
             let art = fetch(&sized).await.ok().and_then(|b| {
                 let big = decode_square(&b, ART_PX)?;
-                let img = image::RgbaImage::from_raw(big.0, big.1, big.2.clone())?;
+                // The backdrop is made from the big cover's pixels where they are (no copy of them).
+                let img = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(big.0, big.1, &big.2[..])?;
                 let small = image::imageops::resize(&img, 96, 96, image::imageops::FilterType::Triangle);
                 let soft = image::imageops::blur(&small, blur);
                 Some((big, (soft.width(), soft.height(), soft.into_raw())))
@@ -1826,7 +1827,7 @@ fn window_glass(ui: &AppWindow, kind: u8) {
 /// the chosen frame rate only while something animates, the song plays, the window is in front
 /// and shown, and there's no battery saver or low battery. Otherwise it stops: 0 frames.
 fn animations(st: &Shared) {
-    let (playing, wants, cap, perf) = {
+    let (playing, wants, smooth, cap, perf) = {
         let mut s = st.borrow_mut();
         if s.saving_at.is_none_or(|at| at.elapsed() > Duration::from_secs(30)) {
             s.saving_at = Some(Instant::now());
@@ -1838,13 +1839,20 @@ fn animations(st: &Shared) {
             let t = ui.global::<Theme>();
             t.get_falling() || t.get_aurora() || t.get_vinyl() || t.get_heartbeat() || t.get_vu()
         });
-        (playing, wants && !unseen(window.as_ref()), s.config.fps_cap, s.config.perf_badge)
+        // Rain and ash, the needles and the record need every frame; Liquid Aurora and the
+        // heartbeat drift slowly (a cycle takes seconds), so alone they get 30 frames a second.
+        let smooth = window.as_ref().is_some_and(|ui| {
+            let t = ui.global::<Theme>();
+            t.get_falling() || t.get_vinyl() || t.get_vu()
+        });
+        (playing, wants && !unseen(window.as_ref()), smooth, s.config.fps_cap, s.config.perf_badge)
     };
     let covered = unseen(st.borrow().ui.upgrade().as_ref());
     let saving = st.borrow().saving;
     // Not in front but still showing (another window has the focus): it keeps moving; minimized,
     // covered or in the tray: it stops.
     let run = playing && wants && !saving;
+    let cap = if smooth { cap } else if cap == 0 { 30 } else { cap.min(30) };
     let every = run.then(|| Duration::from_micros(if cap == 0 { 4_000 } else { 1_000_000 / cap as u64 }));
     if st.borrow().clock_every != every {
         let mut s = st.borrow_mut();

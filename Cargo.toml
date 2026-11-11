@@ -52,8 +52,9 @@ gtk-ui = ["dep:gtk", "dep:souvlaki"]
 slint-ui = ["dep:slint", "dep:slint-build", "dep:souvlaki", "dep:tray-icon", "dep:rfd"]
 
 [profile.release]
-# Smallest files: optimize for size, whole-program LTO, no unwinding tables, no symbols.
-opt-level = "z"
+# Fast code (the sound effects, the decoding and the drawing run hot), whole-program LTO, no
+# unwinding tables, no symbols. "z" (smallest) was about 9 MB lighter but slower.
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
