@@ -23,7 +23,7 @@ mod fx_view;
 use rymplayer::config::{Config, Source};
 use rymplayer::likes::{Likes, SYNC_EVERY};
 use rymplayer::lyrics::Lyrics;
-use rymplayer::{cookie_path, feed, fmt_time, login, page_cache, parse_duration, stream, vlc};
+use rymplayer::{feed, fmt_time, login, page_cache, parse_duration, stream, vlc};
 
 const APP_ID: &str = "com.rymplayer.Gtk";
 /// Cover sizes requested from Google (pixels; drawn at about half for sharp HiDPI).
@@ -1830,7 +1830,7 @@ fn build(app: &Application) {
     }
 
     // Start: the last home feed at once, then sign in and fetch a fresh one.
-    match std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+    match rymplayer::secret::read_cookie_io().ok().filter(|c| !c.trim().is_empty()) {
         Some(cookie) => {
             ui.borrow_mut().home = page_cache::load_home();
             post(&ui, async move { Ev::Auth(AuthMode::Saved, Api::with_cookie(cookie).await) });
@@ -5652,7 +5652,7 @@ fn show_cover(s: &Ui, t: &Track, wants: &mut Wants) {
 
 fn sign_in_or_out(ui: &Shared) {
     if signed_in(ui) {
-        let _ = std::fs::remove_file(cookie_path());
+        rymplayer::secret::forget_cookie();
         page_cache::clear();
         {
             let mut s = ui.borrow_mut();

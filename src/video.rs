@@ -63,7 +63,7 @@ pub async fn download(url: &str, video: bool) -> Result<PathBuf> {
 fn ytdlp() -> Result<tokio::process::Command> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args(["--js-runtimes", "node"]);
-    if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
+    if let Ok(cookie) = crate::secret::read_cookie_io()
         && !cookie.trim().is_empty()
     {
         let file = crate::data_dir().join("cookies-ytdlp.txt");

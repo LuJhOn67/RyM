@@ -972,7 +972,7 @@ mod home_probe {
     #[tokio::test]
     #[ignore]
     async fn home_feed() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let cookie = crate::secret::read_cookie_io().unwrap();
         let api = Api::with_cookie(cookie).await.unwrap();
         let items = api.clone().home().await.unwrap();
         let mut sections: Vec<(String, usize, usize)> = Vec::new();
@@ -1018,7 +1018,7 @@ mod raw_tests {
     #[tokio::test]
     #[ignore]
     async fn live_home_pages() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let cookie = crate::secret::read_cookie_io().unwrap();
         let home = super::Api::with_cookie(cookie).await.unwrap().home().await.unwrap();
         let mut sections: Vec<&str> = Vec::new();
         for t in &home {
@@ -1033,7 +1033,7 @@ mod raw_tests {
     #[tokio::test]
     #[ignore]
     async fn live_account() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let cookie = crate::secret::read_cookie_io().unwrap();
         let a = super::Api::with_cookie(cookie).await.unwrap().account().await.unwrap();
         println!("name: {}, handle: {}, photo: {}", !a.name.is_empty(), !a.handle.is_empty(), a.photo.is_some());
     }
@@ -1073,7 +1073,7 @@ mod live_probe {
     #[tokio::test]
     #[ignore]
     async fn liked_and_artist() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let cookie = crate::secret::read_cookie_io().unwrap();
         let api = Api::with_cookie(cookie).await.unwrap();
         let first = api.clone().playlist_tracks(LIKED_ID.into()).await.unwrap();
         let all = api.clone().playlist_all(LIKED_ID.into(), 5000).await.unwrap();
@@ -1099,7 +1099,7 @@ mod suggestion_tests {
     #[tokio::test]
     #[ignore]
     async fn live_search_suggestions() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).expect("signed in");
+        let cookie = crate::secret::read_cookie_io().expect("signed in");
         let api = Api::with_cookie(cookie).await.unwrap();
         for input in ["", "mac de"] {
             let list = api.search_suggestions(input.to_string()).await.unwrap();
@@ -1116,7 +1116,7 @@ mod search_tests {
     #[tokio::test]
     #[ignore]
     async fn live_search_videos() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap_or_default();
+        let cookie = crate::secret::read_cookie_io().unwrap_or_default();
         let api = if cookie.trim().is_empty() { super::Api::guest().await.unwrap() } else { super::Api::with_cookie(cookie).await.unwrap() };
         for q in ["Philosophie du Soi", "باسم الكربلائي محاضرة"] {
             let p = api.clone().search_paged(q.into()).await.unwrap();

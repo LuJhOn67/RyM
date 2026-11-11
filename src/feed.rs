@@ -512,7 +512,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_feed_and_more() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).unwrap();
+        let cookie = crate::secret::read_cookie_io().unwrap();
         let api = Api::with_cookie(cookie).await.unwrap();
         let r = refresh(api.clone()).await.unwrap();
         let mut sections: Vec<(String, usize)> = Vec::new();
@@ -547,7 +547,7 @@ mod history_check {
     #[tokio::test]
     #[ignore]
     async fn live_history_top() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).expect("signed in");
+        let cookie = crate::secret::read_cookie_io().expect("signed in");
         let api = crate::api::Api::with_cookie(cookie).await.unwrap();
         for t in api.history().await.unwrap().iter().take(3) {
             println!("history: {} - {} ({})", t.title, t.artist, t.album);

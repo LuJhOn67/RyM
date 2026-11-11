@@ -21,7 +21,7 @@ use rymplayer::i18n::{tr, tr_any};
 use rymplayer::likes::Likes;
 use rymplayer::lyrics::Lyrics;
 use rymplayer::queue::Queue;
-use rymplayer::{cookie_path, feed, fmt_time, login, parse_duration, stream};
+use rymplayer::{feed, fmt_time, login, parse_duration, stream};
 use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -891,7 +891,7 @@ fn toast(st: &Shared, text: &str) {
 /// Start: sign in with the saved session (or as a guest), the last home feed at once, media
 /// keys, and Seamless Music listening on the Wi-Fi.
 fn start(st: &Shared) {
-    match std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+    match rymplayer::secret::read_cookie_io().ok().filter(|c| !c.trim().is_empty()) {
         Some(cookie) => {
             let home = rymplayer::page_cache::load_home();
             if !home.is_empty() {
@@ -2302,7 +2302,7 @@ fn set_zoom(st: &Shared, z: f32) {
 
 fn sign_out(st: &Shared) {
     rymplayer::innertube::forget_account();
-    let _ = std::fs::remove_file(cookie_path());
+    rymplayer::secret::forget_cookie();
     {
         let mut s = st.borrow_mut();
         s.account = None;
@@ -4140,9 +4140,9 @@ fn handle(st: &Shared, ev: Ev) {
             if new_login {
                 toast(st, &format!("{}: {e}", tr("Sign-in failed")));
             } else if st.borrow().api.is_none() {
-                if std::fs::metadata(cookie_path()).is_ok() {
+                if rymplayer::secret::has_cookie() {
                     toast(st, tr("Your saved sign-in ended: continuing as a guest"));
-                    let _ = std::fs::remove_file(cookie_path());
+                    rymplayer::secret::forget_cookie();
                     post(async { Ev::Auth(false, Api::guest().await) });
                 } else {
                     with_app(st, |a| a.set_home_loading(false));

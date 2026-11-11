@@ -11,7 +11,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use rymplayer::i18n::tr;
 use rymplayer::likes::{Likes, SYNC_EVERY};
-use rymplayer::{api, audio, config, cookie_path, data_dir, feed, fmt_time, login, lyrics, parse_duration, stream};
+use rymplayer::{api, audio, config, data_dir, feed, fmt_time, login, lyrics, parse_duration, stream};
 
 use api::{Api, Link, Playlist, Track};
 use audio::Audio;
@@ -323,7 +323,7 @@ impl App {
             }
             Err(e) => self.status = format!("{}: {e}", tr("No audio device")),
         }
-        if let Some(cookie) = std::fs::read_to_string(cookie_path()).ok().filter(|c| !c.trim().is_empty()) {
+        if let Some(cookie) = rymplayer::secret::read_cookie_io().ok().filter(|c| !c.trim().is_empty()) {
             self.busy = true;
             self.status = tr("Signing in...").into();
             // The last home feed shows at once while signing in; the fresh one replaces it.
@@ -946,7 +946,7 @@ impl App {
                 self.busy = true;
                 self.status = tr("Signing in...").into();
                 let _ = std::fs::create_dir_all(data_dir());
-                let _ = std::fs::write(cookie_path(), &text);
+                let _ = rymplayer::secret::write_cookie(&text);
                 self.spawn(async move { Event::LoggedIn(s(Api::with_cookie(text).await)) });
             }
         }
@@ -965,7 +965,7 @@ impl App {
     }
 
     fn sign_out(&mut self) {
-        let _ = std::fs::remove_file(cookie_path());
+        rymplayer::secret::forget_cookie();
         rymplayer::page_cache::clear();
         if let Some(a) = &mut self.audio {
             a.stop();
@@ -1985,7 +1985,7 @@ mod live_tests {
     #[tokio::test]
     #[ignore]
     async fn signed_in_library() {
-        let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
+        let cookie = rymplayer::secret::read_cookie_io().expect("signed-in cookie");
         let api = Api::with_cookie(cookie).await.expect("login");
         let playlists = api.clone().library_playlists().await.expect("playlists");
         println!("playlists: {}", playlists.len());
@@ -2006,7 +2006,7 @@ mod lyrics_probe {
     #[tokio::test]
     #[ignore]
     async fn liked_lyrics_coverage() {
-        let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
+        let cookie = rymplayer::secret::read_cookie_io().expect("signed-in cookie");
         let api = Api::with_cookie(cookie).await.expect("login");
         let liked = api.clone().playlist_tracks(api::LIKED_ID.into()).await.expect("liked");
         println!("liked: {}", liked.len());
@@ -2046,7 +2046,7 @@ mod history_probe {
     #[tokio::test]
     #[ignore]
     async fn history_loads() {
-        let cookie = std::fs::read_to_string(cookie_path()).expect("signed-in cookie");
+        let cookie = rymplayer::secret::read_cookie_io().expect("signed-in cookie");
         let api = Api::with_cookie(cookie).await.expect("login");
         match api.history().await {
             Ok(h) => {

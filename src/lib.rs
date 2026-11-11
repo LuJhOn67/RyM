@@ -33,6 +33,7 @@ pub mod lastfm;
 pub mod ytdlp;
 pub mod ram_points;
 pub mod recent;
+pub mod secret;
 pub mod session;
 pub mod soundcloud;
 pub mod spotify;

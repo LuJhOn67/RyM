@@ -99,7 +99,7 @@ pub fn run() -> ! {
                     .collect::<Vec<_>>()
                     .join("; ");
                 let _ = std::fs::create_dir_all(crate::data_dir());
-                let ok = std::fs::write(crate::cookie_path(), &header).is_ok();
+                let ok = crate::secret::write_cookie(&header).is_ok();
                 *flow = ControlFlow::ExitWithCode(if ok { 0 } else { 1 });
             }
             _ => {}
@@ -152,5 +152,5 @@ pub async fn sign_in() -> anyhow::Result<String> {
     if !status.success() {
         anyhow::bail!("sign-in window was closed");
     }
-    Ok(tokio::fs::read_to_string(crate::cookie_path()).await?)
+    Ok(crate::secret::read_cookie_io()?)
 }

@@ -363,7 +363,7 @@ mod network_tests {
     #[tokio::test]
     #[ignore]
     async fn live_account_key() {
-        let cookie = std::fs::read_to_string(crate::cookie_path()).expect("signed in");
+        let cookie = crate::secret::read_cookie_io().expect("signed in");
         let a = crate::api::Api::with_cookie(cookie).await.unwrap().account().await.unwrap();
         println!("key {}", account_key(&a.name, &a.handle));
     }

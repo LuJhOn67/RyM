@@ -590,7 +590,7 @@ const YTDLP_QUICK: &str = "youtube:player_client=web_music;player_skip=webpage,c
 fn ytdlp_command(video_id: &str, quick: bool) -> Result<tokio::process::Command> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args(["--js-runtimes", "node", "-f", "774/251/141/140/bestaudio", "--no-playlist"]);
-    if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
+    if let Ok(cookie) = crate::secret::read_cookie_io()
         && !cookie.trim().is_empty()
         && crate::is_youtube(video_id)
     {
@@ -610,7 +610,7 @@ fn ytdlp_command(video_id: &str, quick: bool) -> Result<tokio::process::Command>
 /// The chosen format's link, the headers yt-dlp would send with it, its file type and length.
 /// Signed in to YouTube: the quick way can be tried.
 fn signed_in_for(video_id: &str) -> bool {
-    crate::is_youtube(video_id) && std::fs::read_to_string(crate::cookie_path()).is_ok_and(|c| !c.trim().is_empty())
+    crate::is_youtube(video_id) && crate::secret::read_cookie_io().is_ok_and(|c| !c.trim().is_empty())
 }
 
 async fn ytdlp_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
@@ -663,7 +663,7 @@ async fn ytdlp_once(video_id: &str, out: &Path, quick: bool) -> Result<(Option<f
         // Joined by yt-dlp itself (no ffmpeg needed), eight pieces at a time.
         cmd.args(["--downloader", "m3u8:native", "-N", "8"]);
     }
-    if let Ok(cookie) = std::fs::read_to_string(crate::cookie_path())
+    if let Ok(cookie) = crate::secret::read_cookie_io()
         && !cookie.trim().is_empty()
         && crate::is_youtube(video_id)
     {

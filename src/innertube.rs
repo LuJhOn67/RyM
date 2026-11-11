@@ -339,7 +339,7 @@ fn keep(video_id: &str, a: &Audio) {
 /// The signed-in account's headers for `origin`: its cookie and the SAPISIDHASH YouTube checks.
 fn account(origin: &str) -> Option<Vec<(&'static str, String)>> {
     use sha1::{Digest, Sha1};
-    let cookie = std::fs::read_to_string(crate::cookie_path()).ok()?.trim().to_string();
+    let cookie = crate::secret::read_cookie_io().ok()?.trim().to_string();
     let sapisid = cookie.split(';').map(str::trim).find_map(|kv| kv.strip_prefix("SAPISID=").or_else(|| kv.strip_prefix("__Secure-3PAPISID=")))?.to_string();
     let ts = now_secs();
     let hash: String = Sha1::digest(format!("{ts} {sapisid} {origin}").as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
