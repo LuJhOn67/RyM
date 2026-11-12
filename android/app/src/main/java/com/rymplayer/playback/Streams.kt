@@ -156,8 +156,13 @@ object Streams {
             // with Premium); signed in otherwise: it's the second try when the quick way fails.
             val signedIn = !cookie.isNullOrBlank()
             val wantBest = signedIn && appContext?.getSharedPreferences("rym", Context.MODE_PRIVATE)?.getBoolean("download_best", false) == true
-            fun premium() = runCatching { premiumLink(videoId) }
-                .onFailure { android.util.Log.w("RyM", "YouTube Music's player failed for $videoId: ${it.message}") }
+            fun premium() = if (System.currentTimeMillis() < premiumBrokenUntil) null else runCatching { premiumLink(videoId) }
+                .onFailure {
+                    android.util.Log.w("RyM", "YouTube Music's player failed for $videoId: ${it.message}")
+                    // YouTube changed its player's puzzles and they can't be solved yet: not asked
+                    // again for half an hour, so each song doesn't wait for a try that fails.
+                    if (it.message.orEmpty().contains("deobfuscation", ignoreCase = true)) premiumBrokenUntil = System.currentTimeMillis() + 30 * 60 * 1000L
+                }
                 .getOrNull()
             val best = if (!viaYtDlp && wantBest) premium() else null
             val fast = if (viaYtDlp || best != null) null else runCatching { fastLink(videoId) }
@@ -176,9 +181,13 @@ object Streams {
         }
     }
 
-    /** "Update parsers": every saved link is looked up again. */
+    /** Until when YouTube Music's own player isn't asked (its puzzles couldn't be solved). */
+    @Volatile private var premiumBrokenUntil = 0L
+
+    /** "Update parsers": every saved link is looked up again (and YouTube Music's player is tried again). */
     fun forgetAllLinks() {
         links.clear()
+        premiumBrokenUntil = 0L
     }
 
     /** The link stopped working: look it up again next time. */
@@ -349,10 +358,28 @@ object Streams {
         return best.content to ext
     }
 
+    // The apps' own user agents (NewPipe 0.27 no longer has them), the same as the PC's innertube.rs.
+    private const val IOS_UA = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)"
+    private const val ANDROID_UA = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
+
     internal fun userAgentFor(url: String): String = when (Uri.parse(url).getQueryParameter("c")?.uppercase()) {
-        "IOS" -> YoutubeParsingHelper.getIosUserAgent(null)
-        "ANDROID", "ANDROID_MUSIC", "ANDROID_VR" -> YoutubeParsingHelper.getAndroidUserAgent(null)
+        "IOS" -> IOS_UA
+        "ANDROID", "ANDROID_MUSIC", "ANDROID_VR" -> ANDROID_UA
         else -> OkDownloader.UA
+    }
+
+    /**
+     * A link that stopped working in the middle of a song (refused, or its data ran out early):
+     * the song's link is looked up again. The new one is given only when it's the same file
+     * (format and size), so the song can go on from the same byte; null otherwise. Blocking.
+     */
+    internal fun renewedLink(url: String): String? {
+        val videoId = links.entries.firstOrNull { it.value.url == url }?.key ?: return null
+        fun key(u: String) = Uri.parse(u).let { it.getQueryParameter("itag") to it.getQueryParameter("clen") }
+        links.remove(videoId)
+        val fresh = runCatching { cachedLink(videoId).url }.getOrNull() ?: return null
+        android.util.Log.w("RyM", "link renewed for $videoId mid-song (same file: ${key(fresh) == key(url)})")
+        return fresh.takeIf { key(it) == key(url) && it != url }
     }
 
     /**

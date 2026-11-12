@@ -37,10 +37,14 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
     private var total = C.LENGTH_UNSET.toLong()
     private var remaining = C.LENGTH_UNSET.toLong()
 
+    /** The link was renewed once in this open (a second refusal is a real error). */
+    private var renewed = false
+
     override fun open(dataSpec: DataSpec): Long {
         spec = dataSpec
         uri = dataSpec.uri
         url = dataSpec.uri.toString()
+        renewed = false
         agent = Streams.userAgentFor(url)
         transferInitializing(dataSpec)
         pos = dataSpec.position
@@ -100,6 +104,9 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
         android.util.Log.w("RyM", "timing: range at $pos answered in ${System.currentTimeMillis() - asked} ms (HTTP ${r.code})")
         if (r.code != 200 && r.code != 206) {
             r.close()
+            // The link stopped working mid-song (YouTube cuts some links after their first part):
+            // a fresh link for the same file, and on from the same byte.
+            if (renew()) return openRange()
             throw IOException("link refused (HTTP ${r.code})")
         }
         val length = r.body?.contentLength() ?: -1
@@ -125,10 +132,14 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
         val n = body?.read(buffer, offset, want) ?: -1
         if (n == -1) {
             if (total > 0 && pos < total) {
-                // The range ended early: ask again from here.
+                // The range ended early: ask again from here (a range that gives nothing at all
+                // twice running means the link died: a fresh one).
+                if (pos == rangeStart && !renew()) throw IOException("the link gave no data at byte $pos of $total")
                 end = pos
                 return read(buffer, offset, length)
             }
+            // Never "the song ended" before its end: the player would skip to the next song.
+            if (total <= 0 && remaining != C.LENGTH_UNSET.toLong() && remaining > 0) throw IOException("the stream stopped $remaining bytes early")
             return C.RESULT_END_OF_INPUT
         }
         pos += n
@@ -138,6 +149,17 @@ class RangedHttpDataSource private constructor(private val http: OkHttpClient) :
     }
 
     override fun getUri(): Uri? = uri
+
+    /** Swaps in a fresh link for the same file, once per open; false when there isn't one. */
+    private fun renew(): Boolean {
+        if (renewed) return false
+        renewed = true
+        dropAhead()
+        val fresh = Streams.renewedLink(url) ?: return false
+        url = fresh
+        agent = Streams.userAgentFor(fresh)
+        return true
+    }
 
     private fun closeRange() {
         val got = pos - rangeStart
