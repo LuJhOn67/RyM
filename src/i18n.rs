@@ -202,6 +202,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "this month" => "هذا الشهر",
         "in all" => "بالمجمل",
         "sleep timer" => "مؤقت النوم",
+        "repeat" => "تكرار",
         "speed and pitch" => "السرعة والطبقة",
         "your recap" => "ملخصك",
         "Seconds the end of a song and the start of the next play together (0 = off)" => "ثوانٍ تُشغَّل فيها نهاية الأغنية وبداية التالية معاً (0 = إيقاف)",

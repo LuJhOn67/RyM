@@ -543,10 +543,17 @@ pub enum Setting {
     /// Speed and pitch quick picks.
     Mode,
     Discord,
+    /// SponsorBlock skips a music video's non-music parts.
+    SponsorBlock,
+    /// English under Japanese lyrics.
+    Translate,
+    Romaji,
+    /// Music starts at the alarm's time (set in RyM Slint).
+    Alarm,
     Reset,
 }
 
-pub const SETTINGS: [Setting; 24] = [
+pub const SETTINGS: [Setting; 28] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -570,6 +577,10 @@ pub const SETTINGS: [Setting; 24] = [
     Setting::Normalize,
     Setting::Mode,
     Setting::Discord,
+    Setting::SponsorBlock,
+    Setting::Translate,
+    Setting::Romaji,
+    Setting::Alarm,
     Setting::Reset,
 ];
 
@@ -625,6 +636,10 @@ impl Config {
             Setting::Normalize => "Even loudness",
             Setting::Mode => "Speed and pitch",
             Setting::Discord => "Discord",
+            Setting::SponsorBlock => "Skip non-music parts",
+            Setting::Translate => "Translate Japanese lyrics",
+            Setting::Romaji => "Romaji",
+            Setting::Alarm => "Alarm",
             Setting::Reset => "Reset layout",
         })
     }
@@ -658,6 +673,10 @@ impl Config {
                 (true, true) => tr("On (needs an application id)").to_string(),
                 (true, false) => tr("On").to_string(),
             },
+            Setting::SponsorBlock => tr(if self.sponsorblock { "On" } else { "Off" }).to_string(),
+            Setting::Translate => tr(if self.lyrics_translation { "On" } else { "Off" }).to_string(),
+            Setting::Romaji => tr(if self.romaji { "On" } else { "Off" }).to_string(),
+            Setting::Alarm => if self.alarm_on { format!("{} ({})", tr("On"), self.alarm_time) } else { tr("Off").to_string() },
             Setting::Reset => "Enter".to_string(),
         }
     }
@@ -694,6 +713,15 @@ impl Config {
                 self.set_mode(names[i]);
             }
             Setting::Discord => self.discord = !self.discord,
+            Setting::SponsorBlock => self.sponsorblock = !self.sponsorblock,
+            Setting::Translate => self.lyrics_translation = !self.lyrics_translation,
+            Setting::Romaji => self.romaji = !self.romaji,
+            Setting::Alarm => {
+                self.alarm_on = !self.alarm_on;
+                if self.alarm_time.trim().is_empty() {
+                    self.alarm_time = "07:30".into();
+                }
+            }
             Setting::Language => {
                 self.arabic = !self.arabic;
                 crate::i18n::set_arabic(self.arabic);

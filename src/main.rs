@@ -103,6 +103,12 @@ enum NavItem {
 /// Results of background work, sent back to the UI loop.
 enum Event {
     LoggedIn(Result<Api, String>),
+    /// SponsorBlock's non-music parts of a song.
+    Segments(String, rymplayer::sponsorblock::Segments),
+    /// A song's Japanese lyrics in Latin letters, one per synced line.
+    Romaji(String, Vec<String>),
+    /// A song's lyrics in English, one per line.
+    Translated(String, Vec<String>),
     /// Radio tracks to continue with after the queue ran out.
     Radio(Result<Vec<Track>, String>),
     Playlists(Result<Vec<Playlist>, String>),
@@ -205,6 +211,18 @@ struct App {
     volume: f32,
 
     lyrics: Option<Lyrics>,
+    /// The playing song's lines in Latin letters (Japanese), shown under them when on.
+    romaji: Vec<String>,
+    /// Repeat: 0 off, 1 the whole list, 2 this song.
+    repeat: u8,
+    /// The song ended on its own (not picked): its RaM points know.
+    auto_advance: bool,
+    /// The playing song's SponsorBlock parts (its id, then the parts).
+    segments: (String, rymplayer::sponsorblock::Segments),
+    /// Last.fm: the song, when it started, seconds heard, and whether it was sent.
+    scrobble: Option<(String, u64, f32, bool)>,
+    /// When the Last.fm count last moved on.
+    scrobble_tick: Instant,
     lyrics_status: String,
     /// The lyrics pane's color (the playing song's cover).
     lyrics_bg: (u8, u8, u8),
@@ -262,6 +280,12 @@ impl App {
             search_sc: false,
             liked_tracks: Vec::new(),
             sleep: None,
+            romaji: Vec::new(),
+            repeat: 0,
+            auto_advance: false,
+            segments: (String::new(), Vec::new()),
+            scrobble: None,
+            scrobble_tick: Instant::now(),
             crossfade_next: false,
             crossfade_for: None,
             listened_at: Instant::now(),
@@ -547,6 +571,7 @@ impl App {
                                         a.seek(at);
                                     }
                                     self.status.clear();
+                                    self.lastfm_start();
                                 }
                                 Err(e) => self.status = format!("{}: {e}", tr("Can't play")),
                             }
@@ -576,12 +601,47 @@ impl App {
                     return;
                 }
                 match result {
-                    Ok(Some(l)) => {
+                    Ok(Some(mut l)) => {
+                        if !self.config.lyrics_translation {
+                            l.translation.clear();
+                        }
+                        let lines: Vec<String> = l.synced.iter().map(|(_, x)| x.clone()).collect();
+                        if self.config.romaji && lines.iter().any(|x| rymplayer::romaji::has_kana(x)) {
+                            // Kana at once; kanji too once the reading comes back.
+                            self.romaji = lines.iter().map(|x| if rymplayer::romaji::has_kana(x) { rymplayer::romaji::kana(x) } else { String::new() }).collect();
+                            let v = vid.clone();
+                            self.spawn(async move { Event::Romaji(v, rymplayer::romaji::romanize(&lines).await) });
+                        }
+                        if self.config.lyrics_translation
+                            && l.translation.is_empty()
+                            && lyrics::is_japanese(&l)
+                            && let Some(t) = self.now_playing().cloned()
+                        {
+                            let (v, l2) = (vid.clone(), l.clone());
+                            self.spawn(async move { Event::Translated(v, lyrics::translate(&t, &l2).await) });
+                        }
                         self.lyrics = Some(l);
                         self.lyrics_status.clear();
                     }
                     Ok(None) => self.lyrics_status = tr("No lyrics found").into(),
                     Err(e) => self.lyrics_status = format!("{}: {e}", tr("Lyrics")),
+                }
+            }
+            Event::Segments(vid, parts) => {
+                if self.segments.0 == vid {
+                    self.segments.1 = parts;
+                }
+            }
+            Event::Romaji(vid, lines) => {
+                if self.now_playing().is_some_and(|t| t.video_id == vid) && lines.iter().any(|x| !x.is_empty()) {
+                    self.romaji = lines;
+                }
+            }
+            Event::Translated(vid, lines) => {
+                if self.now_playing().is_some_and(|t| t.video_id == vid)
+                    && let Some(l) = &mut self.lyrics
+                {
+                    l.translation = lines;
                 }
             }
             Event::Rated(vid, like, Err(e)) => {
@@ -788,6 +848,7 @@ impl App {
             KeyCode::Char('a') => self.open_picker(),
             KeyCode::Char('o') => self.open_song_menu(),
             KeyCode::Char('z') => self.next_sleep(),
+            KeyCode::Char('e') => self.cycle_repeat(),
             KeyCode::Char('R') => self.show_recap(),
             KeyCode::Char('[') => self.step_mode(-1),
             KeyCode::Char(']') => self.step_mode(1),
@@ -1486,7 +1547,19 @@ impl App {
 
     fn play(&mut self, i: usize) {
         let Some(track) = self.q.songs.get(i).cloned() else { return };
+        // RaM points: the song that was playing gets its listening time, then this one its play
+        // (picked by hand, unless the last one ended on its own).
+        let left = self.now_playing().cloned().map(|t| (t, self.pos, self.duration()));
+        let manual = !std::mem::take(&mut self.auto_advance);
+        rymplayer::ram_points::moved_on(left, track.clone(), manual);
         self.q.went_to(i);
+        self.romaji.clear();
+        self.scrobble = None;
+        self.segments = (track.video_id.clone(), Vec::new());
+        if self.config.sponsorblock && rymplayer::is_youtube(&track.video_id) {
+            let v = track.video_id.clone();
+            self.spawn(async move { Event::Segments(v.clone(), rymplayer::sponsorblock::segments(&v).await) });
+        }
         self.played.insert(track.video_id.clone());
         rymplayer::recent::played(&track);
         self.songs_since_cleanup += 1;
@@ -1556,8 +1629,43 @@ impl App {
         let Some(i) = self.q.current else { return };
         if i + 1 < self.q.songs.len() {
             self.play(i + 1);
+        } else if self.repeat == 1 && !self.q.songs.is_empty() {
+            // Repeat all: the list starts over.
+            self.play(0);
         } else {
             self.continue_with_radio();
+        }
+    }
+
+    /// `e`: repeat off, the whole list, this song.
+    fn cycle_repeat(&mut self) {
+        self.repeat = (self.repeat + 1) % 3;
+        self.status = tr(["Repeat off", "Repeat all", "Repeat this song"][self.repeat as usize]).into();
+    }
+
+    /// The alarm rings: what was playing goes on, else the liked songs (shuffled).
+    fn ring_alarm(&mut self) {
+        self.status = tr("Alarm").into();
+        match &self.audio {
+            Some(a) if a.is_playing() => {}
+            Some(a) if a.is_loaded() => a.toggle(),
+            _ if self.q.current.is_some() => {
+                if let Some(i) = self.q.current {
+                    self.play(i);
+                }
+            }
+            _ => {
+                let mut songs = self.liked_tracks.clone();
+                let n = songs.len();
+                for i in (1..n).rev() {
+                    let j = (rymplayer::updates::now() as usize).wrapping_mul(2_654_435_761).wrapping_add(i * 40503) % (i + 1);
+                    songs.swap(i, j);
+                }
+                if !songs.is_empty() {
+                    let at = self.q.start(songs, 0);
+                    self.play(at);
+                }
+            }
         }
     }
 
@@ -1809,8 +1917,36 @@ impl App {
         if self.loading || !a.finished() {
             return;
         }
+        if self.repeat == 2 {
+            // Repeat this song: from the start again.
+            a.seek(0.0);
+            if let Some(i) = self.q.current {
+                self.auto_advance = true;
+                self.play(i);
+            }
+            return;
+        }
         a.stop();
+        self.auto_advance = true;
         self.next();
+    }
+
+    /// Last.fm (signed in from RyM Slint's settings): the song is "now playing", and its
+    /// listening starts counting.
+    fn lastfm_start(&mut self) {
+        if self.config.lastfm_session.is_empty() {
+            self.scrobble = None;
+            return;
+        }
+        let Some(t) = self.now_playing().cloned() else { return };
+        let started = rymplayer::updates::now();
+        self.scrobble = Some((t.video_id.clone(), started, 0.0, false));
+        let (key, secret, session) = (self.config.lastfm_key.clone(), self.config.lastfm_secret.clone(), self.config.lastfm_session.clone());
+        let dur = self.duration() as u32;
+        let sc = rymplayer::lastfm::Scrobble { artist: t.artist, title: t.title, album: t.album, duration: dur, started };
+        tokio::spawn(async move {
+            let _ = rymplayer::lastfm::now_playing(sc, key, secret, session).await;
+        });
     }
 
     /// Settings > Sound into the players.
@@ -1874,8 +2010,46 @@ impl App {
             self.stats_written = Instant::now();
             rymplayer::stats::flush();
         }
+        // The alarm: once a day at its time.
+        if self.config.alarm_on {
+            let now = chrono::Local::now();
+            let today = now.format("%Y-%m-%d").to_string();
+            if now.format("%H:%M").to_string() == self.config.alarm_time && self.config.alarm_rang != today {
+                self.config.alarm_rang = today;
+                self.config.save();
+                self.ring_alarm();
+                return;
+            }
+        }
         if self.loading {
             return;
+        }
+        // SponsorBlock: a music video's non-music parts are jumped over (each once).
+        if playing
+            && self.config.sponsorblock
+            && self.now_playing().is_some_and(|t| t.video_id == self.segments.0)
+            && let Some(to) = rymplayer::sponsorblock::skip_to(&self.segments.1, pos)
+        {
+            self.segments.1.retain(|p| p.1 != to);
+            if let Some(a) = &self.audio {
+                a.seek(to);
+            }
+            self.status = tr("Skipped a part that isn't music (SponsorBlock)").into();
+        }
+        // Last.fm: sent once half the song (or 4 minutes) played.
+        let step = self.scrobble_tick.elapsed().as_secs_f32().min(1.0);
+        self.scrobble_tick = Instant::now();
+        if playing && let Some((sid, started, heard, done)) = self.scrobble.clone() {
+            let heard = heard + step;
+            let counts = !done && self.now_playing().is_some_and(|t| t.video_id == sid) && rymplayer::lastfm::counts(heard, dur);
+            self.scrobble = Some((sid, started, heard, done || counts));
+            if counts && let Some(t) = self.now_playing().cloned() {
+                let (key, secret, session) = (self.config.lastfm_key.clone(), self.config.lastfm_secret.clone(), self.config.lastfm_session.clone());
+                let sc = rymplayer::lastfm::Scrobble { artist: t.artist, title: t.title, album: t.album, duration: dur as u32, started };
+                tokio::spawn(async move {
+                    let _ = rymplayer::lastfm::scrobble(sc, key, secret, session).await;
+                });
+            }
         }
         // Sleep timer: the last 10 seconds fade out, then the music stops.
         if let Some((minutes, when)) = self.sleep {

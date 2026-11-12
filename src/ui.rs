@@ -455,7 +455,15 @@ fn draw_lyrics(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                     Some(c) if i < c => Line::from(text.bold().fg(sung)),
                     _ => Line::from(text.bold().fg(next)),
                 });
-                lines.push(Line::default());
+                // Under each line (in the gap): its romaji and its English, when on and known.
+                let ro = app.romaji.get(i).filter(|x| !x.is_empty()).cloned();
+                let en = l.translation.get(i).filter(|x| !x.is_empty()).cloned();
+                let under = match (ro, en) {
+                    (Some(r), Some(e)) => format!("{r} · {e}"),
+                    (Some(x), None) | (None, Some(x)) => x,
+                    (None, None) => String::new(),
+                };
+                lines.push(if under.is_empty() { Line::default() } else { Line::from(show(&under).italic().fg(sung)) });
             }
             // Keep the sung line about a third of the way down.
             let scroll = (cur.unwrap_or(0) * 2).saturating_sub(inner_h as usize / 3) as u16;
@@ -547,6 +555,7 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
         ("a", "add to playlist"),
         ("o", "song menu"),
         ("z", "sleep timer"),
+        ("e", "repeat"),
         ("[ ]", "speed and pitch"),
         ("R", "your recap"),
         ("Q", "up next"),
@@ -587,11 +596,14 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
     }
     f.render_widget(Paragraph::new(Line::from(swatch)), Rect::new(inner.x, inner.y, inner.width, 1));
 
-    for (i, s) in SETTINGS.iter().enumerate() {
-        let r = Rect::new(inner.x, inner.y + 2 + i as u16, inner.width, 1);
+    // A short terminal shows part of the list, scrolled so the chosen setting is in it.
+    let rows = inner.height.saturating_sub(2).max(1) as usize;
+    let first = sel.saturating_sub(rows - 1);
+    for (i, s) in SETTINGS.iter().enumerate().skip(first).take(rows) {
+        let r = Rect::new(inner.x, inner.y + 2 + (i - first) as u16, inner.width, 1);
         let selected = i == sel;
         let value = show(&app.config.value(*s));
-        let label = format!(" {:<20}", show(Config::label(*s)));
+        let label = format!(" {:<26}", show(Config::label(*s)));
         let line = Line::from(vec![
             label.fg(th.text),
             "‹ ".fg(th.faint),
@@ -606,7 +618,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, th: &Theme, sel: usize) {
 
 /// The key hints' words as the static text the translations are keyed on.
 fn word(v: &str) -> &'static str {
-    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "sleep timer", "speed and pitch", "your recap", "up next", "lyrics source", "share", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
+    ["pause", "next/prev", "seek", "like", "radio", "download", "search", "history", "refresh", "add to playlist", "song menu", "sleep timer", "repeat", "speed and pitch", "your recap", "up next", "lyrics source", "share", "artist", "download all", "updates", "plugins", "switch", "settings", "quit"]
         .into_iter()
         .find(|w| *w == v)
         .unwrap_or("")
@@ -762,7 +774,7 @@ mod tests {
         // Player bar right under the top bar, lyrics below the songs.
         assert!(lines[3].contains("Now playing"));
         let songs = lines.iter().position(|l| l.contains("Liked songs")).unwrap();
-        let lyr = lines.iter().position(|l| l.contains("Lyrics")).unwrap();
+        let lyr = lines.iter().position(|l| l.contains("╭ Lyrics ")).unwrap();
         assert!(lyr > songs);
         assert!(out.contains("Lyrics panel"));
         assert!(out.contains("‹ Bottom ›"));
