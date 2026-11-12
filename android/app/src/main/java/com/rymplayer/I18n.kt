@@ -33,6 +33,7 @@ object I18n {
         "Songs, artists, albums" to "أغانٍ، فنانون، ألبومات",
         // actions
         "Play" to "تشغيل",
+        "Pause" to "إيقاف مؤقت",
         "Shuffle" to "عشوائي",
         "Next" to "التالي",
         "Previous" to "السابق",

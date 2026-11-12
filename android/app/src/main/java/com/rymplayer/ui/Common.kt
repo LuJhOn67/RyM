@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import androidx.compose.ui.input.pointer.pointerInput
 import com.rymplayer.tr
 import androidx.compose.material.icons.filled.PlayArrow
 
@@ -408,3 +409,15 @@ fun Marquee(text: String, size: Int, weight: FontWeight, color: Color) {
 }
 
 val CardGap = Arrangement.spacedBy(12.dp)
+
+/**
+ * A page over the others (the player, Settings): its empty spots take the touch, so a tap there
+ * can't reach what's behind it (a tab switched, the mini player paused).
+ */
+fun androidx.compose.ui.Modifier.takesAllTouches(): androidx.compose.ui.Modifier = this.then(
+    androidx.compose.ui.Modifier.pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final).changes.forEach { it.consume() }
+        }
+    },
+)

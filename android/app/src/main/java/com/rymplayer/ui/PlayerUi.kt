@@ -177,7 +177,7 @@ private fun PlayPause(vm: AppViewModel, size: Int) {
         CircularProgressIndicator(Modifier.size((size + 14).dp).padding(8.dp), strokeWidth = 2.dp, color = Color.White)
     } else {
         IconButton(p::toggle) {
-            Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, tr("Play"), tint = Color.White, modifier = Modifier.size(size.dp))
+            Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, tr(if (p.playing) "Pause" else "Play"), tint = Color.White, modifier = Modifier.size(size.dp))
         }
     }
 }
@@ -308,7 +308,7 @@ fun FullPlayer(vm: AppViewModel, coverTint: Color) {
                     if (p.loading) {
                         CircularProgressIndicator(Modifier.size(34.dp), color = Color.Black, strokeWidth = 3.dp)
                     } else {
-                        Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, tr("Play"), tint = Color.Black, modifier = Modifier.size(40.dp))
+                        Icon(if (p.playing) Icons.Default.Pause else Icons.Default.PlayArrow, tr(if (p.playing) "Pause" else "Play"), tint = Color.Black, modifier = Modifier.size(40.dp))
                     }
                 }
                 IconButton(p::next, Modifier.size(56.dp)) { Icon(Icons.Default.SkipNext, tr("Next"), tint = Color.White, modifier = Modifier.size(36.dp)) }

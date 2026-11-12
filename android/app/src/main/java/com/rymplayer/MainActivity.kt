@@ -1,5 +1,6 @@
 package com.rymplayer
 
+import com.rymplayer.ui.takesAllTouches
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -240,20 +241,20 @@ private fun Main(vm: AppViewModel) {
             }
         }
         AnimatedVisibility(vm.playerOpen, enter = slideInVertically(tween(350)) { it }, exit = slideOutVertically(tween(300)) { it }) {
-            FullPlayer(vm, tint)
+            Box(Modifier.fillMaxSize().takesAllTouches()) { FullPlayer(vm, tint) }
         }
         vm.menu?.let { m -> com.rymplayer.ui.SongSheet(vm, m) { vm.menu = null } }
         AnimatedVisibility(vm.settingsOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
-            com.rymplayer.ui.SettingsPage(vm)
+            Box(Modifier.fillMaxSize().takesAllTouches()) { com.rymplayer.ui.SettingsPage(vm) }
         }
         AnimatedVisibility(vm.storeOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
-            com.rymplayer.ui.PluginStorePage(vm)
+            Box(Modifier.fillMaxSize().takesAllTouches()) { com.rymplayer.ui.PluginStorePage(vm) }
         }
         AnimatedVisibility(vm.recapOpen, enter = slideInHorizontally(tween(300)) { it }, exit = slideOutHorizontally(tween(250)) { it }) {
-            com.rymplayer.ui.RecapPage(vm)
+            Box(Modifier.fillMaxSize().takesAllTouches()) { com.rymplayer.ui.RecapPage(vm) }
         }
         if (vm.lyricsPill && !vm.playerOpen) com.rymplayer.ui.LyricsPill(vm)
-        vm.video?.let { com.rymplayer.ui.VideoPage(vm, it) }
+        vm.video?.let { Box(Modifier.fillMaxSize().takesAllTouches()) { com.rymplayer.ui.VideoPage(vm, it) } }
         vm.update?.let { com.rymplayer.ui.UpdateDialog(vm, it) }
         if (vm.linkOpen) com.rymplayer.ui.LinkDialog(vm)
         if (vm.remoteOpen) com.rymplayer.ui.RemoteSheet(vm) { vm.remoteOpen = false }
