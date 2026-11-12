@@ -18,6 +18,7 @@ use gtk::{Align, Application, ApplicationWindow, Button, CssProvider, HeaderBar,
 use rymplayer::i18n::tr;
 use rymplayer::api::{self, Api, LIKED_ID, Link, Playlist, Track};
 use rymplayer::audio::Audio;
+use rymplayer::player_core as core;
 
 mod fx_view;
 use rymplayer::config::{Config, Source};
@@ -707,8 +708,10 @@ struct Ui {
     request_id: u64,
     /// The lyrics shown in romaji: for which song and source, and the lines.
     romaji: (String, Vec<String>),
-    /// The playing song's SponsorBlock parts (its id, then the parts).
-    segments: (String, rymplayer::sponsorblock::Segments),
+    /// SponsorBlock, Last.fm and Seamless Music's rules (shared with RyM Slint and the terminal).
+    non_music: core::NonMusic,
+    scrobbler: core::Scrobbler,
+    peers: core::PeerWatch,
     loading: bool,
     radio_pending: bool,
     /// Liquid Aurora: the loudest bass lately; the theme extras last shown (vinyl, aurora, colors).
@@ -761,8 +764,6 @@ struct Ui {
     /// What the suggestions were last asked for, and the wait before asking (typing goes on).
     suggest_for: Option<String>,
     suggest_wait: Option<glib::SourceId>,
-    /// RyM Link: the phone song already taken over or asked about (device, song), so it's once.
-    link_seen: Option<(String, String)>,
     /// Up next changed while it wasn't on screen: it's built when it shows.
     queue_dirty: bool,
     /// The mini player: its window, cover, names and play button; and the song it shows.
@@ -1561,7 +1562,9 @@ fn build(app: &Application) {
         held: false,
         request_id: 0,
         romaji: (String::new(), Vec::new()),
-        segments: (String::new(), Vec::new()),
+        non_music: Default::default(),
+        scrobbler: Default::default(),
+        peers: Default::default(),
         loading: false,
         radio_pending: false,
         bass_peak: 0.05,
@@ -1596,7 +1599,6 @@ fn build(app: &Application) {
         play_asked: Instant::now(),
         suggest_for: None,
         suggest_wait: None,
-        link_seen: None,
         queue_dirty: false,
         media: None,
         media_sent: None,
@@ -2952,7 +2954,7 @@ fn open_songs(ui: &Shared, title: String, load: impl Future<Output = anyhow::Res
 /// with its radio after it; a playlist, an album, a mix or an artist opens.
 fn open_incoming(ui: &Shared, link: String) {
     use rymplayer::links::Target;
-    use rymplayer::{plugins, soundcloud, spotify};
+    use rymplayer::plugins;
     let Some(target) = rymplayer::links::parse(&link) else {
         toast(ui, tr("Not a YouTube Music link"));
         return;
@@ -2964,26 +2966,17 @@ fn open_incoming(ui: &Shared, link: String) {
     match target {
         Target::Song(id) => {
             toast(ui, &format!("{}…", tr("Loading")));
-            post(ui, async move {
-                let mut radio = api.radio(id.clone()).await.unwrap_or_default();
-                let song = match radio.iter().position(|t| t.video_id == id) {
-                    Some(i) => radio.remove(i),
-                    None => Track { video_id: id.clone(), title: tr("Song").into(), artist: String::new(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None },
-                };
-                radio.retain(|t| t.video_id != id);
-                radio.insert(0, song);
-                Ev::Handed(Ok(radio))
-            });
+            post(ui, async move { Ev::Handed(Ok(core::song_with_radio(api, id).await)) });
         }
         Target::Playlist(id) => open_paged(ui, tr("Playlist").into(), api.playlist_paged(id)),
         Target::Album(id) => open_songs(ui, tr("Album").into(), api.album_tracks(id)),
         Target::Mix(id) => open_songs(ui, tr("Mix").into(), api.mix_tracks(id)),
         Target::Artist(id) => open_songs(ui, tr("Artist").into(), api.artist_page(id)),
-        Target::Spotify { link, one_song: true } if has_plugin(ui, plugins::SPOTIFY) => {
+        t @ Target::Spotify { one_song: true, .. } if has_plugin(ui, plugins::SPOTIFY) => {
             toast(ui, tr("Finding the Spotify songs on YouTube Music..."));
-            post(ui, async move { Ev::Handed(spotify::import(api, link).await) });
+            post(ui, async move { Ev::Handed(core::found_song(api, t).await) });
         }
-        Target::SoundCloud { link, one_song: true } if has_plugin(ui, plugins::SOUNDCLOUD) => post(ui, async move { Ev::Handed(soundcloud::open_link(link).await) }),
+        t @ Target::SoundCloud { one_song: true, .. } if has_plugin(ui, plugins::SOUNDCLOUD) => post(ui, async move { Ev::Handed(core::found_song(api, t).await) }),
         // A Spotify or SoundCloud list (or its plugin isn't there: the search says so).
         Target::Spotify { link, .. } | Target::SoundCloud { link, .. } => search_songs(ui, link),
     }
@@ -4766,10 +4759,15 @@ fn play_at(ui: &Shared, i: usize) {
         });
         let manual = std::mem::take(&mut s.user_pick);
         rymplayer::ram_points::moved_on(left, track.clone(), manual);
-        s.segments = (track.video_id.clone(), Vec::new());
-        if s.config.sponsorblock && rymplayer::is_youtube(&track.video_id) {
-            let v = track.video_id.clone();
-            spawn(&s, async move { Ev::Segments(v.clone(), rymplayer::sponsorblock::segments(&v).await) });
+        if manual {
+            s.peers.played_here();
+        }
+        let sponsor = s.config.sponsorblock;
+        if let Some(ask) = s.non_music.song(&track.video_id, sponsor) {
+            spawn(&s, async move {
+                let (v, parts) = ask.await;
+                Ev::Segments(v, parts)
+            });
         }
         s.request_id += 1;
         s.q.went_to(i);
@@ -4905,12 +4903,7 @@ fn ring_alarm(ui: &Shared) {
         toggle_playback(ui);
         return;
     }
-    let mut songs: Vec<Track> = ui.borrow().liked_tracks.clone();
-    let n = songs.len();
-    for i in (1..n).rev() {
-        let j = (rymplayer::updates::now() as usize).wrapping_mul(2_654_435_761).wrapping_add(i * 40503) % (i + 1);
-        songs.swap(i, j);
-    }
+    let songs = core::shuffled(ui.borrow().liked_tracks.clone());
     if !songs.is_empty() {
         play_list(ui, &songs, 0);
     }
@@ -5150,28 +5143,28 @@ fn tick(ui: &Shared) {
         s.stats_written = Instant::now();
         rymplayer::stats::flush();
     }
+    // Last.fm: sent once half the song (or 4 minutes) played.
+    let now = s.q.now().cloned();
+    let cfg = s.config.clone();
+    if playing && let Some(send) = s.scrobbler.heard(now.as_ref(), since.as_secs_f32().min(1.0), dur, &cfg) {
+        spawn(&s, async move {
+            send.await;
+            Ev::Done
+        });
+    }
     // The alarm: once a day at its time (RyM open).
-    if s.config.alarm_on {
-        let now = chrono::Local::now();
-        let today = now.format("%Y-%m-%d").to_string();
-        if now.format("%H:%M").to_string() == s.config.alarm_time && s.config.alarm_rang != today {
-            s.config.alarm_rang = today;
-            s.config.save();
-            drop(s);
-            ring_alarm(ui);
-            return;
-        }
+    if core::alarm_rings(&mut s.config) {
+        drop(s);
+        ring_alarm(ui);
+        return;
     }
     if s.loading {
         return;
     }
     // SponsorBlock: a music video's non-music parts are jumped over (each once).
-    if playing
-        && s.config.sponsorblock
-        && s.q.now().is_some_and(|t| t.video_id == s.segments.0)
-        && let Some(to) = rymplayer::sponsorblock::skip_to(&s.segments.1, pos)
-    {
-        s.segments.1.retain(|p| p.1 != to);
+    let now_id = now.map(|t| t.video_id).unwrap_or_default();
+    let sponsor = s.config.sponsorblock;
+    if playing && let Some(to) = s.non_music.jump(&now_id, pos, sponsor) {
         if let Some(a) = &s.audio {
             a.seek(to);
         }
@@ -5702,25 +5695,18 @@ fn media_sync(ui: &Shared) {
 /// Seamless Music (RyM Link): a phone of the same account plays while this app is idle: the music moves here
 /// (or, with "ask" chosen, a question first). Once per song and phone.
 fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
-    let (mine, idle, auto) = {
-        let s = ui.borrow();
-        // Seamless Music off: the phones are ignored.
-        if !s.config.cross_ears {
-            return;
-        }
+    let (mine, auto) = {
+        let mut s = ui.borrow_mut();
         let mine = s.account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));
         let idle = !s.loading && !s.audio.as_ref().is_some_and(|a| a.is_playing());
-        (mine, idle, s.config.link_auto)
+        // Seamless Music off: the phones are ignored.
+        let on = s.config.cross_ears;
+        if !s.peers.wants(&note, mine.as_deref(), idle, on) {
+            return;
+        }
+        (mine, s.config.link_auto)
     };
     let Some(key) = mine else { return };
-    if note.kind != "phone" || note.account != key || !note.playing || note.video_id.is_empty() || !idle {
-        return;
-    }
-    let seen = (note.device.clone(), note.video_id.clone());
-    if ui.borrow().link_seen.as_ref() == Some(&seen) {
-        return;
-    }
-    ui.borrow_mut().link_seen = Some(seen);
     let take = {
         let ui = ui.clone();
         let (device, port, key) = (note.device.clone(), note.port, key.clone());
@@ -6170,7 +6156,19 @@ fn poll_events(ui: &Shared) {
                     Err(e) => log(&format!("  can't play after {ms} ms: {e}")),
                 }
                 match started {
-                    Ok(()) => prefetch_next(ui),
+                    Ok(()) => {
+                        prefetch_next(ui);
+                        // Last.fm: "now playing", and its listening counts from now.
+                        let mut s = ui.borrow_mut();
+                        let dur = s.audio.as_ref().and_then(Audio::duration).unwrap_or(0.0);
+                        let cfg = s.config.clone();
+                        if let Some(send) = s.scrobbler.start(&t, dur, &cfg) {
+                            spawn(&s, async move {
+                                send.await;
+                                Ev::Done
+                            });
+                        }
+                    }
                     Err(e) => {
                         ui.borrow().w.play.set_icon_name("media-playback-start-symbolic");
                         toast(ui, &format!("Can't play \"{}\": {e}", t.title));
@@ -6222,12 +6220,7 @@ fn poll_events(ui: &Shared) {
                     ui.borrow_mut().lyric_line = line.map(|_| usize::MAX);
                 }
             }
-            Ev::Segments(vid, parts) => {
-                let mut s = ui.borrow_mut();
-                if s.segments.0 == vid {
-                    s.segments.1 = parts;
-                }
-            }
+            Ev::Segments(vid, parts) => ui.borrow_mut().non_music.got(&vid, parts),
             Ev::Translated(vid, source, tr) => {
                 let current = ui.borrow().lyrics.clone().filter(|l| l.source == source && now_playing(ui).is_some_and(|t| t.video_id == vid));
                 if let Some(mut l) = current.filter(|_| !tr.is_empty()) {

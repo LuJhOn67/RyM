@@ -20,6 +20,7 @@ pub mod local;
 pub mod login;
 pub mod lyric_sources;
 pub mod link;
+pub mod player_core;
 pub mod links;
 pub mod lossless;
 pub mod lyrics;

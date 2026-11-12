@@ -10,6 +10,7 @@ use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use rymplayer::i18n::tr;
+use rymplayer::player_core as core;
 use rymplayer::likes::{Likes, SYNC_EVERY};
 use rymplayer::{api, audio, config, data_dir, feed, fmt_time, login, lyrics, parse_duration, stream};
 
@@ -231,18 +232,15 @@ struct App {
     repeat: u8,
     /// The song ended on its own (not picked): its RaM points know.
     auto_advance: bool,
-    /// The playing song's SponsorBlock parts (its id, then the parts).
-    segments: (String, rymplayer::sponsorblock::Segments),
-    /// Last.fm: the song, when it started, seconds heard, and whether it was sent.
-    scrobble: Option<(String, u64, f32, bool)>,
+    /// SponsorBlock, Last.fm and Seamless Music's rules (shared with the window apps).
+    non_music: core::NonMusic,
+    scrobbler: core::Scrobbler,
+    peers: core::PeerWatch,
     /// When the Last.fm count last moved on.
     scrobble_tick: Instant,
-    /// Seamless Music: the account's key (signed in), what this terminal plays (told to the
-    /// phones), the phone song last seen, and no taking back from the phone until then.
+    /// Seamless Music: the account's key (signed in), and what this terminal plays (told to the phones).
     account_key: Option<String>,
     link: std::sync::Arc<std::sync::Mutex<rymplayer::link::Playing>>,
-    link_seen: Option<(String, String)>,
-    link_quiet_until: Option<Instant>,
     lyrics_status: String,
     /// The lyrics pane's color (the playing song's cover).
     lyrics_bg: (u8, u8, u8),
@@ -303,13 +301,12 @@ impl App {
             romaji: Vec::new(),
             repeat: 0,
             auto_advance: false,
-            segments: (String::new(), Vec::new()),
-            scrobble: None,
+            non_music: Default::default(),
+            scrobbler: Default::default(),
+            peers: Default::default(),
             scrobble_tick: Instant::now(),
             account_key: None,
             link: Default::default(),
-            link_seen: None,
-            link_quiet_until: None,
             crossfade_next: false,
             crossfade_for: None,
             listened_at: Instant::now(),
@@ -695,7 +692,7 @@ impl App {
             Event::TookOver(_, Err(e)) => self.status = format!("Seamless Music: {e}"),
             Event::LinkPause => {
                 // Not taken back from the phone for a while (until something is played here).
-                self.link_quiet_until = Some(Instant::now() + Duration::from_secs(30 * 60));
+                self.peers.phone_took();
                 if let Some(a) = &self.audio
                     && a.is_playing()
                 {
@@ -707,9 +704,7 @@ impl App {
             Event::SavedQueue(Ok(text)) => self.status = text,
             Event::SavedQueue(Err(e)) => self.status = format!("{}: {e}", tr("Couldn't create the playlist")),
             Event::Segments(vid, parts) => {
-                if self.segments.0 == vid {
-                    self.segments.1 = parts;
-                }
+                self.non_music.got(&vid, parts);
             }
             Event::Romaji(vid, lines) => {
                 if self.now_playing().is_some_and(|t| t.video_id == vid) && lines.iter().any(|x| !x.is_empty()) {
@@ -1657,17 +1652,16 @@ impl App {
         let left = self.now_playing().cloned().map(|t| (t, self.pos, self.duration()));
         let manual = !std::mem::take(&mut self.auto_advance);
         if manual {
-            // Something played here by hand: the phone's music may move here again.
-            self.link_quiet_until = None;
+            self.peers.played_here();
         }
         rymplayer::ram_points::moved_on(left, track.clone(), manual);
         self.q.went_to(i);
         self.romaji.clear();
-        self.scrobble = None;
-        self.segments = (track.video_id.clone(), Vec::new());
-        if self.config.sponsorblock && rymplayer::is_youtube(&track.video_id) {
-            let v = track.video_id.clone();
-            self.spawn(async move { Event::Segments(v.clone(), rymplayer::sponsorblock::segments(&v).await) });
+        if let Some(ask) = self.non_music.song(&track.video_id, self.config.sponsorblock) {
+            self.spawn(async move {
+                let (v, parts) = ask.await;
+                Event::Segments(v, parts)
+            });
         }
         self.played.insert(track.video_id.clone());
         rymplayer::recent::played(&track);
@@ -1749,22 +1743,12 @@ impl App {
     /// Seamless Music: a phone of the same account plays while this terminal is idle: the music
     /// moves here (Settings in RyM Slint: "Music Cross Ears" and "Take over from the phone").
     fn heard_peer(&mut self, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
-        if !self.config.cross_ears || !self.config.link_auto {
+        let idle = !self.loading && !self.audio.as_ref().is_some_and(Audio::is_playing);
+        let on = self.config.cross_ears && self.config.link_auto;
+        if !self.peers.wants(&note, self.account_key.as_deref(), idle, on) {
             return;
         }
         let Some(key) = self.account_key.clone() else { return };
-        let idle = !self.loading && !self.audio.as_ref().is_some_and(Audio::is_playing);
-        if note.kind != "phone" || note.account != key || !note.playing || note.video_id.is_empty() || !idle {
-            return;
-        }
-        if self.link_quiet_until.is_some_and(|t| Instant::now() < t) {
-            return;
-        }
-        let seen = (note.device.clone(), note.video_id.clone());
-        if self.link_seen.as_ref() == Some(&seen) {
-            return;
-        }
-        self.link_seen = Some(seen);
         let device = note.device.clone();
         let port = note.port;
         self.spawn(async move { Event::TookOver(device, s(rymplayer::link::take_over(ip, port, &key).await)) });
@@ -1832,12 +1816,7 @@ impl App {
                 }
             }
             _ => {
-                let mut songs = self.liked_tracks.clone();
-                let n = songs.len();
-                for i in (1..n).rev() {
-                    let j = (rymplayer::updates::now() as usize).wrapping_mul(2_654_435_761).wrapping_add(i * 40503) % (i + 1);
-                    songs.swap(i, j);
-                }
+                let songs = core::shuffled(self.liked_tracks.clone());
                 if !songs.is_empty() {
                     let at = self.q.start(songs, 0);
                     self.play(at);
@@ -2112,19 +2091,10 @@ impl App {
     /// Last.fm (signed in from RyM Slint's settings): the song is "now playing", and its
     /// listening starts counting.
     fn lastfm_start(&mut self) {
-        if self.config.lastfm_session.is_empty() {
-            self.scrobble = None;
-            return;
-        }
         let Some(t) = self.now_playing().cloned() else { return };
-        let started = rymplayer::updates::now();
-        self.scrobble = Some((t.video_id.clone(), started, 0.0, false));
-        let (key, secret, session) = (self.config.lastfm_key.clone(), self.config.lastfm_secret.clone(), self.config.lastfm_session.clone());
-        let dur = self.duration() as u32;
-        let sc = rymplayer::lastfm::Scrobble { artist: t.artist, title: t.title, album: t.album, duration: dur, started };
-        tokio::spawn(async move {
-            let _ = rymplayer::lastfm::now_playing(sc, key, secret, session).await;
-        });
+        if let Some(send) = self.scrobbler.start(&t, self.duration(), &self.config) {
+            tokio::spawn(send);
+        }
     }
 
     /// Settings > Sound into the players.
@@ -2189,26 +2159,16 @@ impl App {
             rymplayer::stats::flush();
         }
         // The alarm: once a day at its time.
-        if self.config.alarm_on {
-            let now = chrono::Local::now();
-            let today = now.format("%Y-%m-%d").to_string();
-            if now.format("%H:%M").to_string() == self.config.alarm_time && self.config.alarm_rang != today {
-                self.config.alarm_rang = today;
-                self.config.save();
-                self.ring_alarm();
-                return;
-            }
+        if core::alarm_rings(&mut self.config) {
+            self.ring_alarm();
+            return;
         }
         if self.loading {
             return;
         }
         // SponsorBlock: a music video's non-music parts are jumped over (each once).
-        if playing
-            && self.config.sponsorblock
-            && self.now_playing().is_some_and(|t| t.video_id == self.segments.0)
-            && let Some(to) = rymplayer::sponsorblock::skip_to(&self.segments.1, pos)
-        {
-            self.segments.1.retain(|p| p.1 != to);
+        let id = self.now_playing().map(|t| t.video_id.clone()).unwrap_or_default();
+        if playing && let Some(to) = self.non_music.jump(&id, pos, self.config.sponsorblock) {
             if let Some(a) = &self.audio {
                 a.seek(to);
             }
@@ -2217,17 +2177,9 @@ impl App {
         // Last.fm: sent once half the song (or 4 minutes) played.
         let step = self.scrobble_tick.elapsed().as_secs_f32().min(1.0);
         self.scrobble_tick = Instant::now();
-        if playing && let Some((sid, started, heard, done)) = self.scrobble.clone() {
-            let heard = heard + step;
-            let counts = !done && self.now_playing().is_some_and(|t| t.video_id == sid) && rymplayer::lastfm::counts(heard, dur);
-            self.scrobble = Some((sid, started, heard, done || counts));
-            if counts && let Some(t) = self.now_playing().cloned() {
-                let (key, secret, session) = (self.config.lastfm_key.clone(), self.config.lastfm_secret.clone(), self.config.lastfm_session.clone());
-                let sc = rymplayer::lastfm::Scrobble { artist: t.artist, title: t.title, album: t.album, duration: dur as u32, started };
-                tokio::spawn(async move {
-                    let _ = rymplayer::lastfm::scrobble(sc, key, secret, session).await;
-                });
-            }
+        let now = self.now_playing().cloned();
+        if playing && let Some(send) = self.scrobbler.heard(now.as_ref(), step, dur, &self.config) {
+            tokio::spawn(send);
         }
         // Sleep timer: the last 10 seconds fade out, then the music stops.
         if let Some((minutes, when)) = self.sleep {
