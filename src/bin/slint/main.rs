@@ -295,7 +295,13 @@ enum Sleep {
     EndOfSong,
 }
 
-const THEMES: [&str; 4] = ["RyM Dusk", "RyM Mist", "RyM Wide", "RyM Verde"];
+/// The layouts to pick from, with their number in the window (Theme.index) and the settings.
+const THEMES: [(&str, usize); 2] = [("RyM Dusk", 0), ("RyM Wide", 2)];
+
+/// A saved layout's place in [`THEMES`] (the light RyM Mist, gone, opens as Dusk).
+fn theme_slot(saved: usize) -> usize {
+    THEMES.iter().position(|t| t.1 == saved).unwrap_or(0)
+}
 const SLEEP_CHOICES: [u32; 7] = [0, 15, 30, 45, 60, 90, u32::MAX];
 
 thread_local! {
@@ -358,10 +364,9 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--render") {
         // A picture of the window with sample songs (no window opens): the layout's check.
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "rym-slint.png".into());
-        let dark = args.get(i + 2).is_none_or(|t| t != "light");
         let page = args.get(i + 3).and_then(|p| p.parse().ok()).unwrap_or(0);
-        let theme = args.get(i + 2).map_or(0, |t| match t.as_str() { "wide" => 2, "verde" => 3, _ => 0 });
-        render_sample(&out, dark, page, theme);
+        let theme = args.get(i + 2).map_or(0, |t| if t == "wide" { 2 } else { 0 });
+        render_sample(&out, page, theme);
         return;
     }
     // "Play in RyM": a link on the command line (a rym:// link from the browser too) goes to the
@@ -485,7 +490,7 @@ fn models() -> Models {
 fn build(ui: &AppWindow, config: Config) -> Shared {
     let m = models();
     let app = ui.global::<App>();
-    ui.global::<Theme>().set_index(config.gui_theme.min(3) as i32);
+    ui.global::<Theme>().set_index(THEMES[theme_slot(config.gui_theme)].1 as i32);
     ui.global::<Theme>().set_cover_accent(false);
     paint(&ui.global::<Theme>(), current_colors(&config).as_ref());
     ui.global::<Theme>().set_aurora(config.aurora);
@@ -737,7 +742,7 @@ fn wire(ui: &AppWindow, st: &Shared) {
         app.on_set_speed(move |id| set_speed(&st, &id));
     }
     app.on_next_theme(w(|st| {
-        let next = (st.borrow().config.gui_theme.min(3) + 1) % 4;
+        let next = (theme_slot(st.borrow().config.gui_theme) + 1) % THEMES.len();
         set_theme(st, next);
     }));
     app.on_open_artist(w(|st| {
@@ -1398,7 +1403,7 @@ fn fill_settings(st: &Shared) {
     };
     let rows = vec![
         head("Look"),
-        choice("theme", "Theme", THEMES[c.gui_theme.min(3)].to_string()),
+        choice("theme", "Theme", THEMES[theme_slot(c.gui_theme)].0.to_string()),
         choice("palette", "Colors", if c.palette.is_empty() { t("The layout's own") } else { c.palette.clone() }),
         switch("aurora", "Liquid Aurora", "The cover's colors move behind everything with the bass", c.aurora),
         switch("vinyl", "Vinyl record", "The cover turns like a record: faster with Nightcore, slower with Slowed", c.vinyl),
@@ -1609,7 +1614,7 @@ fn choose(st: &Shared, id: &str, step: i32) {
     let cycle = |i: usize, n: usize| (i as i32 + step).rem_euclid(n as i32) as usize;
     match id {
         "theme" => {
-            let next = cycle(st.borrow().config.gui_theme.min(3), 4);
+            let next = cycle(theme_slot(st.borrow().config.gui_theme), THEMES.len());
             set_theme(st, next);
             return;
         }
@@ -2344,16 +2349,18 @@ fn import_colors(st: &Shared, text: &str) {
     }
 }
 
-fn set_theme(st: &Shared, index: usize) {
+/// Picks layout `slot` of [`THEMES`].
+fn set_theme(st: &Shared, slot: usize) {
+    let (name, index) = THEMES[slot.min(THEMES.len() - 1)];
     {
         let mut s = st.borrow_mut();
-        s.config.gui_theme = index.min(3);
+        s.config.gui_theme = index;
         s.config.save();
         if let Some(ui) = s.ui.upgrade() {
-            ui.global::<Theme>().set_index(index.min(3) as i32);
+            ui.global::<Theme>().set_index(index as i32);
         }
     }
-    toast(st, THEMES[index.min(3)]);
+    toast(st, name);
     fill_settings(st);
 }
 
@@ -4956,7 +4963,7 @@ fn handle(st: &Shared, ev: Ev) {
 // ---------------------------------------------------------------- the layout's check
 
 /// Draws the window with sample songs into a PNG with the software renderer (no window).
-fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
+fn render_sample(out: &str, page: i32, theme_index: i32) {
     use slint::platform::software_renderer::{MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType};
     // A clock of its own, so animations can be stepped through (a second between frames).
     static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -4974,7 +4981,7 @@ fn render_sample(out: &str, dark: bool, page: i32, theme_index: i32) {
     let _ = slint::platform::set_platform(Box::new(Headless(window.clone())));
     let ui = AppWindow::new().expect("window");
     let app = ui.global::<App>();
-    ui.global::<Theme>().set_index(if theme_index > 0 { theme_index } else if dark { 0 } else { 1 });
+    ui.global::<Theme>().set_index(theme_index);
     // Extra words after the page: a color theme's name, "vinyl", "aurora".
     let extras: Vec<String> = std::env::args().skip_while(|a| a != "--render").skip(4).collect();
     let preset = extras.iter().find_map(|e| rymplayer::themes::preset(e));

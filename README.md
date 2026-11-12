@@ -16,7 +16,7 @@ engine that mixes songs like a DJ.
 
 | App | Platform | What it is |
 |---|---|---|
-| **RyM Slint** | Windows, Linux | The main window app: the playing song beside Up next, similar songs and the artist's songs. Three layouts (Dusk, Mist, Wide) and twelve color themes. |
+| **RyM Slint** | Windows, Linux | The main window app: the playing song beside Up next, similar songs and the artist's songs. Two layouts (Dusk, Wide) and twelve color themes. |
 | **RyM for Android** | Android 10+ | The phone app (Kotlin, Jetpack Compose), in `android/`. |
 | **RyM GTK** | Linux | A GTK 4 window app, with the same color themes. |
 | **RyM** | Windows, Linux | The same player in the terminal. |
@@ -28,9 +28,9 @@ settings and plugins.
 
 ### Layouts
 
-| Dusk | Mist | Wide |
-|---|---|---|
-| ![Dusk](docs/screenshots/slint-dusk.jpg) | ![Mist](docs/screenshots/slint-mist.jpg) | ![Wide](docs/screenshots/slint-wide.jpg) |
+| Dusk | Wide |
+|---|---|
+| ![Dusk](docs/screenshots/slint-dusk.jpg) | ![Wide](docs/screenshots/slint-wide.jpg) |
 
 | Synced lyrics (Japanese with romaji and English) | Home: suggestions by RaM points |
 |---|---|
@@ -91,7 +91,7 @@ settings and plugins.
 - Plays songs as YouTube sends them (Opus first, the best format it has), with no re-encoding.
 
 **Looks**
-- Three layouts on the PC (Dusk, Mist, Wide) and **twelve color themes**: OLED Black, Frosted Glass, Tactical Beige, Stellar Neon, Dot Matrix, Hi-Fi Rack, Cyber HUD, Lo-Fi Rain, Aqua Glass, Manga Ink, Tactical Olive and Remorse. The first eleven are on every app; Remorse is on the PC for now.
+- Two layouts on the PC (Dusk, Wide) and **twelve color themes**: OLED Black, Frosted Glass, Tactical Beige, Stellar Neon, Dot Matrix, Hi-Fi Rack, Cyber HUD, Lo-Fi Rain, Aqua Glass, Manga Ink, Tactical Olive and Remorse. The first eleven are on every app; Remorse is on the PC for now.
 - **Remorse**, for sadness and guilt: a grey winter night, a lowered voice, an old wound's faded wine, ash falling slowly, and a cover that lost its color.
 - **Liquid Aurora**: the cover's four main colors glow behind everything and pulse with the bass.
 - **Vinyl record**: the cover turns like a record, faster with Nightcore and slower with Slowed.
@@ -206,7 +206,7 @@ cd android && ./gradlew assembleRelease                                         
 
 | التطبيق | النظام | الوصف |
 |---|---|---|
-| **RyM Slint** | ويندوز، لينكس | التطبيق الرئيسي: الأغنية الحالية بجانب قائمة «التالي» والأغاني المشابهة وأغاني الفنان نفسه، بثلاث واجهات (Dusk وMist وWide) واثني عشر ثيمًا لونيًا. |
+| **RyM Slint** | ويندوز، لينكس | التطبيق الرئيسي: الأغنية الحالية بجانب قائمة «التالي» والأغاني المشابهة وأغاني الفنان نفسه، بواجهتين (Dusk وWide) واثني عشر ثيمًا لونيًا. |
 | **RyM للهاتف** | أندرويد 10 فأحدث | تطبيق الهاتف (Kotlin وJetpack Compose)، في مجلد `android/`. |
 | **RyM GTK** | لينكس | تطبيق نوافذ بـ GTK 4، بالثيمات اللونية نفسها. |
 | **RyM** | ويندوز، لينكس | المشغّل نفسه داخل الطرفية. |
@@ -239,7 +239,7 @@ cd android && ./gradlew assembleRelease                                         
 - يشغّل الأغاني كما يرسلها YouTube (بصيغة Opus أولًا، وهي أفضل ما يقدّمه) دون إعادة ترميز.
 
 **المظهر**
-- ثلاث واجهات على الحاسوب (Dusk وMist وWide)، و**اثنا عشر ثيمًا لونيًا**: OLED Black وFrosted Glass وTactical Beige وStellar Neon وDot Matrix وHi-Fi Rack وCyber HUD وLo-Fi Rain وAqua Glass وManga Ink وTactical Olive وRemorse. الأحد عشر الأولى متوفرة في كل التطبيقات، وRemorse على الحاسوب حاليًا.
+- واجهتان على الحاسوب (Dusk وWide)، و**اثنا عشر ثيمًا لونيًا**: OLED Black وFrosted Glass وTactical Beige وStellar Neon وDot Matrix وHi-Fi Rack وCyber HUD وLo-Fi Rain وAqua Glass وManga Ink وTactical Olive وRemorse. الأحد عشر الأولى متوفرة في كل التطبيقات، وRemorse على الحاسوب حاليًا.
 - **Remorse** للحزن والشعور بالذنب: ليلة شتاء رمادية، وصوت خافت، ولون نبيذي باهت كجرح قديم، ورماد يتساقط ببطء، وغلاف فقد ألوانه.
 - **الشفق السائل (Liquid Aurora)**: تتوهج ألوان الغلاف الأربعة الرئيسية خلف الواجهة وتنبض مع الجهير.
 - **الأسطوانة**: يدور الغلاف كأسطوانة، أسرع مع Nightcore وأبطأ مع Slowed.
