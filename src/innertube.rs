@@ -261,6 +261,9 @@ pub fn report() -> String {
 /// Gets the player script and its solver ready when the app opens (only when Node.js is there),
 /// so the first song from the TV or Music player doesn't wait for them.
 pub async fn warm_up() {
+    // The connection to YouTube opened now (its TLS handshake done), so the first song's link
+    // doesn't wait for it.
+    let _ = http().head("https://www.youtube.com/generate_204").send().await;
     if crate::ytjs::node().is_some() {
         let _ = crate::ytjs::solve(&[], &["AAAAAAAAAAAAAAAAB".to_string()]).await;
     }
@@ -268,12 +271,16 @@ pub async fn warm_up() {
 
 /// The ways to try, in order: the one that worked last first; the TV and Music players only with
 /// Node.js (their puzzles), Music only signed in; clients refused again and again go last.
+///
+/// Measured 2026-11-12: visionOS and YouTube Music's links play to the end; the Quest app's are
+/// refused ("Sign in to confirm you're not a bot"), so they come last; the iPhone app's link is
+/// quick but refused after its first piece (it now wants a PO Token), so the song stopped after
+/// ~15 s and the next one started: it isn't asked at all.
 fn order() -> Vec<Way> {
     let node = crate::ytjs::node().is_some();
     let signed_in = account("https://music.youtube.com").is_some();
-    let mut ways = vec![Way::VisionOs, Way::App(0), Way::App(1), Way::App(2)];
+    let mut ways = vec![Way::VisionOs];
     if node {
-        ways.push(Way::Tv);
         if signed_in {
             if BEST.load(std::sync::atomic::Ordering::Relaxed) {
                 ways.insert(0, Way::Music);
@@ -281,7 +288,9 @@ fn order() -> Vec<Way> {
                 ways.push(Way::Music);
             }
         }
+        ways.push(Way::Tv);
     }
+    ways.extend([Way::App(0), Way::App(1)]);
     let last = remembered().lock().ok().and_then(|r| r.clone());
     if let Some(i) = last.and_then(|l| ways.iter().position(|w| w.name() == l)) {
         let w = ways.remove(i);
@@ -505,27 +514,45 @@ pub async fn audio_skipping(video_id: &str, skip: &[String]) -> Result<Audio> {
     if let Some(a) = kept(video_id, skip) {
         return Ok(a);
     }
+    let ways: Vec<Way> = order().into_iter().filter(|w| !skip.contains(&w.name())).collect();
     let mut why = Vec::new();
-    for way in order() {
-        let name = way.name();
-        if skip.contains(&name) {
-            continue;
+    let mut at = 0;
+    while at < ways.len() {
+        // Two ways asked at once, the first good answer taken: a refusal costs nothing then.
+        // YouTube Music's player first for Premium (256 kbps) is asked alone, so a quicker 160
+        // kbps answer doesn't win over it.
+        let pair = if ways[at] == Way::Music && at == 0 { 1 } else { 2 };
+        let batch = &ways[at..(at + pair).min(ways.len())];
+        at += batch.len();
+        let mut set = tokio::task::JoinSet::new();
+        for &way in batch {
+            let id = video_id.to_string();
+            set.spawn(async move {
+                let started = std::time::Instant::now();
+                let got = match way {
+                    Way::VisionOs => visionos_audio(&id).await,
+                    Way::App(i) => player(&CLIENTS[i], &id).await,
+                    Way::Tv | Way::Music => web_player(way, &id).await,
+                };
+                (way, got, started.elapsed())
+            });
         }
-        let started = std::time::Instant::now();
-        let got = match way {
-            Way::VisionOs => visionos_audio(video_id).await,
-            Way::App(i) => player(&CLIENTS[i], video_id).await,
-            Way::Tv | Way::Music => web_player(way, video_id).await,
-        };
-        record(way, got.is_ok(), started.elapsed());
-        match got {
-            Ok(mut a) => {
-                a.video_id = video_id.to_string();
-                remember(way);
-                keep(video_id, &a);
-                return Ok(a);
+        while let Some(done) = set.join_next().await {
+            let Ok((way, got, took)) = done else { continue };
+            record(way, got.is_ok(), took);
+            match got {
+                Ok(mut a) => {
+                    a.video_id = video_id.to_string();
+                    remember(way);
+                    keep(video_id, &a);
+                    // The other one is dropped (its request cancelled).
+                    return Ok(a);
+                }
+                Err(e) => {
+                    let name = way.name();
+                    why.push(format!("{}: {e}", name.split(' ').next().unwrap_or(&name)));
+                }
             }
-            Err(e) => why.push(format!("{}: {e}", name.split(' ').next().unwrap_or(&name))),
         }
     }
     Err(anyhow!("YouTube gave no audio ({})", why.join("; ")))
@@ -742,5 +769,62 @@ mod visionos_tests {
         assert_eq!(c["client"]["clientName"], "VISIONOS");
         assert_eq!(c["client"]["visitorData"], "VISITOR");
         assert!(visionos_context(None)["client"].get("visitorData").is_none());
+    }
+}
+
+#[cfg(test)]
+mod whole_song_tests {
+    use super::*;
+
+    /// Each working client's link, downloaded to its end in 4 MB ranges (YouTube cuts some links
+    /// after their first part): `cargo test --release --lib whole_song_tests -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn links_in_order() {
+        // As the app asks: two at once, the first good answer (cold, then the next songs).
+        for id in ["fJ9rUzIMcZQ", "kJQP7kiw5Fk", "lYBUbBu4W08", "dQw4w9WgXcQ"] {
+            let t = std::time::Instant::now();
+            match audio(id).await {
+                Ok(a) => println!("{id}: {} in {} ms (itag {})", a.client, t.elapsed().as_millis(), a.itag),
+                Err(e) => println!("{id}: {e:#}"),
+            }
+        }
+        println!("order: {:?}", order().iter().map(|w| w.name()).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn links_play_to_the_end() {
+        for way in [Way::App(2), Way::VisionOs, Way::Music] {
+            let id = "fJ9rUzIMcZQ";
+            let t = std::time::Instant::now();
+            let got = match way {
+                Way::VisionOs => visionos_audio(id).await,
+                Way::App(i) => player(&CLIENTS[i], id).await,
+                _ => web_player(way, id).await,
+            };
+            let a = match got {
+                Ok(a) => a,
+                Err(e) => {
+                    println!("{}: no link: {e:#}", way.name());
+                    continue;
+                }
+            };
+            let link_ms = t.elapsed().as_millis();
+            let size = a.size.unwrap_or(0);
+            let mut pos = 0u64;
+            let mut refused = None;
+            let t = std::time::Instant::now();
+            while pos < size {
+                let end = (pos + (4 << 20)).min(size) - 1;
+                let r = http().get(&a.url).header("User-Agent", a.user_agent).header("Range", format!("bytes={pos}-{end}")).send().await.unwrap();
+                if !r.status().is_success() {
+                    refused = Some(r.status().as_u16());
+                    break;
+                }
+                pos += r.bytes().await.unwrap().len() as u64;
+            }
+            println!("{:<28} link {link_ms} ms, {pos}/{size} bytes in {:?}{}", way.name(), t.elapsed(), refused.map(|c| format!(", refused HTTP {c}")).unwrap_or_default());
+        }
     }
 }

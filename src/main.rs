@@ -357,6 +357,8 @@ impl App {
         rymplayer::i18n::set_arabic(self.config.arabic);
         self.auto_update_check();
         self.spawn(async { Event::Store(s(rymplayer::plugins::store().await)) });
+        // YouTube's connection and the player script made ready, so the first song doesn't wait for them.
+        tokio::spawn(rymplayer::innertube::warm_up());
         stream::use_source(self.config.source);
         rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(self.config.music_engine));
         rymplayer::ytmusicapi::use_language(self.config.arabic);
