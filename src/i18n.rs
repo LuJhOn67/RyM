@@ -131,6 +131,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Mini player" => "المشغّل الصغير",
         "How big the lyrics are on the song's page" => "حجم الكلمات في صفحة الأغنية",
         "Save Up next as a playlist" => "حفظ التالي كقائمة تشغيل",
+        "Save Up next as a playlist (Enter / Esc)" => "حفظ التالي كقائمة تشغيل (Enter / Esc)",
         "Nothing to save" => "لا شيء للحفظ",
         "Sign in to save playlists" => "سجّل الدخول لحفظ القوائم",
         "Saving the playlist..." => "جارٍ حفظ القائمة...",

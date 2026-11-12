@@ -206,6 +206,11 @@ fn draw_main(f: &mut Frame, app: &mut App) {
         popup_bg(f, th, area);
         f.render_widget(typed(app, th).block(pane(th, i18n::tr("Download how many liked songs? (empty = all, Enter / Esc)"), true)), area);
     }
+    if app.input == Some(Input::SaveQueue) {
+        let area = centered(f.area(), 60, 3);
+        popup_bg(f, th, area);
+        f.render_widget(typed(app, th).block(pane(th, i18n::tr("Save Up next as a playlist (Enter / Esc)"), true)), area);
+    }
     if app.input == Some(Input::NewPlaylist) {
         let area = centered(f.area(), 56, 3);
         popup_bg(f, th, area);

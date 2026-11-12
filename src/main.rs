@@ -65,6 +65,8 @@ enum Input {
     Search,
     Cookie,
     NewPlaylist,
+    /// A name for a new playlist with the songs of Up next (from the playing one on).
+    SaveQueue,
     /// How many liked songs to download (empty = all).
     DownloadCount,
     /// Video plugin: a link from YouTube or any site to download.
@@ -109,6 +111,18 @@ enum Event {
     Romaji(String, Vec<String>),
     /// A song's lyrics in English, one per line.
     Translated(String, Vec<String>),
+    /// The signed-in Google account (its key lets this terminal and the phone find each other).
+    Account(Result<api::Account, String>),
+    /// Seamless Music: a phone's note on the Wi-Fi, and where it came from.
+    Peer(rymplayer::link::Announce, std::net::IpAddr),
+    /// The phone's music, taken over here (the phone's name, its queue and second).
+    TookOver(String, Result<rymplayer::link::State, String>),
+    /// The phone took the music: this one pauses.
+    LinkPause,
+    /// The phone's remote: the action and its value.
+    Remote(String, f32),
+    /// Up next saved as a playlist: what to say.
+    SavedQueue(Result<String, String>),
     /// Radio tracks to continue with after the queue ran out.
     Radio(Result<Vec<Track>, String>),
     Playlists(Result<Vec<Playlist>, String>),
@@ -223,6 +237,12 @@ struct App {
     scrobble: Option<(String, u64, f32, bool)>,
     /// When the Last.fm count last moved on.
     scrobble_tick: Instant,
+    /// Seamless Music: the account's key (signed in), what this terminal plays (told to the
+    /// phones), the phone song last seen, and no taking back from the phone until then.
+    account_key: Option<String>,
+    link: std::sync::Arc<std::sync::Mutex<rymplayer::link::Playing>>,
+    link_seen: Option<(String, String)>,
+    link_quiet_until: Option<Instant>,
     lyrics_status: String,
     /// The lyrics pane's color (the playing song's cover).
     lyrics_bg: (u8, u8, u8),
@@ -286,6 +306,10 @@ impl App {
             segments: (String::new(), Vec::new()),
             scrobble: None,
             scrobble_tick: Instant::now(),
+            account_key: None,
+            link: Default::default(),
+            link_seen: None,
+            link_quiet_until: None,
             crossfade_next: false,
             crossfade_for: None,
             listened_at: Instant::now(),
@@ -346,6 +370,25 @@ impl App {
                 self.resume_at = Some((t.video_id.clone(), saved.position));
                 self.pos = saved.position;
             }
+        }
+        // Seamless Music: the phones on this Wi-Fi say what they play, and hear what plays here.
+        {
+            let tx = self.tx.clone();
+            rymplayer::link::listen(move |note, ip| {
+                let _ = tx.send(Event::Peer(note, ip));
+            });
+            let (pause, control) = (self.tx.clone(), self.tx.clone());
+            let device = std::env::var(if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" }).unwrap_or_else(|_| "PC".into());
+            rymplayer::link::announce(
+                format!("{device} (terminal)"),
+                self.link.clone(),
+                move || {
+                    let _ = pause.send(Event::LinkPause);
+                },
+                move |what, value| {
+                    let _ = control.send(Event::Remote(what, value));
+                },
+            );
         }
         rymplayer::fx::set(self.config.fx());
         match Audio::new() {
@@ -427,6 +470,8 @@ impl App {
                 self.api = Some(api.clone());
                 self.mode = Mode::Main;
                 if user {
+                    let a2 = api.clone();
+                    self.spawn(async move { Event::Account(s(a2.account().await)) });
                     self.spawn(async move { Event::Playlists(s(api.library_playlists().await)) });
                 }
                 self.rebuild_nav(Vec::new());
@@ -627,6 +672,38 @@ impl App {
                     Err(e) => self.lyrics_status = format!("{}: {e}", tr("Lyrics")),
                 }
             }
+            Event::Account(Ok(a)) => {
+                let key = rymplayer::link::account_key(&a.name, &a.handle);
+                self.account_key = Some(key.clone());
+                if let Ok(mut p) = self.link.lock() {
+                    p.account = Some(key);
+                }
+            }
+            Event::Account(Err(_)) => {}
+            Event::Peer(note, ip) => self.heard_peer(note, ip),
+            Event::TookOver(device, Ok(state)) => {
+                let current = state.current;
+                let songs: Vec<Track> = state.songs.into_iter().map(Track::from).collect();
+                let vid = songs.get(current).map(|t| t.video_id.clone()).unwrap_or_default();
+                self.q = rymplayer::queue::Queue { songs, current: Some(current), added: 0 };
+                self.resume_at = Some((vid, state.position));
+                self.play(current);
+                self.status = format!("{} {device}", tr("Playing here, moved from"));
+            }
+            Event::TookOver(_, Err(e)) => self.status = format!("Seamless Music: {e}"),
+            Event::LinkPause => {
+                // Not taken back from the phone for a while (until something is played here).
+                self.link_quiet_until = Some(Instant::now() + Duration::from_secs(30 * 60));
+                if let Some(a) = &self.audio
+                    && a.is_playing()
+                {
+                    a.toggle();
+                    self.status = tr("Your phone took the music").into();
+                }
+            }
+            Event::Remote(what, value) => self.remote(&what, value),
+            Event::SavedQueue(Ok(text)) => self.status = text,
+            Event::SavedQueue(Err(e)) => self.status = format!("{}: {e}", tr("Couldn't create the playlist")),
             Event::Segments(vid, parts) => {
                 if self.segments.0 == vid {
                     self.segments.1 = parts;
@@ -860,6 +937,14 @@ impl App {
                 }
             }
             // Up next: move the selected song up or down, or take it out.
+            KeyCode::Char('S') if self.page == Page::Queue => {
+                if self.logged_in() {
+                    self.buffer.clear();
+                    self.input = Some(Input::SaveQueue);
+                } else {
+                    self.status = tr("Sign in to save playlists").into();
+                }
+            }
             KeyCode::Char('K') if self.page == Page::Queue => self.move_selected(-1),
             KeyCode::Char('J') if self.page == Page::Queue => self.move_selected(1),
             KeyCode::Up if self.page == Page::Queue && k.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected(-1),
@@ -1006,6 +1091,24 @@ impl App {
                 });
             }
             Input::DownloadCount | Input::Link => {}
+            Input::SaveQueue => {
+                let Some(api) = self.api.clone() else { return };
+                let from = self.q.current.unwrap_or(0);
+                let songs: Vec<String> = self.q.songs.iter().skip(from).filter(|t| rymplayer::is_youtube(&t.video_id)).map(|t| t.video_id.clone()).collect();
+                self.status = tr("Saving the playlist...").into();
+                self.spawn(async move {
+                    let r = async {
+                        let p = api.clone().create_playlist(text.clone()).await?;
+                        let n = songs.len();
+                        for vid in songs {
+                            let _ = api.clone().add_to_playlist(p.id.clone(), vid).await;
+                        }
+                        Ok::<_, anyhow::Error>(format!("{text}: {n} {}", tr("songs")))
+                    }
+                    .await;
+                    Event::SavedQueue(s(r))
+                });
+            }
             Input::NewPlaylist => {
                 let Some(api) = self.api.clone() else { return };
                 let song = self.pick_song.take().map(|t| t.video_id);
@@ -1551,6 +1654,10 @@ impl App {
         // (picked by hand, unless the last one ended on its own).
         let left = self.now_playing().cloned().map(|t| (t, self.pos, self.duration()));
         let manual = !std::mem::take(&mut self.auto_advance);
+        if manual {
+            // Something played here by hand: the phone's music may move here again.
+            self.link_quiet_until = None;
+        }
         rymplayer::ram_points::moved_on(left, track.clone(), manual);
         self.q.went_to(i);
         self.romaji.clear();
@@ -1635,6 +1742,74 @@ impl App {
         } else {
             self.continue_with_radio();
         }
+    }
+
+    /// Seamless Music: a phone of the same account plays while this terminal is idle: the music
+    /// moves here (Settings in RyM Slint: "Music Cross Ears" and "Take over from the phone").
+    fn heard_peer(&mut self, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
+        if !self.config.cross_ears || !self.config.link_auto {
+            return;
+        }
+        let Some(key) = self.account_key.clone() else { return };
+        let idle = !self.loading && !self.audio.as_ref().is_some_and(Audio::is_playing);
+        if note.kind != "phone" || note.account != key || !note.playing || note.video_id.is_empty() || !idle {
+            return;
+        }
+        if self.link_quiet_until.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
+        let seen = (note.device.clone(), note.video_id.clone());
+        if self.link_seen.as_ref() == Some(&seen) {
+            return;
+        }
+        self.link_seen = Some(seen);
+        let device = note.device.clone();
+        let port = note.port;
+        self.spawn(async move { Event::TookOver(device, s(rymplayer::link::take_over(ip, port, &key).await)) });
+    }
+
+    /// The phone's remote (when "Remote from the phone" is on).
+    fn remote(&mut self, what: &str, value: f32) {
+        if !self.config.remote_control {
+            return;
+        }
+        let playing = self.audio.as_ref().is_some_and(Audio::is_playing);
+        match what {
+            "toggle" | "play" | "pause" => {
+                if what == "toggle" || (what == "play") != playing {
+                    match &self.audio {
+                        Some(a) if a.is_loaded() => a.toggle(),
+                        _ => {
+                            if let Some(i) = self.q.current {
+                                self.play(i);
+                            }
+                        }
+                    }
+                }
+            }
+            "next" => self.next(),
+            "prev" => self.prev(),
+            "seek" => self.seek_to(value.max(0.0)),
+            "volume" => self.set_volume(value),
+            _ => {}
+        }
+    }
+
+    /// What plays here, for the phones (each tick).
+    fn tell_phones(&self) {
+        let Ok(mut p) = self.link.lock() else { return };
+        let playing = self.audio.as_ref().is_some_and(Audio::is_playing);
+        p.enabled = self.config.link_announce;
+        p.remote = self.config.remote_control;
+        if p.songs.len() != self.q.songs.len() || p.songs.first().map(|t| &t.video_id) != self.q.songs.first().map(|t| &t.video_id) {
+            p.songs = self.q.songs.clone();
+        }
+        p.current = self.q.current.unwrap_or(0);
+        p.position = self.pos;
+        p.since = playing.then(Instant::now);
+        p.playing = playing;
+        p.duration = self.duration();
+        p.volume = self.volume;
     }
 
     /// `e`: repeat off, the whole list, this song.
@@ -1912,6 +2087,7 @@ impl App {
             }
         }
         self.sound_tick();
+        self.tell_phones();
         let Some(a) = &mut self.audio else { return };
         self.pos = a.position();
         if self.loading || !a.finished() {
