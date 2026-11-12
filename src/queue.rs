@@ -116,9 +116,15 @@ impl Queue {
     }
 }
 
-/// A song's link for sharing.
+/// A song's link for sharing: RyM's own page, which opens the song in RyM (or YouTube Music
+/// without it); see `docs/play/index.html` and [`crate::links::PLAY_PAGE`].
 pub fn share_link(t: &Track) -> String {
-    crate::soundcloud::share_link(&t.video_id).unwrap_or_else(|| format!("https://music.youtube.com/watch?v={}", t.video_id))
+    if let Some(l) = crate::soundcloud::share_link(&t.video_id) {
+        return l;
+    }
+    let name = if t.artist.is_empty() { t.title.clone() } else { format!("{} - {}", t.title, t.artist) };
+    let name: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
+    format!("{}?v={}&t={name}", crate::links::PLAY_PAGE, t.video_id)
 }
 
 #[cfg(test)]

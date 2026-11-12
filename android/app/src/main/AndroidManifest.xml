@@ -39,6 +39,13 @@
                 <data android:host="m.youtube.com" />
                 <data android:host="youtu.be" />
             </intent-filter>
+            <!-- RyM's share page (https://lujhon67.github.io/RyM/play/?v=…) opens in RyM when picked. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="lujhon67.github.io" android:pathPrefix="/RyM/play" />
+            </intent-filter>
             <!-- rym://play?url=<a link>, rym://play?v=<video id>, rym://play?list=<list id>. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

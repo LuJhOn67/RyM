@@ -349,7 +349,9 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
 
 /** Shares the song's link (with its name) through the phone's share sheet. */
 fun shareSong(context: Context, t: Track) {
-    val link = if (com.rymplayer.data.SoundCloud.isSoundCloud(t.videoId)) com.rymplayer.data.SoundCloud.shareLink(t.videoId) else "https://music.youtube.com/watch?v=${t.videoId}"
+    // RyM's own page: it opens the song in RyM (YouTube Music without it). See docs/play/.
+    val name = java.net.URLEncoder.encode(if (t.artist.isBlank()) t.title else "${t.title} - ${t.artist}", "UTF-8")
+    val link = if (com.rymplayer.data.SoundCloud.isSoundCloud(t.videoId)) com.rymplayer.data.SoundCloud.shareLink(t.videoId) else "${com.rymplayer.data.YouTubeLinks.PLAY_PAGE}?v=${t.videoId}&t=$name"
     val text = "${t.title} - ${t.artist}\n$link"
     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text).putExtra(Intent.EXTRA_TITLE, t.title)
     context.startActivity(Intent.createChooser(send, tr("Share")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Play in RyM</title>
+<meta name="description" content="Open this song in RyM, the music player.">
+<meta name="theme-color" content="#0f0f0f">
+<style>
+  :root { --bg: #0f0f0f; --card: #1c1c1f; --text: #f1f1f1; --dim: #a8a8ad; --accent: #ea814a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; }
+  main { width: 100%; max-width: 380px; background: var(--card); border-radius: 20px; padding: 24px; text-align: center; }
+  img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; background: #2a2a2e; }
+  h1 { font-size: 20px; margin: 16px 0 4px; overflow-wrap: anywhere; }
+  p { color: var(--dim); margin: 0 0 20px; font-size: 14px; }
+  a.btn { display: block; padding: 13px; border-radius: 999px; text-decoration: none; font-weight: 600; margin-top: 10px; }
+  .main { background: var(--accent); color: #111; }
+  .alt { background: #2c2c31; color: var(--text); }
+  .brand { margin-top: 18px; font-size: 13px; color: var(--dim); }
+  .brand b { color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <img id="cover" alt="">
+  <h1 id="title">A song on RyM</h1>
+  <p id="note">Opening RyM…</p>
+  <a class="btn main" id="open" href="#">Play in RyM</a>
+  <a class="btn alt" id="web" href="https://music.youtube.com/">Listen on YouTube Music</a>
+  <a class="btn alt" href="https://github.com/LuJhOn67/RyM/releases/latest">Get RyM</a>
+  <div class="brand"><b>RyM</b> · the music player</div>
+</main>
+<script>
+  // The song (a YouTube video id) and its name, from the link RyM shared:
+  // https://lujhon67.github.io/RyM/play/?v=VIDEO_ID&t=Title%20-%20Artist
+  var q = new URLSearchParams(location.search);
+  var v = q.get("v") || "";
+  var list = q.get("list") || "";
+  if (!/^[A-Za-z0-9_-]{11}$/.test(v)) v = "";
+  if (!/^[A-Za-z0-9_-]{2,64}$/.test(list)) list = "";
+  var name = (q.get("t") || "").slice(0, 200);
+  var arabic = (navigator.language || "").toLowerCase().indexOf("ar") === 0;
+  if (arabic) {
+    document.documentElement.lang = "ar";
+    document.documentElement.dir = "rtl";
+    document.getElementById("open").textContent = "تشغيل في RyM";
+    document.getElementById("web").textContent = "اسمعها على يوتيوب ميوزك";
+    document.querySelectorAll("a.btn")[2].textContent = "حمّل RyM";
+  }
+  if (name) {
+    document.getElementById("title").textContent = name;
+    document.title = name + " — RyM";
+  }
+  var web = v ? "https://music.youtube.com/watch?v=" + v : (list ? "https://music.youtube.com/playlist?list=" + list : "https://music.youtube.com/");
+  document.getElementById("web").href = web;
+  if (v) document.getElementById("cover").src = "https://i.ytimg.com/vi/" + v + "/hqdefault.jpg";
+  else document.getElementById("cover").style.display = "none";
+
+  var query = v ? "v=" + v : (list ? "list=" + list : "");
+  var ua = navigator.userAgent;
+  var open;
+  if (/Android/i.test(ua)) {
+    // Android: RyM opens it; without RyM, the browser goes to YouTube Music instead.
+    open = "intent://play?" + query + "#Intent;scheme=rym;package=com.rymplayer;S.browser_fallback_url=" + encodeURIComponent(web) + ";end";
+  } else if (/iPhone|iPad|iPod/i.test(ua)) {
+    open = web;
+  } else {
+    // Windows and Linux: RyM registers rym:// links.
+    open = "rym://play?" + query;
+  }
+  document.getElementById("open").href = open;
+  var note = document.getElementById("note");
+  if (query && !/iPhone|iPad|iPod/i.test(ua)) {
+    location.href = open;
+    note.textContent = arabic ? "إذا ما انفتح RyM، دوس الزر." : "If RyM didn't open, tap the button.";
+  } else {
+    note.textContent = arabic ? "RyM مشغّل موسيقى." : "RyM is a music player.";
+  }
+</script>
+</body>
+</html>

@@ -16,6 +16,9 @@ object YouTubeLinks {
         data class Artist(val id: String) : Target
     }
 
+    /** RyM's page for shared songs (GitHub Pages, docs/play/): it opens the song in RyM. */
+    const val PLAY_PAGE = "https://lujhon67.github.io/RyM/play/"
+
     private val hosts = setOf("music.youtube.com", "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be")
     private val videoId = Regex("^[A-Za-z0-9_-]{11}$")
     private val url = Regex("""(?:https?://|rym://|spotify:)\S+""", RegexOption.IGNORE_CASE)
@@ -48,6 +51,12 @@ object YouTubeLinks {
             return uri.rawPath.orEmpty().split('/').firstOrNull { it.isNotEmpty() }?.takeIf { videoId.matches(it) }?.let { Target.Song(it) }
         }
         val host = uri.host?.lowercase() ?: return null
+        // RyM's own share page: ?v=<video id> or ?list=<list id>.
+        if (host == "lujhon67.github.io" && uri.rawPath.orEmpty().lowercase().startsWith("/rym/play")) {
+            val q = query(uri)
+            q["v"]?.takeIf { videoId.matches(it) }?.let { return Target.Song(it) }
+            return q["list"]?.takeIf { it.isNotEmpty() }?.let { listTarget(it) }
+        }
         if (host !in hosts) return null
         val segments = uri.rawPath.orEmpty().split('/').filter { it.isNotEmpty() }
         val query = uri.rawQuery.orEmpty().split('&').mapNotNull {

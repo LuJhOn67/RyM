@@ -33,6 +33,13 @@ class YouTubeLinksTest {
     }
 
     @Test
+    fun rymSharePage() {
+        assertEquals(Target.Song("dQw4w9WgXcQ"), YouTubeLinks.parse("https://lujhon67.github.io/RyM/play/?v=dQw4w9WgXcQ&t=Song+-+Artist"))
+        assertEquals(Target.Playlist("PLxyz"), YouTubeLinks.parse("https://lujhon67.github.io/RyM/play/?list=PLxyz"))
+        assertEquals("https://lujhon67.github.io/RyM/play/?v=dQw4w9WgXcQ&t=x", YouTubeLinks.firstLink("Song - Artist\nhttps://lujhon67.github.io/RyM/play/?v=dQw4w9WgXcQ&t=x"))
+    }
+
+    @Test
     fun rymLinks() {
         assertEquals(Target.Song("dQw4w9WgXcQ"), YouTubeLinks.parse("rym://play?url=https%3A%2F%2Fmusic.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ"))
         assertEquals(Target.Song("dQw4w9WgXcQ"), YouTubeLinks.parse("rym://play?v=dQw4w9WgXcQ"))

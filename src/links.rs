@@ -31,6 +31,9 @@ impl Target {
     }
 }
 
+/// RyM's page for shared songs (GitHub Pages, `docs/play/`): it opens the song in RyM.
+pub const PLAY_PAGE: &str = "https://lujhon67.github.io/RyM/play/";
+
 const YOUTUBE: [&str; 6] = ["music.youtube.com", "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"];
 
 fn is_video_id(s: &str) -> bool {
@@ -91,6 +94,13 @@ fn parse_at(link: &str, depth: u8) -> Option<Target> {
         return None;
     }
     let host = url.host_str()?.to_ascii_lowercase();
+    // RyM's own share page: ?v=<video id> or ?list=<list id>.
+    if host == "lujhon67.github.io" && url.path().to_ascii_lowercase().starts_with("/rym/play") {
+        if let Some(v) = query("v").filter(|v| is_video_id(v)) {
+            return Some(Target::Song(v));
+        }
+        return query("list").as_deref().and_then(list_target);
+    }
     if !YOUTUBE.contains(&host.as_str()) {
         return None;
     }
@@ -147,6 +157,16 @@ mod tests {
         assert_eq!(parse("https://music.youtube.com/channel/UCabc"), Some(Artist("UCabc".into())));
         assert_eq!(parse("https://example.com/watch?v=dQw4w9WgXcQ"), None);
         assert_eq!(parse("just words"), None);
+    }
+
+    #[test]
+    fn rym_share_page() {
+        assert_eq!(parse("Song - Artist\nhttps://lujhon67.github.io/RyM/play/?v=dQw4w9WgXcQ&t=Song%20-%20Artist"), Some(Song("dQw4w9WgXcQ".into())));
+        assert_eq!(parse("https://lujhon67.github.io/RyM/play/?list=PLxyz"), Some(Playlist("PLxyz".into())));
+        let t = crate::api::Track { video_id: "dQw4w9WgXcQ".into(), title: "Never Gonna".into(), artist: "Rick & co".into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None };
+        let link = crate::queue::share_link(&t);
+        assert_eq!(link, "https://lujhon67.github.io/RyM/play/?v=dQw4w9WgXcQ&t=Never+Gonna+-+Rick+%26+co");
+        assert_eq!(parse(&link), Some(Song("dQw4w9WgXcQ".into())));
     }
 
     #[test]
