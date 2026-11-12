@@ -64,9 +64,10 @@ impl Arriving {
             failed: Mutex::new(None),
         });
         let id = save_to.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let id_for_fetch = id.clone();
         let worker = shared.clone();
         tokio::spawn(async move {
-            let result = fetch(&url, &headers, &worker).await;
+            let result = fetch(url, headers, &worker, &id_for_fetch).await;
             if let Err(e) = &result {
                 *worker.failed.lock().unwrap() = Some(e.to_string());
             }
@@ -123,6 +124,8 @@ enum Step {
 enum Fail {
     Retry(anyhow::Error),
     Stop(anyhow::Error),
+    /// The link was refused (403, 410...): a fresh one for the same file may go on.
+    Refused(anyhow::Error),
 }
 
 fn retry(e: reqwest::Error) -> Fail {
@@ -134,19 +137,37 @@ fn retry(e: reqwest::Error) -> Fail {
 /// for up to two minutes), so the song goes on once the network is back. A song nobody plays any
 /// more (skipped before it was all in) stops downloading and its memory is let go; it isn't
 /// cached.
-async fn fetch(url: &str, headers: &[(String, String)], shared: &Arc<Shared>) -> Result<()> {
+///
+/// A link YouTube stops taking in the middle of the song (it cuts some after their first part,
+/// or it expired) is swapped for a fresh one of the same file, once, and the song goes on from
+/// the same byte. Without that the decoder ran dry and the player went on to the next song.
+async fn fetch(mut url: String, mut headers: Vec<(String, String)>, shared: &Arc<Shared>, id: &str) -> Result<()> {
     let nobody_listens = || Arc::strong_count(shared) == 1;
     let mut pos = 0u64;
     let mut down_since: Option<std::time::Instant> = None;
     let mut tries = 0u32;
+    let mut renewed = false;
     loop {
-        match fetch_range(url, headers, shared, &mut pos).await {
+        match fetch_range(&url, &headers, shared, &mut pos).await {
             Ok(Step::Done) => return Ok(()),
             Ok(Step::More) => {
                 down_since = None;
                 tries = 0;
             }
             Err(Fail::Stop(e)) => return Err(e),
+            Err(Fail::Refused(e)) => {
+                if pos == 0 || renewed {
+                    return Err(e);
+                }
+                renewed = true;
+                match renewed_link(id, shared.total.load(Ordering::Relaxed)).await {
+                    Some((u, h)) => {
+                        url = u;
+                        headers = h;
+                    }
+                    None => return Err(e),
+                }
+            }
             Err(Fail::Retry(e)) => {
                 let since = *down_since.get_or_insert_with(std::time::Instant::now);
                 if since.elapsed() > GIVE_UP_AFTER || nobody_listens() {
@@ -190,6 +211,9 @@ async fn fetch_range(url: &str, headers: &[(String, String)], shared: &Arc<Share
         if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Err(Fail::Retry(anyhow!("audio: HTTP {status}")));
         }
+        if status.is_client_error() {
+            return Err(Fail::Refused(anyhow!("audio: HTTP {status}")));
+        }
         let mut resp = resp.error_for_status().map_err(|e| Fail::Stop(anyhow!("audio: {e}")))?;
         let whole = resp.status() == reqwest::StatusCode::OK;
         if let Some(t) = resp
@@ -230,6 +254,17 @@ async fn fetch_range(url: &str, headers: &[(String, String)], shared: &Arc<Share
         }
         Ok(Step::More)
     }
+}
+
+/// A fresh link for a YouTube song's same file (the same size, so its bytes line up), when the
+/// one in use was refused mid-song.
+async fn renewed_link(id: &str, total: u64) -> Option<(String, Vec<(String, String)>)> {
+    if total == 0 || !crate::is_youtube(id) {
+        return None;
+    }
+    crate::innertube::forget(id);
+    let a = crate::innertube::audio(id).await.ok()?;
+    (a.size == Some(total)).then(|| (a.url, vec![("User-Agent".to_string(), a.user_agent.to_string())]))
 }
 
 fn http() -> &'static reqwest::Client {

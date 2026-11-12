@@ -641,3 +641,41 @@ mod automix_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod live_seek_tests {
+    use super::*;
+    use rodio::Source;
+
+    /// A real song as it streams: a few seconds, back to the start, then a minute in, then near
+    /// the end; the sound must go on after each seek (an early end skipped to the next song):
+    /// `cargo test --release --lib seek_tests -- --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn seeking_keeps_the_song_going() {
+        for id in ["fJ9rUzIMcZQ", "kJQP7kiw5Fk"] {
+            if let Some(old) = crate::stream::cached(id) {
+                let _ = std::fs::remove_file(old);
+            }
+            let p = crate::stream::open(id.to_string()).await.expect("song");
+            let crate::stream::Playable::Arriving(a) = p else { panic!("not streamed") };
+            let report = tokio::task::spawn_blocking(move || {
+                let mut src = FileSource::from_source(Box::new(a.reader()), Some(a.ext.as_str())).unwrap();
+                let per_sec = src.rate as usize * src.channels as usize;
+                let take = |src: &mut FileSource, secs: usize| src.by_ref().take(per_sec * secs).count() / per_sec.max(1);
+                let mut out = vec![format!("start: {} s", take(&mut src, 3))];
+                for to in [0.0f32, 60.0, 20.0, 150.0] {
+                    let t = std::time::Instant::now();
+                    let r = src.try_seek(Duration::from_secs_f32(to));
+                    let got = take(&mut src, 3);
+                    out.push(format!("seek {to} s ({r:?}) then {got} s in {:?}", t.elapsed()));
+                }
+                out
+            })
+            .await
+            .unwrap();
+            println!("{id}: {}", report.join(" | "));
+            assert!(report.iter().skip(1).all(|l| l.contains("then 3 s")), "{id}: the sound stopped after a seek");
+        }
+    }
+}
