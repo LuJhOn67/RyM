@@ -220,6 +220,7 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section(tr("Lyrics")) {
                 SwitchRow(Icons.Default.Translate, tr("Translate Japanese lyrics"), tr("English in small letters under each line: the lyrics site's own translation, else a machine translation"), vm.translateLyrics) { vm.toggleTranslateLyrics() }
+                SwitchRow(Icons.Default.Translate, tr("Romaji"), tr("Japanese lines in Latin letters under them"), vm.romajiLyrics) { vm.toggleRomajiLyrics() }
             }
             Section(tr("Devices")) {
                 SwitchRow(Icons.Default.Devices, "Seamless Music", tr("Music moves between this phone and RyM on your PC (same Wi-Fi and Google account): to the PC when it's idle, and here when this phone is idle"), vm.crossEars) { vm.toggleCrossEars() }

@@ -576,6 +576,10 @@ enum Ev {
     MediaKey(souvlaki::MediaControlEvent),
     /// English for the lyrics of a song (Japanese songs), lined up with their lines.
     Translated(String, String, Vec<String>),
+    /// A song's Japanese lines in Latin letters (its id, the lyrics' source, one per line).
+    Romaji(String, String, Vec<String>),
+    /// SponsorBlock's non-music parts of a song (its id).
+    Segments(String, rymplayer::sponsorblock::Segments),
     /// Search suggestions for what was typed (the account's search history first).
     Suggestions(String, anyhow::Result<Vec<rymplayer::api::Suggestion>>),
     /// The update downloaded and put in place: the program to start again.
@@ -701,6 +705,10 @@ struct Ui {
     armed: Option<usize>,
     held: bool,
     request_id: u64,
+    /// The lyrics shown in romaji: for which song and source, and the lines.
+    romaji: (String, Vec<String>),
+    /// The playing song's SponsorBlock parts (its id, then the parts).
+    segments: (String, rymplayer::sponsorblock::Segments),
     loading: bool,
     radio_pending: bool,
     /// Liquid Aurora: the loudest bass lately; the theme extras last shown (vinyl, aurora, colors).
@@ -1552,6 +1560,8 @@ fn build(app: &Application) {
         armed: None,
         held: false,
         request_id: 0,
+        romaji: (String::new(), Vec::new()),
+        segments: (String::new(), Vec::new()),
         loading: false,
         radio_pending: false,
         bass_peak: 0.05,
@@ -2256,6 +2266,33 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     }
     page.append(&setting_row(tr("Crossfade"), tr("Seconds the end of a song and the start of the next play together (0 = off)"), &fade));
     page.append(&setting_row(tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), &switch(config.automix, ui, |c, on| c.automix = on)));
+    page.append(&setting_row(tr("Skip non-music parts"), tr("SponsorBlock: a music video's intro, talk and outro are skipped"), &switch(config.sponsorblock, ui, |c, on| c.sponsorblock = on)));
+    page.append(&setting_row(tr("Romaji"), tr("Japanese lines in Latin letters under them"), &switch(config.romaji, ui, |c, on| c.romaji = on)));
+    {
+        // The alarm: on or off, and its time (07:30).
+        let row = gtk::Box::new(Orientation::Horizontal, 8);
+        let time = gtk::Entry::new();
+        time.set_text(if config.alarm_time.is_empty() { "07:30" } else { &config.alarm_time });
+        time.set_width_chars(6);
+        time.set_max_length(5);
+        time.set_valign(Align::Center);
+        {
+            let ui = ui.clone();
+            time.connect_changed(move |e| {
+                let t = e.text().to_string();
+                let ok = t.split_once(':').and_then(|(h, m)| Some((h.parse::<u32>().ok()?, m.parse::<u32>().ok()?))).filter(|(h, m)| *h < 24 && *m < 60);
+                if let Some((h, m)) = ok {
+                    let mut s = ui.borrow_mut();
+                    s.config.alarm_time = format!("{h:02}:{m:02}");
+                    s.config.alarm_rang.clear();
+                    s.config.save();
+                }
+            });
+        }
+        row.append(&time);
+        row.append(&switch(config.alarm_on, ui, |c, on| c.alarm_on = on));
+        page.append(&setting_row(tr("Alarm"), tr("Music starts at this time (RyM has to be open)"), &row));
+    }
     {
         // Japanese lyrics: English under each line, or not (the lyrics shown again either way).
         let w = gtk::Switch::new();
@@ -4729,6 +4766,11 @@ fn play_at(ui: &Shared, i: usize) {
         });
         let manual = std::mem::take(&mut s.user_pick);
         rymplayer::ram_points::moved_on(left, track.clone(), manual);
+        s.segments = (track.video_id.clone(), Vec::new());
+        if s.config.sponsorblock && rymplayer::is_youtube(&track.video_id) {
+            let v = track.video_id.clone();
+            spawn(&s, async move { Ev::Segments(v.clone(), rymplayer::sponsorblock::segments(&v).await) });
+        }
         s.request_id += 1;
         s.q.went_to(i);
         // The panel opens on the lyrics when a song starts (unless closed by hand).
@@ -4844,6 +4886,36 @@ fn prefetch_next(ui: &Shared) {
     }
 }
 
+/// The playing song's id, from the state already borrowed.
+fn now_playing_of(s: &Ui) -> String {
+    s.q.now().map(|t| t.video_id.clone()).unwrap_or_default()
+}
+
+/// The alarm rings: what was playing goes on, else the liked songs (shuffled).
+fn ring_alarm(ui: &Shared) {
+    toast(ui, tr("Alarm"));
+    let (loaded, playing, current) = {
+        let s = ui.borrow();
+        (s.audio.as_ref().is_some_and(Audio::is_loaded), s.audio.as_ref().is_some_and(Audio::is_playing), s.q.current)
+    };
+    if playing {
+        return;
+    }
+    if loaded || current.is_some() {
+        toggle_playback(ui);
+        return;
+    }
+    let mut songs: Vec<Track> = ui.borrow().liked_tracks.clone();
+    let n = songs.len();
+    for i in (1..n).rev() {
+        let j = (rymplayer::updates::now() as usize).wrapping_mul(2_654_435_761).wrapping_add(i * 40503) % (i + 1);
+        songs.swap(i, j);
+    }
+    if !songs.is_empty() {
+        play_list(ui, &songs, 0);
+    }
+}
+
 fn toggle_playback(ui: &Shared) {
     let (loaded, current) = {
         let s = ui.borrow();
@@ -4937,6 +5009,19 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     } else {
         lyrics.synced.iter().map(|(_, l)| if l.is_empty() { "♪".to_string() } else { l.clone() }).collect()
     };
+    // Romaji (the setting): kana by the table at once, then the reading with kanji.
+    let romaji_key = format!("{}|{}", s.q.now().map(|t| t.video_id.clone()).unwrap_or_default(), lyrics.source);
+    let mut ask_romaji = None;
+    let romaji: Vec<String> = if s.config.romaji && lines.iter().any(|l| rymplayer::romaji::has_kana(l)) {
+        if s.romaji.0 == romaji_key {
+            s.romaji.1.clone()
+        } else {
+            ask_romaji = Some(lines.clone());
+            lines.iter().map(|l| if rymplayer::romaji::has_kana(l) { rymplayer::romaji::kana(l) } else { String::new() }).collect()
+        }
+    } else {
+        Vec::new()
+    };
     if lyrics.synced.is_empty() {
         let note = label(tr("These lyrics aren't synced to the song"), &["lyrics-note"]);
         note.set_margin_bottom(10);
@@ -4948,17 +5033,20 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
         text.set_wrap(true);
         // A Japanese song's English, small under the line (one widget a line: the sung line is
         // found by its place).
-        let l: gtk::Widget = match lyrics.translation.get(i).filter(|t| !t.is_empty()) {
-            Some(tr) => {
-                let b = gtk::Box::new(Orientation::Vertical, 2);
-                b.append(&text);
-                let small = label(tr, &["lyric-tr"]);
+        let ro = romaji.get(i).filter(|t| !t.is_empty());
+        let en = lyrics.translation.get(i).filter(|t| !t.is_empty());
+        let l: gtk::Widget = if ro.is_some() || en.is_some() {
+            let b = gtk::Box::new(Orientation::Vertical, 2);
+            b.append(&text);
+            for small in [ro, en].into_iter().flatten() {
+                let small = label(small, &["lyric-tr"]);
                 small.set_wrap(true);
                 small.set_ellipsize(gtk::pango::EllipsizeMode::None);
                 b.append(&small);
-                b.upcast()
             }
-            None => text.upcast(),
+            b.upcast()
+        } else {
+            text.upcast()
         };
         if lyrics.synced.is_empty() {
             l.add_css_class("now");
@@ -4986,6 +5074,11 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     let wants = translate && lyrics.translation.is_empty() && rymplayer::lyrics::is_japanese(&lyrics);
     let source = lyrics.source.clone();
     s.lyrics = Some(lyrics.clone());
+    if let Some(lines) = ask_romaji {
+        s.romaji = (romaji_key.clone(), romaji.clone());
+        let (vid, src) = (now_playing_of(&s), source.clone());
+        spawn(&s, async move { Ev::Romaji(vid, src, rymplayer::romaji::romanize(&lines).await) });
+    }
     drop(s);
     fill_pills(ui);
     if wants && let Some(t) = now_playing(ui) {
@@ -5057,7 +5150,33 @@ fn tick(ui: &Shared) {
         s.stats_written = Instant::now();
         rymplayer::stats::flush();
     }
+    // The alarm: once a day at its time (RyM open).
+    if s.config.alarm_on {
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        if now.format("%H:%M").to_string() == s.config.alarm_time && s.config.alarm_rang != today {
+            s.config.alarm_rang = today;
+            s.config.save();
+            drop(s);
+            ring_alarm(ui);
+            return;
+        }
+    }
     if s.loading {
+        return;
+    }
+    // SponsorBlock: a music video's non-music parts are jumped over (each once).
+    if playing
+        && s.config.sponsorblock
+        && s.q.now().is_some_and(|t| t.video_id == s.segments.0)
+        && let Some(to) = rymplayer::sponsorblock::skip_to(&s.segments.1, pos)
+    {
+        s.segments.1.retain(|p| p.1 != to);
+        if let Some(a) = &s.audio {
+            a.seek(to);
+        }
+        drop(s);
+        toast(ui, tr("Skipped a part that isn't music (SponsorBlock)"));
         return;
     }
     // Sleep timer: the last 10 seconds fade out, then the music stops.
@@ -6094,6 +6213,21 @@ fn poll_events(ui: &Shared) {
                 }
             }
             Ev::Suggestions(..) => {}
+            Ev::Romaji(vid, source, lines) => {
+                let current = ui.borrow().lyrics.clone().filter(|l| l.source == source && now_playing(ui).is_some_and(|t| t.video_id == vid));
+                if let Some(l) = current.filter(|_| lines.iter().any(|x| !x.is_empty())) {
+                    ui.borrow_mut().romaji = (format!("{vid}|{source}"), lines);
+                    let line = ui.borrow().lyric_line;
+                    show_lyrics(ui, Some(l));
+                    ui.borrow_mut().lyric_line = line.map(|_| usize::MAX);
+                }
+            }
+            Ev::Segments(vid, parts) => {
+                let mut s = ui.borrow_mut();
+                if s.segments.0 == vid {
+                    s.segments.1 = parts;
+                }
+            }
             Ev::Translated(vid, source, tr) => {
                 let current = ui.borrow().lyrics.clone().filter(|l| l.source == source && now_playing(ui).is_some_and(|t| t.video_id == vid));
                 if let Some(mut l) = current.filter(|_| !tr.is_empty()) {

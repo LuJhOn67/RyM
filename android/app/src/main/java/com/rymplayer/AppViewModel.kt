@@ -1361,8 +1361,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private var translateJob: Job? = null
 
+    /** The lines shown in Latin letters (Japanese songs), or nothing. */
+    var lyricsRomaji by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** Japanese lyrics with romaji under each line (the setting). */
+    var romajiLyrics by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("lyrics_romaji", false))
+        private set
+
+    fun toggleRomajiLyrics() {
+        romajiLyrics = !romajiLyrics
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lyrics_romaji", romajiLyrics).apply()
+        translateShown()
+    }
+
+    private var romajiJob: Job? = null
+
+    /** The lyrics shown get their romaji: kana at once by the table, then the reading with kanji. */
+    private fun romajiShown() {
+        romajiJob?.cancel()
+        val l = lyrics
+        val lines = l?.let { com.rymplayer.data.Translate.shownLines(it) }.orEmpty()
+        if (!romajiLyrics || l == null || lines.none(com.rymplayer.data.Romaji::hasKana)) {
+            lyricsRomaji = emptyList()
+            return
+        }
+        lyricsRomaji = lines.map { if (com.rymplayer.data.Romaji.hasKana(it)) com.rymplayer.data.Romaji.kana(it) else "" }
+        romajiJob = viewModelScope.launch {
+            val r = com.rymplayer.data.Romaji.romanize(lines)
+            if (lyrics === l && r.any { it.isNotBlank() }) lyricsRomaji = r
+        }
+    }
+
+    /** Up next, from the playing song on, saved as a new playlist of the account. */
+    fun saveQueue(title: String) = viewModelScope.launch {
+        val from = player.index.coerceAtLeast(0)
+        val songs = player.queue.drop(from).filter { com.rymplayer.data.isYouTube(it.videoId) }
+        status = tr("Saving the playlist...")
+        runCatching {
+            val p = api.createPlaylist(title)
+            for (t in songs) runCatching { api.addToPlaylist(p.id, t.videoId) }
+            playlists = listOf(p) + playlists
+        }.onSuccess { status = "$title: ${songs.size} ${tr("songs")}" }
+            .onFailure { status = tr("Couldn't create the playlist") }
+    }
+
     /** The lyrics shown get their English: saved with them, or looked for (the site's own, else a machine translation). */
     private fun translateShown() {
+        romajiShown()
         translateJob?.cancel()
         val l = lyrics
         val t = player.current

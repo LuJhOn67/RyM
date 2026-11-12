@@ -385,6 +385,7 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
             itemsIndexed(l.plain) { i, s ->
                 Column(Modifier.padding(vertical = 4.dp)) {
                     Text(s, color = Color.White, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold)
+                    vm.lyricsRomaji.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { Text(it, color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp, lineHeight = 18.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic) }
                     vm.lyricsTranslation.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { Text(it, color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold) }
                 }
             }
@@ -432,7 +433,10 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
                         fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold,
                     )
                 } else Text(line.ifEmpty { "♪" }, color = color, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
-                // A Japanese song's English, small under the line.
+                // A Japanese song's romaji and English, small under the line.
+                vm.lyricsRomaji.getOrNull(i)?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, color = color.copy(alpha = 0.65f), fontSize = 15.sp, lineHeight = 19.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.padding(top = 2.dp))
+                }
                 vm.lyricsTranslation.getOrNull(i)?.takeIf { it.isNotBlank() }?.let {
                     Text(it, color = color.copy(alpha = 0.8f), fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
                 }
@@ -587,8 +591,16 @@ private fun QueueView(vm: AppViewModel) {
         val seen = HashMap<String, Int>()
         songs.map { t -> val n = seen[t.videoId] ?: 0; seen[t.videoId] = n + 1; "${t.videoId}#$n" }
     }
+    var naming by remember { mutableStateOf(false) }
+    if (naming) NewPlaylist({ naming = false }) { vm.saveQueue(it); naming = false }
     Column(Modifier.fillMaxSize()) {
-        Text(tr("Hold a song for 2 seconds, then drag it to move it"), color = Dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(tr("Hold a song for 2 seconds, then drag it to move it"), color = Dim, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            // Up next as a playlist of the account (signed in).
+            if (vm.signedIn == true && vm.api.signedIn) {
+                androidx.compose.material3.TextButton({ naming = true }) { Text(tr("Save as playlist"), color = Color.White, fontSize = 13.sp) }
+            }
+        }
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize().pointerInput(drag) {

@@ -34,6 +34,10 @@ object I18n {
         // actions
         "Play" to "تشغيل",
         "Pause" to "إيقاف مؤقت",
+        "Save as playlist" to "حفظ كقائمة تشغيل",
+        "Romaji" to "روماجي",
+        "Japanese lines in Latin letters under them" to "الأسطر اليابانية بحروف لاتينية تحتها",
+        "Saving the playlist..." to "جارٍ حفظ القائمة...",
         "Shuffle" to "عشوائي",
         "Next" to "التالي",
         "Previous" to "السابق",
