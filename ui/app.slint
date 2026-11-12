@@ -106,7 +106,11 @@ export global Theme {
     in-out property <bool> custom: false;
     in-out property <Pal> p;
     out property <bool> dark: custom ? p.dark : index != 1;
-    out property <bool> wide: index == 2;
+    out property <bool> wide: index == 2 || index == 3;
+    // RyM Verde: rounded panels with gaps on a black frame.
+    out property <bool> panels: !custom && index == 3;
+    out property <color> frame: panels ? #000000 : bg;
+    out property <length> gap: panels ? 8px * Ui.k : 0px;
     out property <float> round: custom ? p.round : 1;
     out property <bool> glow: custom && p.glow;
     out property <float> glass: custom ? p.glass : 0;
@@ -134,19 +138,19 @@ export global Theme {
     // The accent from the playing song's cover (Settings), when on.
     in-out property <bool> cover-accent: false;
     in-out property <color> cover-color: #ea814a;
-    out property <color> bg: custom ? p.bg : (index == 1 ? #e8e8e8 : (index == 2 ? #0f0f0f : #343345));
-    out property <color> raised: custom ? p.raised : (index == 1 ? #f4f4f4 : (index == 2 ? #272727 : #3d3c50));
-    out property <color> text: custom ? p.text : (index == 1 ? #111111 : (index == 2 ? #f1f1f1 : #ffffff));
-    out property <color> dim: custom ? p.dim : (index == 1 ? #4d4d55 : (index == 2 ? #aaaaaa : #c6c6c6));
-    out property <color> faint: custom ? p.dim : (index == 1 ? #5a5a62 : (index == 2 ? #9a9a9a : #d5d5d5));
-    out property <color> icon: custom ? p.icon : (index == 1 ? #3c3b4a : (index == 2 ? #f1f1f1 : #e4e3e3));
-    out property <color> handle: custom ? p.dim.with-alpha(0.7) : (index == 2 ? #717171 : #666477);
-    out property <color> accent: cover-accent ? cover-color : (custom ? p.accent : (index == 2 ? #ff4e45 : #ea814a));
-    out property <color> bar: custom ? p.bar : (index == 1 ? #b4b3bd : (index == 2 ? #3f3f3f : #d9d9d9));
-    out property <color> border: cover-border ? cover-color.with-alpha(0.85) : (custom ? p.border : (index == 2 ? #3f3f3f : #666477.with-alpha(0.5)));
+    out property <color> bg: custom ? p.bg : (index == 3 ? #121212 : (index == 1 ? #e8e8e8 : (index == 2 ? #0f0f0f : #343345)));
+    out property <color> raised: custom ? p.raised : (index == 3 ? #1f1f1f : (index == 1 ? #f4f4f4 : (index == 2 ? #272727 : #3d3c50)));
+    out property <color> text: custom ? p.text : (index == 3 ? #ffffff : (index == 1 ? #111111 : (index == 2 ? #f1f1f1 : #ffffff)));
+    out property <color> dim: custom ? p.dim : (index == 3 ? #b3b3b3 : (index == 1 ? #4d4d55 : (index == 2 ? #aaaaaa : #c6c6c6)));
+    out property <color> faint: custom ? p.dim : (index == 3 ? #a7a7a7 : (index == 1 ? #5a5a62 : (index == 2 ? #9a9a9a : #d5d5d5)));
+    out property <color> icon: custom ? p.icon : (index == 3 ? #ffffff : (index == 1 ? #3c3b4a : (index == 2 ? #f1f1f1 : #e4e3e3)));
+    out property <color> handle: custom ? p.dim.with-alpha(0.7) : (index == 3 ? #535353 : (index == 2 ? #717171 : #666477));
+    out property <color> accent: cover-accent ? cover-color : (custom ? p.accent : (index == 3 ? #1ed760 : (index == 2 ? #ff4e45 : #ea814a)));
+    out property <color> bar: custom ? p.bar : (index == 3 ? #4d4d4d : (index == 1 ? #b4b3bd : (index == 2 ? #3f3f3f : #d9d9d9)));
+    out property <color> border: cover-border ? cover-color.with-alpha(0.85) : (custom ? p.border : (index == 3 ? #2a2a2a : (index == 2 ? #3f3f3f : #666477.with-alpha(0.5))));
     out property <color> hover: dark ? #ffffff14 : #0000000d;
-    out property <color> wave-from: cover-accent ? cover-color.brighter(0.5) : (custom ? p.accent2 : (index == 2 ? #ff8a80 : #f9d19e));
-    out property <color> wave-to: cover-accent ? cover-color : (custom ? p.accent : (index == 2 ? #ff0033 : #d53a0c));
+    out property <color> wave-from: cover-accent ? cover-color.brighter(0.5) : (custom ? p.accent2 : (index == 3 ? #3be477 : (index == 2 ? #ff8a80 : #f9d19e)));
+    out property <color> wave-to: cover-accent ? cover-color : (custom ? p.accent : (index == 3 ? #1db954 : (index == 2 ? #ff0033 : #d53a0c)));
 }
 
 // The scale of the 1600 x 1024 layout to the window, the size picked in the app, and Arabic.
@@ -1982,7 +1986,7 @@ component Pages inherits Rectangle {
 
 component WideTop inherits Rectangle {
     height: 64px * Ui.k;
-    background: Theme.bg;
+    background: Theme.frame;
     Text {
         x: Ui.rtl ? parent.width - self.width - 24px * Ui.k : 24px * Ui.k;
         y: (parent.height - self.height) / 2;
@@ -2255,7 +2259,7 @@ component WatchPage inherits Rectangle {
 // The player along the bottom (RyM Wide, away from the watch page).
 component BottomBar inherits Rectangle {
     height: 80px * Ui.k;
-    background: Theme.raised;
+    background: Theme.panels ? Theme.frame : Theme.raised;
     // The progress along its top: click to seek.
     Rectangle {
         y: 0;
@@ -2285,7 +2289,22 @@ component BottomBar inherits Rectangle {
             alignment: start;
             spacing: 10px * Ui.k;
             VerticalLayout { alignment: center; Icon { size: 42px * Ui.k; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } } }
-            VerticalLayout { alignment: center; Icon { size: 52px * Ui.k; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg"); clicked => { App.toggle-play(); } } }
+            VerticalLayout {
+                alignment: center;
+                // RyM Verde: a white round button with a dark sign.
+                Rectangle {
+                    width: 52px * Ui.k;
+                    height: 52px * Ui.k;
+                    border-radius: Theme.panels ? self.width / 2 : 0px;
+                    background: Theme.panels ? #ffffff : transparent;
+                    Icon {
+                        size: Theme.panels ? 34px * Ui.k : 52px * Ui.k;
+                        tint: Theme.panels ? #000000 : Theme.icon;
+                        source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg");
+                        clicked => { App.toggle-play(); }
+                    }
+                }
+            }
             VerticalLayout { alignment: center; Icon { size: 42px * Ui.k; source: @image-url("icons/next.svg"); clicked => { App.next(); } } }
             VerticalLayout {
                 alignment: center;
@@ -2328,18 +2347,22 @@ component BottomBar inherits Rectangle {
 }
 
 component WideLayout inherits Rectangle {
-    background: Theme.bg;
+    background: Theme.frame;
     WideTop { y: 0; width: parent.width; }
     WideSide {
-        x: Ui.rtl ? parent.width - self.width : 0;
+        x: Ui.rtl ? parent.width - self.width - Theme.gap : Theme.gap;
         y: 64px * Ui.k;
-        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k);
+        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k) - Theme.gap;
+        border-radius: Theme.panels ? 8px * Ui.k : 0px;
     }
     Rectangle {
-        x: Ui.rtl ? 0 : 250px * Ui.k;
+        x: Ui.rtl ? Theme.gap : 250px * Ui.k + 2 * Theme.gap;
         y: 64px * Ui.k;
-        width: parent.width - 250px * Ui.k;
-        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k);
+        width: parent.width - 250px * Ui.k - 3 * Theme.gap;
+        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k) - Theme.gap;
+        background: Theme.bg;
+        border-radius: Theme.panels ? 8px * Ui.k : 0px;
+        clip: Theme.panels;
         if App.page == 0: WatchPage { width: 100%; height: 100%; }
         if App.page != 0: Pages { width: 100%; height: 100%; }
     }

@@ -295,7 +295,7 @@ enum Sleep {
     EndOfSong,
 }
 
-const THEMES: [&str; 3] = ["RyM Dusk", "RyM Mist", "RyM Wide"];
+const THEMES: [&str; 4] = ["RyM Dusk", "RyM Mist", "RyM Wide", "RyM Verde"];
 const SLEEP_CHOICES: [u32; 7] = [0, 15, 30, 45, 60, 90, u32::MAX];
 
 thread_local! {
@@ -360,7 +360,7 @@ fn main() {
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "rym-slint.png".into());
         let dark = args.get(i + 2).is_none_or(|t| t != "light");
         let page = args.get(i + 3).and_then(|p| p.parse().ok()).unwrap_or(0);
-        let theme = args.get(i + 2).map_or(0, |t| if t == "wide" { 2 } else { 0 });
+        let theme = args.get(i + 2).map_or(0, |t| match t.as_str() { "wide" => 2, "verde" => 3, _ => 0 });
         render_sample(&out, dark, page, theme);
         return;
     }
@@ -485,7 +485,7 @@ fn models() -> Models {
 fn build(ui: &AppWindow, config: Config) -> Shared {
     let m = models();
     let app = ui.global::<App>();
-    ui.global::<Theme>().set_index(config.gui_theme.min(2) as i32);
+    ui.global::<Theme>().set_index(config.gui_theme.min(3) as i32);
     ui.global::<Theme>().set_cover_accent(false);
     paint(&ui.global::<Theme>(), current_colors(&config).as_ref());
     ui.global::<Theme>().set_aurora(config.aurora);
@@ -737,7 +737,7 @@ fn wire(ui: &AppWindow, st: &Shared) {
         app.on_set_speed(move |id| set_speed(&st, &id));
     }
     app.on_next_theme(w(|st| {
-        let next = (st.borrow().config.gui_theme.min(2) + 1) % 3;
+        let next = (st.borrow().config.gui_theme.min(3) + 1) % 4;
         set_theme(st, next);
     }));
     app.on_open_artist(w(|st| {
@@ -1398,7 +1398,7 @@ fn fill_settings(st: &Shared) {
     };
     let rows = vec![
         head("Look"),
-        choice("theme", "Theme", THEMES[c.gui_theme.min(2)].to_string()),
+        choice("theme", "Theme", THEMES[c.gui_theme.min(3)].to_string()),
         choice("palette", "Colors", if c.palette.is_empty() { t("The layout's own") } else { c.palette.clone() }),
         switch("aurora", "Liquid Aurora", "The cover's colors move behind everything with the bass", c.aurora),
         switch("vinyl", "Vinyl record", "The cover turns like a record: faster with Nightcore, slower with Slowed", c.vinyl),
@@ -1609,7 +1609,7 @@ fn choose(st: &Shared, id: &str, step: i32) {
     let cycle = |i: usize, n: usize| (i as i32 + step).rem_euclid(n as i32) as usize;
     match id {
         "theme" => {
-            let next = cycle(st.borrow().config.gui_theme.min(2), 3);
+            let next = cycle(st.borrow().config.gui_theme.min(3), 4);
             set_theme(st, next);
             return;
         }
@@ -2347,13 +2347,13 @@ fn import_colors(st: &Shared, text: &str) {
 fn set_theme(st: &Shared, index: usize) {
     {
         let mut s = st.borrow_mut();
-        s.config.gui_theme = index.min(2);
+        s.config.gui_theme = index.min(3);
         s.config.save();
         if let Some(ui) = s.ui.upgrade() {
-            ui.global::<Theme>().set_index(index.min(2) as i32);
+            ui.global::<Theme>().set_index(index.min(3) as i32);
         }
     }
-    toast(st, THEMES[index.min(2)]);
+    toast(st, THEMES[index.min(3)]);
     fill_settings(st);
 }
 
