@@ -60,9 +60,44 @@ pub fn parse_version(s: &str) -> Vec<u32> {
     parts
 }
 
+/// A "Rev" build's number: "7.5 Rev 2", "v7.5-rev2", "7.5.0-rev.2" -> 2; none -> None.
+pub fn rev_of(s: &str) -> Option<u32> {
+    let low = s.to_lowercase();
+    let at = low.find("rev")? + 3;
+    low[at..].trim_start_matches([' ', '.', '-', '_']).chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
+}
+
+/// How versions sort: four numbers, then the Rev (a Rev build comes before its version without
+/// one: 7.5 Rev 1 < 7.5 Rev 2 < 7.5 < 7.5.1). Not a version: empty.
+pub fn version_key(s: &str) -> Vec<u32> {
+    let s = s.trim().trim_start_matches(['v', 'V']);
+    let core = s.split(|c: char| !(c.is_ascii_digit() || c == '.')).next().unwrap_or("");
+    let mut key: Vec<u32> = core.split('.').map_while(|p| p.parse().ok()).collect();
+    if key.is_empty() {
+        return key;
+    }
+    key.resize(4.max(key.len()), 0);
+    key.push(rev_of(&s[core.len()..]).unwrap_or(u32::MAX));
+    key
+}
+
+/// The version as shown: "7.5.0-rev.1" -> "7.5 Rev 1", "7.4.5" stays.
+pub fn shown_version(v: &str) -> String {
+    match rev_of(v) {
+        Some(r) => {
+            let mut parts: Vec<u32> = parse_version(v);
+            if parts.len() == 1 {
+                parts.push(0);
+            }
+            format!("{} Rev {r}", parts.iter().map(u32::to_string).collect::<Vec<_>>().join("."))
+        }
+        None => v.to_string(),
+    }
+}
+
 /// `a` is a later version than `b`.
 pub fn newer(a: &str, b: &str) -> bool {
-    let (a, b) = (parse_version(a), parse_version(b));
+    let (a, b) = (version_key(a), version_key(b));
     !a.is_empty() && a > b
 }
 
@@ -78,7 +113,7 @@ pub fn pick(releases: &[Value], beta: bool, current: &str) -> Option<Release> {
             // Only the app's own "vX.Y" tags (old android-v… pages are something else).
             tag.starts_with('v').then_some(())?;
             let version = tag.trim_start_matches('v').to_string();
-            Some((parse_version(&version), r, version))
+            Some((version_key(&version), r, version))
         })
         .filter(|(v, _, _)| !v.is_empty())
         .max_by(|a, b| a.0.cmp(&b.0))
@@ -357,6 +392,10 @@ mod tests {
 
     #[test]
     fn versions_compare_by_number() {
+        assert!(newer("7.5-rev1", "7.4.5") && newer("7.5-rev2", "7.5.0-rev.1") && newer("7.5", "7.5 Rev 2") && newer("7.5.1", "7.5"));
+        assert!(!newer("7.5.0-rev.1", "7.5-rev1") && !newer("7.4.4.2", "7.4.5") && newer("7.4.4.2", "7.4.4.1"));
+        assert_eq!(shown_version("7.5.0-rev.1"), "7.5 Rev 1");
+        assert_eq!(shown_version("7.4.5"), "7.4.5");
         assert_eq!(parse_version("v6.7"), vec![6, 7]);
         assert_eq!(parse_version("6.7.0"), vec![6, 7]);
         assert_eq!(parse_version("v0.7.0-preview"), vec![0, 7]);

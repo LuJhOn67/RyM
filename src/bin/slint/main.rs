@@ -518,7 +518,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     app.set_suggestions(ModelRc::from(m.suggestions.clone()));
     app.set_lyrics(ModelRc::from(m.lyrics.clone()));
     app.set_settings(ModelRc::from(m.settings.clone()));
-    app.set_version(rymplayer::VERSION.into());
+    app.set_version(rymplayer::updates::shown_version(rymplayer::VERSION).into());
     app.set_lyrics_size(config.lyrics_font.clamp(14, 48) as i32);
     ui.global::<Ui>().set_zoom(config.ui_zoom.clamp(0.5, 1.5));
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("")))));

@@ -99,11 +99,28 @@ object Updates {
         return parts
     }
 
+    /** A "Rev" build's number: "7.5 Rev 2", "v7.5-rev2" -> 2; none -> null. The same as the PC's. */
+    fun revOf(v: String): Int? {
+        val low = v.lowercase()
+        val at = low.indexOf("rev").takeIf { it >= 0 } ?: return null
+        return low.substring(at + 3).trimStart(' ', '.', '-', '_').takeWhile { it.isDigit() }.toIntOrNull()
+    }
+
+    /** How versions sort: four numbers, then the Rev (7.5 Rev 1 < 7.5 Rev 2 < 7.5 < 7.5.1). */
+    private fun key(v: String): List<Int> {
+        val s = v.trim().trimStart('v', 'V')
+        val core = s.takeWhile { it.isDigit() || it == '.' }
+        val parts = core.split('.').map { it.toIntOrNull() ?: return emptyList() }.toMutableList()
+        while (parts.size < 4) parts += 0
+        parts += revOf(s.substring(core.length)) ?: Int.MAX_VALUE
+        return parts
+    }
+
     /** [a] is a later version than [b]. */
     fun newer(a: String, b: String): Boolean {
-        val x = parse(a)
-        val y = parse(b)
-        if (x.isEmpty()) return false
+        val x = key(a)
+        val y = key(b)
+        if (x.isEmpty() || parse(a).isEmpty()) return false
         for (i in 0 until maxOf(x.size, y.size)) {
             val p = x.getOrElse(i) { 0 }
             val q = y.getOrElse(i) { 0 }

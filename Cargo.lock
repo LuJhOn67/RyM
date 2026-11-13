@@ -6508,7 +6508,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rymplayer"
-version = "7.4.5"
+version = "7.5.0-rev.1"
 dependencies = [
  "anyhow",
  "ar-reshaper",

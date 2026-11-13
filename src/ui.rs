@@ -99,7 +99,7 @@ fn draw_login(f: &mut Frame, app: &App) {
     let area = centered(f.area(), 64, 14);
     let key = |k: &'static str| format!("  {k} ").fg(th.accent).bold();
     let mut lines = vec![
-        Line::from(format!("RyM {}", rymplayer::VERSION).fg(th.accent).bold()),
+        Line::from(format!("RyM {}", rymplayer::updates::shown_version(rymplayer::VERSION)).fg(th.accent).bold()),
         Line::from(t("YouTube Music in your terminal").fg(th.dim)),
         Line::from(""),
         Line::from(vec![key("g"), t("Sign in with Google (opens a sign-in window)").fg(th.text)]),
@@ -232,7 +232,7 @@ fn draw_update(f: &mut Frame, app: &mut App, th: &Theme) {
     let area = centered(f.area(), 76, f.area().height.saturating_sub(4).min(26));
     popup_bg(f, th, area);
     let kind = if r.beta { i18n::tr("New beta") } else { i18n::tr("New update") };
-    let title = format!("{kind}: RyM {} ({} {})", r.version, i18n::tr("You have"), rymplayer::VERSION);
+    let title = format!("{kind}: RyM {} ({} {})", rymplayer::updates::shown_version(&r.version), i18n::tr("You have"), rymplayer::updates::shown_version(rymplayer::VERSION));
     let block = pane(th, &title, true).title_bottom(Line::from(format!(" {} ", t("Enter download  Esc later")).fg(th.dim)));
     let mut lines = vec![Line::from(t("What's new").fg(th.accent).bold()), Line::default()];
     lines.extend(r.plain_notes().iter().map(|l| Line::from(show(l).fg(th.text))));
