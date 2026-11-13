@@ -178,4 +178,18 @@ class RamPointsTest {
         assertEquals(RamPoints.Kind.Songs, RamPoints.pageKinds(heard)[0])
         assertEquals(RamPoints.Kind.Husseini, RamPoints.pageKinds(heard, muharram)[0])
     }
+
+    @Test
+    fun artistsHeardTogether() {
+        val n = RamPoints.Notes()
+        val now = System.currentTimeMillis()
+        n.played(t("a", "A", "Fairuz"), true, now)
+        n.left(t("a", "A", "Fairuz"), 200f, 210f)
+        n.played(t("b", "B", "Ziad Rahbani"), false, now + 10_000)
+        assertEquals(1, n.together("fairuz", "ziad rahbani"))
+        assertEquals(1, n.together("ziad rahbani", "fairuz"))
+        n.left(t("b", "B", "Ziad Rahbani"), 5f, 200f)
+        n.played(t("c", "C", "Other"), false, now + 20_000)
+        assertEquals(0, n.together("ziad rahbani", "other"))
+    }
 }

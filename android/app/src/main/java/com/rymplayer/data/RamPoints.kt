@@ -136,7 +136,26 @@ object RamPoints {
         val names: MutableMap<String, String> = HashMap(),
         /** Songs of each kind played at each hour of the day (local time): what fits this hour. */
         val hours: Array<IntArray> = Array(5) { IntArray(24) },
+        /** Artists heard one after the other in the same session ("a|b", in order), and how often. */
+        val together: MutableMap<String, Int> = HashMap(),
     ) {
+        /** The artist last heard (not skipped) and when (ms), for [together]. */
+        var lastHeard: Pair<String, Long>? = null
+
+        /** Two artists' place together: how often they were heard one after the other. */
+        fun together(a: String, b: String): Int {
+            if (a.isEmpty() || b.isEmpty() || a == b) return 0
+            return together[if (a < b) "$a|$b" else "$b|$a"] ?: 0
+        }
+
+        private fun heardWith(t: Track, now: Long) {
+            val b = firstArtist(t.artist)
+            val (a, at) = lastHeard ?: return
+            if (b.isEmpty() || a.isEmpty() || a == b || now - at > SESSION_GAP_MS) return
+            val key = if (a < b) "$a|$b" else "$b|$a"
+            together[key] = (together[key] ?: 0) + 1
+        }
+
         /** [delta] points to the song, and 30% of it to its artist. */
         private fun give(t: Track, delta: Float) {
             if (t.videoId.isEmpty() || delta == 0f) return
@@ -164,6 +183,7 @@ object RamPoints {
                 s.plays = 0
             }
             s.plays++
+            heardWith(t, now)
             // What kind plays at this hour (local time).
             kindOf(t)?.let { k -> hours[k.ordinal][java.util.Calendar.getInstance().apply { timeInMillis = now }.get(java.util.Calendar.HOUR_OF_DAY)]++ }
         }
@@ -175,6 +195,7 @@ object RamPoints {
         fun left(t: Track, listened: Float, length: Float) {
             val points = heardPoints(listened, length)
             if (points != 0f) give(t, points)
+            if (!isSkip(listened, length)) lastHeard = firstArtist(t.artist) to System.currentTimeMillis()
         }
 
         /** The song's points now: 5% less each day since it played, a third for 6 hours after. */
@@ -296,6 +317,7 @@ object RamPoints {
     private const val COOLDOWN_MS = 6L * 60 * 60 * 1000
     private const val DECAY = 0.95f
     private const val DECAY_NEGATIVE = 0.85f
+    private const val SESSION_GAP_MS = 45L * 60 * 1000
     private const val REPLAY_WITHIN_MS = 15L * 60 * 1000
     private const val REPLAY = 8f
     private const val FATIGUE_PLAYS = 5
@@ -401,7 +423,14 @@ object RamPoints {
             val (k, h, n) = line.split('\t').takeIf { it.size == 3 }?.map { it.toIntOrNull() ?: -1 } ?: return@forEach
             if (k in 0..4 && h in 0..23 && n > 0) hours[k][h] = n
         }
-        return Notes(rekey(base.artists) { a, b -> IntArray(a.size) { a[it] + b.getOrElse(it) { 0 } } }, rekey(base.fixed) { a, _ -> a }, rekey(bias) { a, b -> a + b }, hidden, tracks, rekey(affinity) { a, b -> a + b }, rekey(names) { a, _ -> a }, hours)
+        val together = HashMap<String, Int>()
+        p.getString("together", "").orEmpty().lineSequence().forEach { line ->
+            val (k, n) = line.split('\t').takeIf { it.size == 2 } ?: return@forEach
+            n.toIntOrNull()?.let { together[k] = it }
+        }
+        return Notes(rekey(base.artists) { a, b -> IntArray(a.size) { a[it] + b.getOrElse(it) { 0 } } }, rekey(base.fixed) { a, _ -> a }, rekey(bias) { a, b -> a + b }, hidden, tracks, rekey(affinity) { a, b -> a + b }, rekey(names) { a, _ -> a }, hours, together).also { n ->
+            p.getString("last_heard", "").orEmpty().split('\t').takeIf { it.size == 2 }?.let { (a, at) -> at.toLongOrNull()?.let { n.lastHeard = a to it } }
+        }
     }
 
     /**
@@ -427,6 +456,8 @@ object RamPoints {
             .putString("tracks", notes.tracks.entries.sortedByDescending { kotlin.math.abs(it.value.points) }.take(TRACKS_KEPT)
                 .joinToString("\n") { (id, s) -> clean(id) + "\t" + s.points + "\t" + s.last + "\t" + s.plays + "\t" + s.week })
             .putString("affinity", notes.affinity.entries.joinToString("\n") { (a, n) -> clean(a) + "\t" + n + "\t" + clean(notes.names[a].orEmpty()) })
+            .putString("together", notes.together.entries.sortedByDescending { it.value }.take(3000).joinToString("\n") { (k, n) -> clean(k) + "\t" + n })
+            .putString("last_heard", notes.lastHeard?.let { clean(it.first) + "\t" + it.second }.orEmpty())
             .putString("hours", (0..4).flatMap { k -> (0..23).filter { notes.hours[k][it] > 0 }.map { h -> "$k\t$h\t${notes.hours[k][h]}" } }.joinToString("\n"))
             .apply()
     }
@@ -538,6 +569,8 @@ object RamPoints {
             val artist = firstArtist(t.artist)
             var points = base + fit + (notes.bias[artist] ?: 0) + notes.liking(t, artist, now)
             if (artist.isNotEmpty() && artist == seedArtist) points += 35 else if (artist in heard) points += 10
+            // Heard together with the seed's artist in earlier sessions.
+            points += notes.together(seedArtist, artist).coerceAtMost(6) * 2
             if (artist in likedArtists) points += 6
             val s = script(t)
             if (s == seedScript) points += 12 else if (s != Script.Other && seedScript != Script.Other) points -= 25

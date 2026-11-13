@@ -206,6 +206,13 @@ pub struct Notes {
     /// Songs of each kind played at each hour of the day (local time): what fits this hour.
     #[serde(default)]
     hours: [[u32; 24]; 5],
+    /// Artists heard one after the other in the same session ("a|b", the pair in order), and
+    /// how often: they go together.
+    #[serde(default)]
+    together: HashMap<String, u32>,
+    /// The artist last heard (not skipped) and when, for [`together`](Self::together).
+    #[serde(default)]
+    last_heard: Option<(String, u64)>,
 }
 
 impl Notes {
@@ -326,6 +333,10 @@ const COOLDOWN_SECS: u64 = 6 * 60 * 60;
 const DECAY: f32 = 0.95;
 /// Minus points fade faster (a skip on a bad day doesn't hide a song for long).
 const DECAY_NEGATIVE: f32 = 0.85;
+/// Two songs this close (seconds) are the same listening session.
+const SESSION_GAP: u64 = 45 * 60;
+/// Artist pairs kept (the most heard together).
+const TOGETHER_KEPT: usize = 3000;
 /// Played again by hand this soon after it last started: a replay, a sign it's loved.
 const REPLAY_WITHIN: u64 = 15 * 60;
 const REPLAY: f32 = 8.0;
@@ -570,6 +581,7 @@ impl Notes {
             s.plays = 0;
         }
         s.plays += 1;
+        self.heard_with(t, now);
         // What kind plays at this hour (local time).
         if let Some(k) = self.kind_of(t) {
             use chrono::Timelike;
@@ -589,6 +601,35 @@ impl Notes {
         let points = heard_points(listened, length);
         if points != 0.0 {
             self.give(t, points);
+        }
+        if !is_skip(listened, length) {
+            self.last_heard = Some((first_artist(&t.artist), crate::updates::now()));
+        }
+    }
+
+    /// Two artists' place together: how often they were heard one after the other.
+    pub fn together(&self, a: &str, b: &str) -> u32 {
+        if a.is_empty() || b.is_empty() || a == b {
+            return 0;
+        }
+        let key = if a < b { format!("{a}|{b}") } else { format!("{b}|{a}") };
+        self.together.get(&key).copied().unwrap_or(0)
+    }
+
+    /// The song starting follows the artist last heard in the same session: they go together.
+    fn heard_with(&mut self, t: &Track, now: u64) {
+        let b = first_artist(&t.artist);
+        let Some((a, at)) = self.last_heard.clone() else { return };
+        if b.is_empty() || a.is_empty() || a == b || now.saturating_sub(at) > SESSION_GAP {
+            return;
+        }
+        let key = if a < b { format!("{a}|{b}") } else { format!("{b}|{a}") };
+        *self.together.entry(key).or_default() += 1;
+        if self.together.len() > TOGETHER_KEPT {
+            let mut pairs: Vec<(String, u32)> = self.together.drain().collect();
+            pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
+            pairs.truncate(TOGETHER_KEPT * 3 / 4);
+            self.together = pairs.into_iter().collect();
         }
     }
 
@@ -828,6 +869,8 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
         } else if heard.contains(&artist) {
             points += 10;
         }
+        // Heard together with the seed's artist in earlier sessions.
+        points += notes.together(&seed_artist, &artist).min(6) as i32 * 2;
         if liked_artists.contains(&artist) {
             points += 6;
         }
@@ -1291,6 +1334,23 @@ mod tests {
         let heard = [(Kind::Songs, 1.0), (Kind::Husseini, 0.9)];
         assert_eq!(super::page_kinds(&heard)[0], Kind::Songs);
         assert_eq!(super::page_kinds_with(&heard, muharram)[0], Kind::Husseini);
+    }
+
+
+    #[test]
+    fn artists_heard_together() {
+        let t = |id: &str, a: &str| Track { video_id: id.into(), title: id.into(), artist: a.into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None };
+        let mut n = Notes::default();
+        let now = crate::updates::now();
+        n.played(&t("a", "Fairuz"), true, now);
+        n.left(&t("a", "Fairuz"), 200.0, 210.0);
+        n.played(&t("b", "Ziad Rahbani"), false, now + 10);
+        assert_eq!(n.together("fairuz", "ziad rahbani"), 1);
+        assert_eq!(n.together("ziad rahbani", "fairuz"), 1, "either order");
+        // A skip doesn't count as heard.
+        n.left(&t("b", "Ziad Rahbani"), 5.0, 200.0);
+        n.played(&t("c", "Other"), false, now + 20);
+        assert_eq!(n.together("ziad rahbani", "other"), 0);
     }
 
 }
