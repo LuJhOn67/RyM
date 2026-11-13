@@ -33,8 +33,13 @@ pub async fn with_artist(api: crate::api::Api, t: Track) -> anyhow::Result<Vec<T
     Ok(radio)
 }
 
-/// "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload.
+/// Words after " - " that mark another upload of the same song, not another song.
+const UPLOAD_WORDS: &[&str] = &["remaster", "lyric", "official", "audio", "video", "visuali", "hd", "4k", "mono", "stereo", "single", "edit", "explicit", "clean", "كلمات", "فيديو"];
+
+/// "Song (Official Video) [HD]", "Song - Remastered 2011", "Artist - Song", "Song | Lyrics",
+/// "Song ft. X" by "A, B" -> "song|a": the same song under another upload (backlog 58).
 pub fn same_song_key(t: &Track) -> String {
+    let artist = first_artist(&t.artist);
     let mut title = t.title.to_lowercase();
     for (open, close) in [('(', ')'), ('[', ']')] {
         while let Some(a) = title.find(open) {
@@ -42,8 +47,30 @@ pub fn same_song_key(t: &Track) -> String {
             title.replace_range(a..a + b + close.len_utf8(), "");
         }
     }
+    if let Some(i) = title.find(" | ") {
+        title.truncate(i);
+    }
+    for sep in [" - ", " – ", " — "] {
+        // "Artist - Song": the artist's name first.
+        if !artist.is_empty()
+            && let Some(rest) = title.trim_start().strip_prefix(&format!("{artist}{sep}"))
+        {
+            title = rest.to_string();
+        }
+        // "Song - Remastered 2011", "Song - Lyrics".
+        if let Some(i) = title.rfind(sep)
+            && UPLOAD_WORDS.iter().any(|w| title[i + sep.len()..].contains(w))
+        {
+            title.truncate(i);
+        }
+    }
+    for feat in [" feat. ", " feat ", " ft. ", " ft ", " featuring "] {
+        if let Some(i) = title.find(feat) {
+            title.truncate(i);
+        }
+    }
     let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!("{title}|{}", first_artist(&t.artist))
+    format!("{title}|{artist}")
 }
 
 /// The first of a song's artists, as a key (see [`normalize_artist_key`]).
@@ -99,5 +126,10 @@ mod tests {
     fn same_song_under_another_upload() {
         assert_eq!(same_song_key(&t("a", "Beta (Official Video)", "Other, B")), same_song_key(&t("b", "Beta [HD]", "Other")));
         assert_ne!(same_song_key(&t("a", "Beta", "Other")), same_song_key(&t("b", "Beta", "Someone")));
+        let k = same_song_key(&t("a", "Bohemian Rhapsody", "Queen"));
+        for other in ["Queen - Bohemian Rhapsody (Official Video)", "Bohemian Rhapsody - Remastered 2011", "Bohemian Rhapsody | Lyrics", "Bohemian Rhapsody ft. Someone"] {
+            assert_eq!(same_song_key(&t("b", other, "Queen Official")), k, "{other}");
+        }
+        assert_ne!(same_song_key(&t("b", "Bohemian Rhapsody - Live Aid", "Queen")), k, "a live take is another song");
     }
 }

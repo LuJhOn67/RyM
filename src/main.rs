@@ -491,7 +491,7 @@ impl App {
                 let queued: std::collections::HashSet<String> = self.q.songs.iter().map(|t| t.video_id.clone()).collect();
                 let heard = rymplayer::radio::artists_of(self.q.songs.iter().take(self.q.current.map_or(0, |c| c + 1)));
                 let skip: std::collections::HashSet<String> = self.played.union(&queued).cloned().collect();
-                let fresh = rymplayer::ram_points::up_next(radio, &seed, &self.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1);
+                let fresh = rymplayer::queue::without_repeats(&self.q.songs, rymplayer::ram_points::up_next(radio, &seed, &self.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1));
                 if !fresh.is_empty() {
                     self.q.drop_coming();
                     self.q.songs.extend(fresh);
@@ -512,7 +512,7 @@ impl App {
                                 let heard = rymplayer::radio::artists_of(self.q.songs.iter().take(self.q.current.map_or(0, |c| c + 1)));
                                 // RaM points: only the playing song's kind, its artist first.
                                 let skip: std::collections::HashSet<String> = self.played.union(&queued).cloned().collect();
-                                rymplayer::ram_points::up_next(tracks, &seed, &self.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
+                                rymplayer::queue::without_repeats(&self.q.songs, rymplayer::ram_points::up_next(tracks, &seed, &self.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1))
                             }
                             None => tracks,
                         };

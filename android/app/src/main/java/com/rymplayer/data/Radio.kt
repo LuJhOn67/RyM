@@ -117,9 +117,28 @@ object Radio {
     /** "Song (Official Video) [HD]" by "A, B" -> "song|a": the same song under another upload. */
     fun sameSongKey(t: Track): String = key(t)
 
+    /** Words after " - " that mark another upload of the same song, not another song. */
+    private val UPLOAD_WORDS = listOf("remaster", "lyric", "official", "audio", "video", "visuali", "hd", "4k", "mono", "stereo", "single", "edit", "explicit", "clean", "كلمات", "فيديو")
+
+    /** "Song (Official Video)", "Song - Remastered 2011", "Artist - Song", "Song | Lyrics", "Song ft. X"
+     *  -> "song|artist": the same song under another upload. The same as the PC's. */
     private fun key(t: Track): String {
-        val title = t.title.lowercase().replace(Regex("""\([^)]*\)|\[[^]]*]"""), "").split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-        return "$title|${firstArtist(t.artist)}"
+        val artist = firstArtist(t.artist)
+        var title = t.title.lowercase().replace(Regex("""\([^)]*\)|\[[^]]*]"""), "")
+        title.indexOf(" | ").takeIf { it >= 0 }?.let { title = title.substring(0, it) }
+        for (sep in listOf(" - ", " – ", " — ")) {
+            if (artist.isNotEmpty() && title.trimStart().startsWith("$artist$sep")) title = title.trimStart().removePrefix("$artist$sep")
+            val i = title.lastIndexOf(sep)
+            if (i >= 0 && UPLOAD_WORDS.any { title.substring(i + sep.length).contains(it) }) title = title.substring(0, i)
+        }
+        for (feat in listOf(" feat. ", " feat ", " ft. ", " ft ", " featuring ")) title.indexOf(feat).takeIf { it >= 0 }?.let { title = title.substring(0, it) }
+        return "${title.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")}|$artist"
+    }
+
+    /** [fresh] without the songs [queue] already has under another upload (backlog 58). */
+    fun withoutRepeats(queue: List<Track>, fresh: List<Track>): List<Track> {
+        val keys = queue.map { key(it) }.toMutableSet()
+        return fresh.filter { keys.add(key(it)) }
     }
 
     fun tidy(radio: List<Track>, seed: Track, played: Set<String>, queued: Set<String>, sessionArtists: Set<String>): List<Track> {

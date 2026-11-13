@@ -6385,7 +6385,7 @@ fn poll_events(ui: &Shared) {
                     let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
                     let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
                     let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
-                    rymplayer::ram_points::up_next(radio, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
+                    rymplayer::queue::without_repeats(&s.q.songs, rymplayer::ram_points::up_next(radio, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1))
                 };
                 if !fresh.is_empty() {
                     {
@@ -6410,7 +6410,7 @@ fn poll_events(ui: &Shared) {
                             let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
                             let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
                             let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
-                            rymplayer::ram_points::up_next(tracks, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
+                            rymplayer::queue::without_repeats(&s.q.songs, rymplayer::ram_points::up_next(tracks, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1))
                         }
                         None => tracks,
                     };

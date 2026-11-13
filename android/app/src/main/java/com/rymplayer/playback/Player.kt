@@ -533,7 +533,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         val notes = com.rymplayer.data.RamPoints.load(context)
         val out = com.rymplayer.data.RamPoints.upNext(notes, radio, seed, likedSongs(), played + queued, heard, { com.rymplayer.data.Recent.playedAt(context, it) })
         com.rymplayer.data.RamPoints.save(context, notes)
-        return out
+        // The same song from another upload never comes twice in a row.
+        return com.rymplayer.data.Radio.withoutRepeats(queue.toList(), out)
     }
 
     /** The PC song already taken or skipped (device, song), so it's once. */

@@ -9,6 +9,13 @@ use crate::api::Track;
 /// Songs kept above a new start, at most (the oldest go first).
 pub const HISTORY: usize = 100;
 
+/// `fresh` without the songs the queue already has under another upload (the same song from a
+/// lyrics video, a remaster...), so one song never comes twice in a row (backlog 58).
+pub fn without_repeats(queue: &[Track], fresh: Vec<Track>) -> Vec<Track> {
+    let mut keys: std::collections::HashSet<String> = queue.iter().map(crate::radio::same_song_key).collect();
+    fresh.into_iter().filter(|t| keys.insert(crate::radio::same_song_key(t))).collect()
+}
+
 /// A song taken out of the queue, kept so Undo can put it back where it was.
 #[derive(Debug, Clone)]
 pub struct Removed {
@@ -170,6 +177,21 @@ pub fn share_link(t: &Track) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_upload_of_a_queued_song_stays_out() {
+        let mut a = t("a");
+        a.title = "Get Lucky".into();
+        a.artist = "Daft Punk".into();
+        let mut b = t("b");
+        b.title = "Get Lucky (Official Audio)".into();
+        b.artist = "Daft Punk - Topic".into();
+        let mut c = t("c");
+        c.title = "One More Time".into();
+        c.artist = "Daft Punk".into();
+        let left = without_repeats(&[a], vec![b, c.clone(), c]);
+        assert_eq!(left.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(), ["c"]);
+    }
 
     #[test]
     fn a_removed_song_goes_back() {

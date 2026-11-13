@@ -4971,6 +4971,7 @@ fn handle(st: &Shared, ev: Ev) {
                 let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
                 // RaM points: only the playing song's kind, its artist and songs like it first.
                 let fresh = rymplayer::ram_points::up_next(tracks, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1);
+                let fresh = rymplayer::queue::without_repeats(&s.q.songs, fresh);
                 let at_end = s.q.current.is_some_and(|i| i + 1 >= s.q.songs.len()) && !s.loading && s.audio.as_ref().is_some_and(|a| !a.is_loaded());
                 (fresh, at_end)
             };
@@ -4990,7 +4991,9 @@ fn handle(st: &Shared, ev: Ev) {
                 let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
                 let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
                 let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
-                rymplayer::ram_points::up_next(radio, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
+                let fresh = rymplayer::ram_points::up_next(radio, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1);
+                // Against what was played (the coming songs are dropped for the new direction).
+                rymplayer::queue::without_repeats(&s.q.songs[..s.q.current.map_or(0, |c| c + 1).min(s.q.songs.len())], fresh)
             };
             if fresh.is_empty() {
                 return;
