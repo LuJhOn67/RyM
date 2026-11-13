@@ -73,7 +73,7 @@ export struct Bar {
     text: string,
 }
 
-// 0 RyM Dusk, 2 RyM Wide (1 was the light RyM Mist; a saved 1 opens as Dusk).
+// 0 RyM Dusk, 2 RyM Wide, 3 RyM Noir (1 was the light RyM Mist; a saved 1 opens as Dusk).
 // A color theme (Settings > Colors, or a .json file): its colors and its style.
 export struct Pal {
     dark: bool,
@@ -108,7 +108,12 @@ export global Theme {
     in-out property <bool> custom: false;
     in-out property <Pal> p;
     out property <bool> dark: custom ? p.dark : true;
-    out property <bool> wide: index == 2;
+    out property <bool> wide: index == 2 || index == 3;
+    // RyM Noir: the Wide layout as rounded panels on a black frame, the player floating at the
+    // bottom, green accents.
+    out property <bool> noir: !custom && index == 3;
+    out property <color> frame: noir ? #000000 : bg;
+    out property <length> gap: noir ? 7px * Ui.k : 0px;
     out property <float> round: custom ? p.round : 1;
     out property <bool> glow: custom && p.glow;
     out property <float> glass: custom ? p.glass : 0;
@@ -136,19 +141,19 @@ export global Theme {
     // The accent from the playing song's cover (Settings), when on.
     in-out property <bool> cover-accent: false;
     in-out property <color> cover-color: #ea814a;
-    out property <color> bg: custom ? p.bg : (index == 2 ? #0f0f0f : #343345);
-    out property <color> raised: custom ? p.raised : (index == 2 ? #272727 : #3d3c50);
-    out property <color> text: custom ? p.text : (index == 2 ? #f1f1f1 : #ffffff);
-    out property <color> dim: custom ? p.dim : (index == 2 ? #aaaaaa : #c6c6c6);
-    out property <color> faint: custom ? p.dim : (index == 2 ? #9a9a9a : #d5d5d5);
-    out property <color> icon: custom ? p.icon : (index == 2 ? #f1f1f1 : #e4e3e3);
-    out property <color> handle: custom ? p.dim.with-alpha(0.7) : (index == 2 ? #717171 : #666477);
-    out property <color> accent: cover-accent ? cover-color : (custom ? p.accent : (index == 2 ? #ff4e45 : #ea814a));
-    out property <color> bar: custom ? p.bar : (index == 2 ? #3f3f3f : #d9d9d9);
-    out property <color> border: cover-border ? cover-color.with-alpha(0.85) : (custom ? p.border : (index == 2 ? #3f3f3f : #666477.with-alpha(0.5)));
+    out property <color> bg: custom ? p.bg : (index == 3 ? #111111 : (index == 2 ? #0f0f0f : #343345));
+    out property <color> raised: custom ? p.raised : (index == 3 ? #202020 : (index == 2 ? #272727 : #3d3c50));
+    out property <color> text: custom ? p.text : (index == 3 ? #e0e0e0 : (index == 2 ? #f1f1f1 : #ffffff));
+    out property <color> dim: custom ? p.dim : (index == 3 ? #898989 : (index == 2 ? #aaaaaa : #c6c6c6));
+    out property <color> faint: custom ? p.dim : (index == 3 ? #898989 : (index == 2 ? #9a9a9a : #d5d5d5));
+    out property <color> icon: custom ? p.icon : (index == 3 ? #e0e0e0 : (index == 2 ? #f1f1f1 : #e4e3e3));
+    out property <color> handle: custom ? p.dim.with-alpha(0.7) : (index == 3 ? #535353 : (index == 2 ? #717171 : #666477));
+    out property <color> accent: cover-accent ? cover-color : (custom ? p.accent : (index == 3 ? #1ed760 : (index == 2 ? #ff4e45 : #ea814a)));
+    out property <color> bar: custom ? p.bar : (index == 3 ? #4d4d4d : (index == 2 ? #3f3f3f : #d9d9d9));
+    out property <color> border: cover-border ? cover-color.with-alpha(0.85) : (custom ? p.border : (index == 3 ? #2a2a2a : (index == 2 ? #3f3f3f : #666477.with-alpha(0.5))));
     out property <color> hover: dark ? #ffffff14 : #0000000d;
-    out property <color> wave-from: cover-accent ? cover-color.brighter(0.5) : (custom ? p.accent2 : (index == 2 ? #ff8a80 : #f9d19e));
-    out property <color> wave-to: cover-accent ? cover-color : (custom ? p.accent : (index == 2 ? #ff0033 : #d53a0c));
+    out property <color> wave-from: cover-accent ? cover-color.brighter(0.5) : (custom ? p.accent2 : (index == 3 ? #5ff08f : (index == 2 ? #ff8a80 : #f9d19e)));
+    out property <color> wave-to: cover-accent ? cover-color : (custom ? p.accent : (index == 3 ? #1ed760 : (index == 2 ? #ff0033 : #d53a0c)));
 }
 
 // The scale of the 1600 x 1024 layout to the window, the size picked in the app, and Arabic.
@@ -2105,19 +2110,47 @@ component Pages inherits Rectangle {
 
 component WideTop inherits Rectangle {
     height: 64px * Ui.k;
-    background: Theme.bg;
+    background: Theme.frame;
     Text {
         x: Ui.rtl ? parent.width - self.width - 24px * Ui.k : 24px * Ui.k;
         y: (parent.height - self.height) / 2;
         text: "RyM";
-        font-size: 30px * Ui.k;
+        font-size: (Theme.noir ? 24px : 30px) * Ui.k;
         font-weight: 700;
         color: Theme.text;
     }
-    SearchBox {
-        x: (parent.width - self.width) / 2;
+    // RyM Noir: the pages as tabs after the side list, the chosen one on a dark pill.
+    property <length> tabs-x: 250px * Ui.k + 2 * Theme.gap;
+    if Theme.noir: HorizontalLayout {
+        x: Ui.rtl ? parent.width - root.tabs-x - self.preferred-width : root.tabs-x;
         y: (parent.height - self.height) / 2;
-        width: min(640px * Ui.k, parent.width - 520px * Ui.k);
+        height: 48px * Ui.k;
+        spacing: 6px * Ui.k;
+        for item in [
+            { page: 3, icon: @image-url("icons/home-2-bold.svg"), label: "Home" },
+            { page: 0, icon: @image-url("icons/nav-play.svg"), label: "Now playing" },
+            { page: 2, icon: @image-url("icons/nav-library.svg"), label: "Library" },
+        ]: tabbox := Rectangle {
+            property <bool> on: App.page == item.page || (item.page == 2 && App.page == 5);
+            width: 180px * Ui.k;
+            border-radius: 10px * Ui.k;
+            background: on ? Theme.bg : (tab.has-hover ? Theme.hover : transparent);
+            tab := TouchArea { mouse-cursor: pointer; clicked => { App.go(item.page); } }
+            HorizontalLayout {
+                padding-left: 15px * Ui.k;
+                padding-right: 15px * Ui.k;
+                spacing: 10px * Ui.k;
+                alignment: start;
+                VerticalLayout { alignment: center; Image { width: 24px * Ui.k; height: 24px * Ui.k; source: item.icon; colorize: tabbox.on ? Theme.text : Theme.dim; } }
+                Text { text: App.tr(item.label); font-size: 14px * Ui.k; letter-spacing: 0.42px; vertical-alignment: center; color: tabbox.on ? Theme.text : Theme.dim; }
+            }
+        }
+    }
+    SearchBox {
+        property <length> after-tabs: root.tabs-x + 3 * 186px * Ui.k + 12px * Ui.k;
+        x: Theme.noir ? (Ui.rtl ? parent.width - self.after-tabs - self.width : self.after-tabs) : (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Theme.noir ? max(180px * Ui.k, min(420px * Ui.k, parent.width - self.after-tabs - 240px * Ui.k)) : min(640px * Ui.k, parent.width - 520px * Ui.k);
         height: 44px * Ui.k;
     }
     HorizontalLayout {
@@ -2134,7 +2167,7 @@ component WideTop inherits Rectangle {
 
 component WideSide inherits Rectangle {
     width: 250px * Ui.k;
-    background: Theme.bg;
+    background: Theme.noir ? Theme.frame : Theme.bg;
     VerticalLayout {
         padding: 12px * Ui.k;
         spacing: 4px * Ui.k;
@@ -2150,7 +2183,7 @@ component WideSide inherits Rectangle {
             height: 48px * Ui.k;
             border-radius: (10px * Ui.k) * Theme.round;
             property <bool> on: App.page == item.page || (item.page == 2 && App.page == 5);
-            background: on ? Theme.raised : (pick.has-hover ? Theme.hover : transparent);
+            background: on ? (Theme.noir ? Theme.bg : Theme.raised) : (pick.has-hover ? Theme.hover : transparent);
             pick := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { App.go(item.page); }
@@ -2158,19 +2191,20 @@ component WideSide inherits Rectangle {
             Image {
                 x: Ui.rtl ? parent.width - 40px * Ui.k : 14px * Ui.k;
                 y: (parent.height - self.height) / 2;
-                width: 26px * Ui.k;
-                height: 26px * Ui.k;
+                width: (Theme.noir ? 24px : 26px) * Ui.k;
+                height: self.width;
                 source: item.icon;
-                colorize: Theme.text;
+                colorize: Theme.noir && !parent.on ? Theme.dim : Theme.text;
             }
             Text {
                 x: Ui.rtl ? 12px * Ui.k : 58px * Ui.k;
                 width: parent.width - 70px * Ui.k;
                 y: (parent.height - self.height) / 2;
                 text: App.tr(item.label);
-                font-size: 17px * Ui.k;
-                font-weight: parent.on ? 700 : 400;
-                color: Theme.text;
+                font-size: (Theme.noir ? 14px : 17px) * Ui.k;
+                letter-spacing: Theme.noir ? 0.42px : 0px;
+                font-weight: parent.on && !Theme.noir ? 700 : 400;
+                color: Theme.noir && !parent.on ? Theme.dim : Theme.text;
                 horizontal-alignment: Ui.start;
             }
         }
@@ -2452,23 +2486,193 @@ component BottomBar inherits Rectangle {
     }
 }
 
+// RyM Noir's song page, like its design: the cover on one side, the song, its buttons and Up
+// next on the other, the lyrics below.
+component NoirSong inherits Rectangle {
+    property <length> pad: 37px * Ui.k;
+    property <length> cover: min(440px * Ui.k, (root.width - 3 * root.pad) * 0.42, root.height * 0.5);
+    property <length> side-x: root.pad * 2 + root.cover;
+    property <length> low-y: root.pad * 2 + root.cover;
+    Cover {
+        x: Ui.rtl ? root.width - root.pad - self.width : root.pad;
+        y: root.pad;
+        width: root.cover;
+        height: root.cover;
+        radius: 6px * Ui.k;
+        source: App.cover;
+        drop-shadow-blur: 30px * Ui.k;
+        drop-shadow-color: #00000080;
+        NowMenu { }
+    }
+    VerticalLayout {
+        x: Ui.rtl ? root.pad : root.side-x;
+        y: root.pad;
+        width: root.width - root.side-x - root.pad;
+        height: root.cover;
+        spacing: 12px * Ui.k;
+        Text {
+            text: App.has-song ? App.title : App.tr("Nothing playing");
+            font-size: 34px * Ui.k;
+            font-weight: 700;
+            color: Theme.text;
+            wrap: word-wrap;
+            horizontal-alignment: Ui.start;
+        }
+        Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 8px * Ui.k;
+            Rectangle {
+                width: 40px * Ui.k;
+                height: 40px * Ui.k;
+                border-radius: self.width / 2;
+                background: big.has-hover ? Theme.accent.brighter(0.15) : Theme.accent;
+                big := TouchArea { mouse-cursor: pointer; clicked => { App.toggle-play(); } }
+                Image { width: 20px * Ui.k; height: 20px * Ui.k; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold.svg"); colorize: #000000; }
+            }
+            Icon { size: 40px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: App.liked ? Theme.accent : Theme.dim; clicked => { App.like-now(); } }
+            Icon { size: 40px * Ui.k; source: @image-url("icons/share-linear.svg"); tint: Theme.dim; clicked => { App.menu("share", "now"); } }
+            Icon { size: 40px * Ui.k; source: @image-url("icons/full-screen-linear.svg"); tint: Theme.dim; clicked => { App.stage = true; } }
+        }
+        Text { text: App.tr("Up next"); font-size: 20px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        Flickable {
+            vertical-stretch: 1;
+            content-height: rows.preferred-height;
+            rows := VerticalLayout {
+                alignment: start;
+                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
+                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 48px * Ui.k; title-size: 15px * Ui.k; }
+            }
+        }
+    }
+    // The lyrics under the song, across the page.
+    Rectangle { x: root.pad; y: root.low-y - 1px; width: root.width - 2 * root.pad; height: 1px; background: #ffffff14; }
+    Lyrics {
+        x: root.pad;
+        y: root.low-y + 12px * Ui.k;
+        width: root.width - 2 * root.pad;
+        height: max(0px, root.height - self.y - 16px * Ui.k);
+    }
+}
+
+// RyM Noir's player: a rounded bar floating under the page (lighter while playing), a green
+// round play button, the progress between the times, the song in the middle.
+component NoirBar inherits Rectangle {
+    height: 81px * Ui.k;
+    border-radius: 10px * Ui.k;
+    background: App.playing ? #333842 : #202020;
+    animate background { duration: 250ms; }
+    property <float> done: App.duration > 0 ? App.position / App.duration : 0;
+    HorizontalLayout {
+        padding-left: 18px * Ui.k;
+        padding-right: 18px * Ui.k;
+        spacing: 6px * Ui.k;
+        // Play, previous, next, repeat; the time and the progress.
+        HorizontalLayout {
+            spacing: 5px * Ui.k;
+            alignment: start;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 38px * Ui.k;
+                    height: 38px * Ui.k;
+                    border-radius: self.width / 2;
+                    background: play.has-hover ? Theme.accent.brighter(0.15) : Theme.accent;
+                    play := TouchArea { mouse-cursor: pointer; clicked => { App.toggle-play(); } }
+                    Image {
+                        width: 20px * Ui.k;
+                        height: 20px * Ui.k;
+                        source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold.svg");
+                        colorize: #000000;
+                    }
+                }
+            }
+            VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; tint: Theme.dim; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } } }
+            VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; tint: Theme.dim; source: @image-url("icons/next.svg"); clicked => { App.next(); } } }
+            VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one || App.repeat-all ? Theme.accent : Theme.dim; clicked => { App.repeat(); } } }
+            Text { text: App.pos-text; font-size: 12px * Ui.k; letter-spacing: 0.36px; color: Theme.dim; vertical-alignment: center; }
+            Rectangle {
+                width: 317px * Ui.k;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 3px * Ui.k;
+                    border-radius: 2px;
+                    background: Theme.bar;
+                    Rectangle {
+                        x: Ui.rtl ? parent.width * (1 - root.done) : 0;
+                        width: parent.width * root.done;
+                        border-radius: 2px;
+                        background: seek.has-hover ? Theme.accent : #e0e0e0;
+                    }
+                }
+                seek := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { App.seek(max(0, min(1, (Ui.rtl ? self.width - self.mouse-x : self.mouse-x) / self.width)) * App.duration); }
+                }
+            }
+            Text { text: App.len-text; font-size: 12px * Ui.k; letter-spacing: 0.36px; color: Theme.dim; vertical-alignment: center; }
+            VerticalLayout { alignment: center; FlatVolume { width: 96px * Ui.k; } }
+        }
+        // The song: its cover and three lines; a click opens it.
+        Rectangle {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: start;
+                padding-left: 90px * Ui.k;
+                spacing: 10px * Ui.k;
+                VerticalLayout { alignment: center; Cover { width: 51px * Ui.k; height: 51px * Ui.k; radius: 3px * Ui.k; source: App.cover; } }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 4px * Ui.k;
+                    max-width: 300px * Ui.k;
+                    Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.text; overflow: elide; }
+                    Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.dim; overflow: elide; }
+                }
+            }
+            TouchArea { mouse-cursor: pointer; clicked => { App.go(0); } }
+        }
+        // Like, lyrics, Up next.
+        HorizontalLayout {
+            alignment: end;
+            spacing: 6px * Ui.k;
+            VerticalLayout { alignment: center; SpeedButton { size: 34px * Ui.k; } }
+            VerticalLayout { alignment: center; Icon { size: 40px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: App.liked ? Theme.accent : Theme.dim; clicked => { App.like-now(); } } }
+            VerticalLayout { alignment: center; Icon { size: 40px * Ui.k; tint: App.show-lyrics ? Theme.accent : Theme.dim; source: @image-url("icons/text-square-bold.svg"); clicked => { App.show-lyrics = !App.show-lyrics; App.go(0); } } }
+            VerticalLayout { alignment: center; Icon { size: 40px * Ui.k; tint: Theme.dim; source: @image-url("icons/playlist.svg"); clicked => { App.go(0); } } }
+        }
+    }
+}
+
 component WideLayout inherits Rectangle {
-    background: Theme.bg;
+    background: Theme.frame;
+    // How tall the player along the bottom is (RyM Noir's floats under every page).
+    property <length> bar-h: Theme.noir ? 81px * Ui.k + Theme.gap : (App.page == 0 ? 0 : 80px * Ui.k);
     WideTop { y: 0; width: parent.width; }
     WideSide {
-        x: Ui.rtl ? parent.width - self.width : 0;
+        x: Ui.rtl ? parent.width - self.width - Theme.gap : Theme.gap;
         y: 64px * Ui.k;
-        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k);
+        height: parent.height - 64px * Ui.k - (Theme.noir ? Theme.gap : root.bar-h);
     }
     Rectangle {
-        x: Ui.rtl ? 0 : 250px * Ui.k;
+        x: Ui.rtl ? Theme.gap : 250px * Ui.k + 2 * Theme.gap;
         y: 64px * Ui.k;
-        width: parent.width - 250px * Ui.k;
-        height: parent.height - 64px * Ui.k - (App.page == 0 ? 0 : 80px * Ui.k);
-        if App.page == 0: WatchPage { width: 100%; height: 100%; }
+        width: parent.width - 250px * Ui.k - 3 * Theme.gap;
+        height: parent.height - 64px * Ui.k - root.bar-h - Theme.gap;
+        background: Theme.noir ? Theme.bg : transparent;
+        border-radius: Theme.noir ? 10px * Ui.k : 0px;
+        clip: Theme.noir;
+        // RyM Noir: the playing song's cover, blurred, faintly behind the page.
+        if Theme.noir && App.page == 0: Image { width: 100%; height: 100%; source: App.backdrop; image-fit: cover; opacity: 0.26; }
+        if App.page == 0 && Theme.noir: NoirSong { width: 100%; height: 100%; }
+        if App.page == 0 && !Theme.noir: WatchPage { width: 100%; height: 100%; }
         if App.page != 0: Pages { width: 100%; height: 100%; }
     }
-    if App.page != 0: BottomBar { y: parent.height - self.height; width: parent.width; }
+    if Theme.noir: NoirBar {
+        x: Ui.rtl ? Theme.gap : 250px * Ui.k + 2 * Theme.gap;
+        y: parent.height - self.height - Theme.gap;
+        width: parent.width - 250px * Ui.k - 3 * Theme.gap;
+    }
+    if !Theme.noir && App.page != 0: BottomBar { y: parent.height - self.height; width: parent.width; }
 }
 
 // ---------------------------------------------------------------- the windows

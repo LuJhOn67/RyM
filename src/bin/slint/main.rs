@@ -302,7 +302,7 @@ enum Sleep {
 }
 
 /// The layouts to pick from, with their number in the window (Theme.index) and the settings.
-const THEMES: [(&str, usize); 2] = [("RyM Dusk", 0), ("RyM Wide", 2)];
+const THEMES: [(&str, usize); 3] = [("RyM Dusk", 0), ("RyM Wide", 2), ("RyM Noir", 3)];
 
 /// A saved layout's place in [`THEMES`] (the light RyM Mist, gone, opens as Dusk).
 fn theme_slot(saved: usize) -> usize {
@@ -371,7 +371,7 @@ fn main() {
         // A picture of the window with sample songs (no window opens): the layout's check.
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "rym-slint.png".into());
         let page = args.get(i + 3).and_then(|p| p.parse().ok()).unwrap_or(0);
-        let theme = args.get(i + 2).map_or(0, |t| if t == "wide" { 2 } else { 0 });
+        let theme = args.get(i + 2).map_or(0, |t| match t.as_str() { "wide" => 2, "noir" => 3, _ => 0 });
         render_sample(&out, page, theme);
         return;
     }
