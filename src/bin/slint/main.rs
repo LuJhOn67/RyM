@@ -3816,7 +3816,17 @@ fn fill_stats(st: &Shared) {
     let top_plays = recap.top_songs.first().map_or(1, |s| s.1).max(1) as f32;
     let songs: Vec<Bar> = recap.top_songs.iter().map(|(t, n)| Bar { label: format!("{} — {}", t.title, t.artist).into(), value: *n as f32 / top_plays, text: format!("{n}\u{00d7}").into() }).collect();
     let text = format!("{:.1} {} · {:.1} {}", recap.hours_month, tr("hours this month"), recap.hours_total, tr("hours in all"));
+    // RaM points' own favorites.
+    let (fav_songs, fav_artists) = rymplayer::ram_points::favorites(&rymplayer::recent::tracks(), 8);
+    let bars = |rows: Vec<(String, f32)>| -> Vec<Bar> {
+        let top = rows.first().map_or(1.0, |r| r.1).max(0.01);
+        rows.into_iter().map(|(label, p)| Bar { label: label.into(), value: p / top, text: format!("{p:.0}").into() }).collect()
+    };
+    let fav_songs = bars(fav_songs.into_iter().map(|(t, p)| (format!("{} — {}", t.title, t.artist), p)).collect());
+    let fav_artists = bars(fav_artists);
     with_app(st, |a| {
+        a.set_fav_songs(ModelRc::from(Rc::new(VecModel::from(fav_songs))));
+        a.set_fav_artists(ModelRc::from(Rc::new(VecModel::from(fav_artists))));
         a.set_kinds(ModelRc::from(Rc::new(VecModel::from(kind_bars))));
         a.set_top_artists(ModelRc::from(Rc::new(VecModel::from(artists))));
         a.set_top_songs(ModelRc::from(Rc::new(VecModel::from(songs))));

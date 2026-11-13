@@ -205,6 +205,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "sleep timer" => "مؤقت النوم",
         "repeat" => "تكرار",
         "New direction:" => "اتجاه جديد:",
+        "Your favorite songs (RaM points)" => "أغانيك المفضّلة (نقاط RaM)",
+        "Your favorite artists (RaM points)" => "فنانينك المفضّلين (نقاط RaM)",
         "Familiar or new" => "مألوف لو جديد",
         "Up next: songs you like, or songs you haven't heard" => "التالي: أغاني تحبها، لو أغاني ما سمعتها",
         "Familiar" => "مألوف",

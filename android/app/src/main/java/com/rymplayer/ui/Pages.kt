@@ -540,5 +540,31 @@ fun RecapPage(vm: AppViewModel) {
                 Text("${(hours * 60).toInt()} ${tr("minutes")}", color = Dim)
             }
         }
+        // RaM points' own favorites (songs and artists by points).
+        item {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val fav by androidx.compose.runtime.produceState<Pair<List<Pair<Track, Float>>, List<Pair<String, Float>>>?>(null) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.rymplayer.data.RamPoints.favorites(ctx, com.rymplayer.data.Recent.tracks(ctx), 8)
+                }
+            }
+            fav?.let { (songs, artists) ->
+                Column {
+                    if (songs.isNotEmpty()) {
+                        Text(tr("Your favorite songs (RaM points)"), fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 18.dp, bottom = 6.dp))
+                        songs.forEach { (t, p) -> SongRow(vm, t.copy(album = "${p.toInt()} ${tr("points")}"), false, { vm.playRadio(t) }) }
+                    }
+                    if (artists.isNotEmpty()) {
+                        Text(tr("Your favorite artists (RaM points)"), fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 18.dp, bottom = 6.dp))
+                        artists.forEach { (a, p) ->
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+                                Text(a, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Text("${p.toInt()} ${tr("points")}", color = Dim)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

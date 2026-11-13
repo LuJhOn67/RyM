@@ -414,6 +414,34 @@ pub fn reasons(songs: &[Track], seed: &Track, liked: impl Fn(&str) -> bool) -> V
         .collect()
 }
 
+/// The favorite songs (with their points) and artists (by name, with theirs).
+pub type Favorites = (Vec<(Track, f32)>, Vec<(String, f32)>);
+
+/// The favorites by RaM points, for the stats page: the songs with the most points now
+/// (named from `known`, songs played on this device; others are left out) and the artists.
+pub fn favorites(known: &[Track], n: usize) -> Favorites {
+    let notes = Notes::load();
+    let now = crate::updates::now();
+    let by_id: HashMap<&str, &Track> = known.iter().map(|t| (t.video_id.as_str(), t)).collect();
+    let mut songs: Vec<(Track, f32)> = notes
+        .tracks
+        .keys()
+        .filter_map(|id| by_id.get(id.as_str()).map(|t| ((*t).clone(), notes.track_points(id, now))))
+        .filter(|(_, p)| *p > 0.0)
+        .collect();
+    songs.sort_by(|a, b| b.1.total_cmp(&a.1));
+    songs.truncate(n);
+    let mut artists: Vec<(String, f32)> = notes
+        .affinity
+        .iter()
+        .map(|(a, p)| (notes.names.get(a).cloned().unwrap_or_else(|| a.clone()), p + notes.bias.get(a).copied().unwrap_or(0) as f32))
+        .filter(|(_, p)| *p > 0.0)
+        .collect();
+    artists.sort_by(|a, b| b.1.total_cmp(&a.1));
+    artists.truncate(n);
+    (songs, artists)
+}
+
 /// Up next from familiar songs (0) to new ones (4), 2 balanced (the setting, set by the app).
 static DISCOVERY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
 

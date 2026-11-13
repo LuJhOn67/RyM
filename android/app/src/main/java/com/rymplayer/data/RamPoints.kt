@@ -108,6 +108,21 @@ object RamPoints {
      * its first 30 seconds, SKIP; left before 30%, up to EARLY_LEAVE (the earlier the more); from
      * 30% to 80%, from 0 up to FINISH; 80% or more, FINISH.
      */
+    /**
+     * The favorites by RaM points, for the recap: the songs with the most points now (named from
+     * [known], songs played here) and the artists. The same as the PC's ram_points::favorites.
+     */
+    fun favorites(ctx: Context, known: List<Track>, n: Int): Pair<List<Pair<Track, Float>>, List<Pair<String, Float>>> {
+        val notes = load(ctx)
+        val now = System.currentTimeMillis()
+        val byId = known.associateBy { it.videoId }
+        val songs = notes.tracks.keys.mapNotNull { id -> byId[id]?.let { it to notes.trackPoints(id, now) } }
+            .filter { it.second > 0f }.sortedByDescending { it.second }.take(n)
+        val artists = notes.affinity.map { (a, p) -> (notes.names[a] ?: a) to p + (notes.bias[a] ?: 0) }
+            .filter { it.second > 0f }.sortedByDescending { it.second }.take(n)
+        return songs to artists
+    }
+
     /** Up next from familiar songs (0) to new ones (4), 2 balanced (the setting, set by the app). */
     @Volatile var discovery = 2
 

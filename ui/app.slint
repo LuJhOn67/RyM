@@ -237,6 +237,9 @@ export global App {
     in property <[Bar]> top-artists;
     in property <[Bar]> top-songs;
     in property <[Bar]> kinds;
+    // RaM points' favorites (songs and artists by points).
+    in property <[Bar]> fav-songs;
+    in property <[Bar]> fav-artists;
     in property <string> stats-text;
 
     // ---- account, settings, notices
@@ -1976,6 +1979,10 @@ component StatsPage inherits Page {
         Bars { bars: App.top-artists; }
         Text { text: App.tr("Top songs"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         Bars { bars: App.top-songs; }
+        if App.fav-songs.length > 0: Text { text: App.tr("Your favorite songs (RaM points)"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        if App.fav-songs.length > 0: Bars { bars: App.fav-songs; }
+        if App.fav-artists.length > 0: Text { text: App.tr("Your favorite artists (RaM points)"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        if App.fav-artists.length > 0: Bars { bars: App.fav-artists; }
     }
 }
 
