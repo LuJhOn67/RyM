@@ -83,7 +83,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.rymplayer.data.CrashReport.watch(this)
-        enableEdgeToEdge()
+        // Edge to edge with see-through bars: the pages and the player's colors go under the
+        // status and navigation bars (no grey strip behind the buttons).
+        enableEdgeToEdge(
+            statusBarStyle = androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
         setContent {
             val model: AppViewModel = viewModel()
             RymTheme(model.ytmTheme, model.colors, model.noirTheme) {

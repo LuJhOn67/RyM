@@ -221,6 +221,16 @@ fun FullPlayer(vm: AppViewModel, coverTint: Color) {
     val accent = MaterialTheme.colorScheme.primary
     val (bass, vuL, vuR) = rememberLevels((vm.aurora || colors?.vu == true || colors?.heartbeat == true) && p.playing && p.visible)
     Box(Modifier.fillMaxSize().background(bg)) {
+    // The cover itself, big and soft, across the whole screen (under the bars too), the colors
+    // going dark toward the controls.
+    if (colors == null || colors.glass == 0f) {
+        coil.compose.AsyncImage(
+            com.rymplayer.data.thumbSized(t.thumb, 480), null,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().blur(60.dp).alpha(if (android.os.Build.VERSION.SDK_INT >= 31) 0.55f else 0.22f),
+        )
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.15f), Color.Black.copy(alpha = 0.35f), Color.Black.copy(alpha = 0.85f)))))
+    }
     if (colors != null && colors.glass > 0f) {
         // The cover blurred behind see-through panels (the blur needs Android 12; before, a soft fade).
         coil.compose.AsyncImage(
