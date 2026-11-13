@@ -87,7 +87,27 @@ object Streams {
     }
 
     /** The source saved in Settings (the player's service starts it too, without the app's screen). */
-    fun loadSource(ctx: Context) = useSource(ctx, ctx.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("audio_source", 0))
+    fun loadSource(ctx: Context) {
+        useSource(ctx, ctx.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("audio_source", 0))
+        dataSaver = ctx.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("data_saver", false)
+    }
+
+    /** Data saver (backlog 51): on mobile data the songs come at about 70 kbps (Opus 250/249). */
+    @Volatile var dataSaver = false
+
+    /** On mobile data (or another metered network), not Wi-Fi. */
+    fun onMobileData(ctx: Context? = appContext): Boolean {
+        val cm = ctx?.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) return false
+        return caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) || cm.isActiveNetworkMetered
+    }
+
+    /** The data saver is on and this is mobile data: small streams. */
+    private fun saving() = dataSaver && onMobileData()
+
+    /** Which audio formats come first: the best, or with the data saver the small Opus ones. */
+    private fun rank(): Map<Int, Int> = if (saving()) mapOf(250 to 5, 249 to 4, 251 to 3, 140 to 2) else mapOf(774 to 5, 251 to 4, 140 to 3, 250 to 2, 249 to 1)
 
     suspend fun playable(ctx: Context, videoId: String): String {
         // A song on this phone plays from its own file.
@@ -160,7 +180,7 @@ object Streams {
             // Signed in with "Best download quality": YouTube Music's own player first (256 kbps
             // with Premium); signed in otherwise: it's the second try when the quick way fails.
             val signedIn = !cookie.isNullOrBlank()
-            val wantBest = signedIn && appContext?.getSharedPreferences("rym", Context.MODE_PRIVATE)?.getBoolean("download_best", false) == true
+            val wantBest = signedIn && !saving() && appContext?.getSharedPreferences("rym", Context.MODE_PRIVATE)?.getBoolean("download_best", false) == true
             fun premium() = if (System.currentTimeMillis() < premiumBrokenUntil) null else runCatching { premiumLink(videoId) }
                 .onFailure {
                     android.util.Log.w("RyM", "YouTube Music's player failed for $videoId: ${it.message}")
@@ -276,7 +296,7 @@ object Streams {
         val status = answer.getObject("playabilityStatus")
         check(status.getString("status") == "OK") { status.getString("reason") ?: status.getString("status") ?: "not playable" }
         val formats = answer.getObject("streamingData").getArray("adaptiveFormats")
-        val rank = mapOf(251 to 4, 140 to 3, 250 to 2, 249 to 1)
+        val rank = rank()
         val best = (0 until formats.size).map { formats.getObject(it) }
             .filter { it.getString("mimeType", "").startsWith("audio/") && it.getString("url") != null }
             .maxWithOrNull(compareBy({ rank[it.getInt("itag")] ?: 0 }, { it.getInt("bitrate") }))
@@ -332,7 +352,7 @@ object Streams {
         val status = answer.optJSONObject("playabilityStatus")
         check(status?.optString("status") == "OK") { status?.optString("reason")?.ifEmpty { null } ?: status?.optString("status") ?: "not playable" }
         val formats = answer.optJSONObject("streamingData")?.optJSONArray("adaptiveFormats") ?: error("no streams")
-        val rank = mapOf(774 to 5, 251 to 4, 140 to 3, 250 to 2, 249 to 1)
+        val rank = rank()
         val best = (0 until formats.length()).map { formats.getJSONObject(it) }
             .filter { it.optString("mimeType").startsWith("audio/") && (it.has("url") || it.has("signatureCipher")) }
             .maxWithOrNull(compareBy({ rank[it.optInt("itag")] ?: 0 }, { it.optInt("bitrate") }))
@@ -357,7 +377,7 @@ object Streams {
         extractor.fetchPage()
         val best = extractor.audioStreams
             .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
-            .maxByOrNull { it.averageBitrate }
+            .let { all -> if (saving()) all.filter { it.averageBitrate in 1..96_000 }.ifEmpty { all }.maxByOrNull { it.averageBitrate } else all.maxByOrNull { it.averageBitrate } }
             ?: error("no playable audio for this song")
         val ext = if (best.format == MediaFormat.M4A) "m4a" else "webm"
         return best.content to ext

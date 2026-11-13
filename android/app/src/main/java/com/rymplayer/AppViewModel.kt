@@ -364,6 +364,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var perfBadge by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("perf_badge", false))
         private set
 
+    /** Data saver: about 70 kbps on mobile data (backlog 51). */
+    var dataSaver by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("data_saver", false))
+        private set
+
+    fun toggleDataSaver() {
+        dataSaver = !dataSaver
+        com.rymplayer.playback.Streams.dataSaver = dataSaver
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("data_saver", dataSaver).apply()
+    }
+
+    /** Downloads only on Wi-Fi (backlog 52). */
+    var wifiDownloads by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("wifi_downloads", false))
+        private set
+
+    fun toggleWifiDownloads() {
+        wifiDownloads = !wifiDownloads
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("wifi_downloads", wifiDownloads).apply()
+    }
+
+    /** A download would use mobile data while "Wi-Fi only" is on: it says so instead. */
+    private fun waitsForWifi(): Boolean {
+        if (!wifiDownloads || !com.rymplayer.playback.Streams.onMobileData(getApplication())) return false
+        status = tr("Downloads are set to Wi-Fi only")
+        return true
+    }
+
     /** The sung line on the lock screen and in the notification (backlog 29). */
     var lockLyrics by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("lock_lyrics", true))
         private set
@@ -1224,6 +1250,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     } else downloadOnline(t)
 
     private fun downloadOnline(t: Track) = viewModelScope.launch {
+        if (waitsForWifi()) return@launch
         launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(getApplication(), t, com.rymplayer.data.RamPoints.Love.Download) }
         status = "${tr("Downloading")} \"${t.title}\"..."
         status = runCatching { Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
@@ -1260,6 +1287,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val songs = runCatching { api.playlistAll(LIKED_ID, limit) }.getOrElse {
                 status = "${tr("Download failed")}: ${it.message}"
+                batch = null
+                return@launch
+            }
+            if (waitsForWifi()) {
                 batch = null
                 return@launch
             }

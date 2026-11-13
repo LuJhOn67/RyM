@@ -132,4 +132,18 @@ class LibraryTest {
         println("RYMTEST widget: play works")
         onMain { b.pause(); b.release() }
     }
+
+    /** The data saver: the link's format (itag) on this network; RYMNET says which network it is. */
+    @Test
+    fun dataSaverPicksSmallStreamsOnMobileData() {
+        com.rymplayer.playback.Streams.loadSource(ctx)
+        com.rymplayer.playback.Streams.dataSaver = true
+        val id = arguments("song") ?: "fJ9rUzIMcZQ"
+        val url = com.rymplayer.playback.Streams.resolve(id)
+        val itag = android.net.Uri.parse(url).getQueryParameter("itag")
+        println("RYMTEST data saver on, mobile=${com.rymplayer.playback.Streams.onMobileData(ctx)}: itag $itag")
+        com.rymplayer.playback.Streams.dataSaver = false
+    }
+
+    private fun arguments(key: String): String? = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString(key)
 }
