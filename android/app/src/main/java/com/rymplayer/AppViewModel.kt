@@ -314,6 +314,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The phone's look: RyM YTM (pure black, quick picks, big shelves) or the classic one. */
     var ytmTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("theme_ytm", false))
+
+    /** RyM Noir: RyM YTM's layout in its own colors (#121212, grey tiles, green), the mini player
+     *  floating as a rounded bar. The same look as the PC's RyM Noir. */
+    var noirTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("theme_noir", false))
         private set
 
     /** Settings > Colors: a built-in theme's name, "Custom" (imported), or "" (the app's own). */
@@ -426,10 +430,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { player.message = "${tr("Import colors")}: ${it.message}" }
     }
 
+    /** Classic, then RyM YTM, then RyM Noir. */
     fun toggleTheme() {
-        ytmTheme = !ytmTheme
-        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("theme_ytm", ytmTheme).apply()
+        when {
+            !ytmTheme -> { ytmTheme = true; noirTheme = false }
+            !noirTheme -> noirTheme = true
+            else -> { ytmTheme = false; noirTheme = false }
+        }
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("theme_ytm", ytmTheme).putBoolean("theme_noir", noirTheme).apply()
     }
+
+    val themeName: String get() = if (noirTheme) "RyM Noir" else if (ytmTheme) "RyM YTM" else tr("Classic")
 
     /** The sung line of the playing song's synced lyrics. */
     var lyricLine by mutableStateOf<Int?>(null)

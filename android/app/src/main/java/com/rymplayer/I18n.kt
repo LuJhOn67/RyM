@@ -250,6 +250,7 @@ object I18n {
         "More like this" to "راح يطلع أكثر",
         "Won't be suggested" to "ما راح تنقترح",
         "Undo" to "تراجع",
+        "Classic, RyM YTM (pure black, quick picks and big shelves) or RyM Noir (grey tiles, green, a floating player) · tap to switch" to "كلاسيك، أو RyM YTM (أسود، اختيارات سريعة ورفوف كبيرة)، أو RyM Noir (مربعات رمادية، أخضر، مشغّل عايم) · اضغط للتبديل",
         "Storage" to "التخزين",
         "Clear cache" to "مسح الكاش",
         "Played songs kept on this phone" to "الأغاني المحفوظة بالتلفون",

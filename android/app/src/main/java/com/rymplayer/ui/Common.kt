@@ -141,12 +141,22 @@ private fun patternBrush(t: com.rymplayer.data.Themes.Theme, s: Float): androidx
 }
 
 @Composable
-fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = null, content: @Composable () -> Unit) {
+fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = null, noir: Boolean = false, content: @Composable () -> Unit) {
     androidx.compose.runtime.SideEffect {
         themeBg = colors?.let { hex(it.bg) }
         themeCut = colors?.cut == true
     }
-    val scheme = if (colors == null) darkColorScheme(
+    val scheme = if (colors == null && noir) darkColorScheme(
+        // RyM Noir (the PC's colors): #121212 pages, #202020 tiles, grey words, green.
+        primary = NoirGreen,
+        onPrimary = Color.Black,
+        background = Color(0xFF121212),
+        surface = Color(0xFF121212),
+        surfaceVariant = Color(0xFF202020),
+        onSurfaceVariant = Color(0xFF898989),
+        onBackground = Color(0xFFE0E0E0),
+        onSurface = Color(0xFFE0E0E0),
+    ) else if (colors == null) darkColorScheme(
         primary = if (ytm) Color(0xFFFF3048) else Accent,
         background = if (ytm) Color.Black else Color(0xFF0B0B0D),
         surface = if (ytm) Color.Black else Color(0xFF0B0B0D),
@@ -177,6 +187,9 @@ fun RymTheme(ytm: Boolean = false, colors: com.rymplayer.data.Themes.Theme? = nu
         }) { content() }
     }
 }
+
+/** RyM Noir's green. */
+val NoirGreen = Color(0xFF1ED760)
 
 /** Cover art with a rounded corner and a note placeholder while it loads. */
 @Composable

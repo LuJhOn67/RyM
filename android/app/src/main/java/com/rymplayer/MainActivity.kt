@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val model: AppViewModel = viewModel()
-            RymTheme(model.ytmTheme, model.colors) {
+            RymTheme(model.ytmTheme, model.colors, model.noirTheme) {
                 androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                     RymApp(model)
                     // Rain and ash over the app (Lo-Fi Rain, Remorse), landing on the mini player.

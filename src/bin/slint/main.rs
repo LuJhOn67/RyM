@@ -302,10 +302,12 @@ enum Sleep {
 }
 
 /// The layouts to pick from, with their number in the window (Theme.index) and the settings.
-const THEMES: [(&str, usize); 3] = [("RyM Dusk", 0), ("RyM Wide", 2), ("RyM Noir", 3)];
+const THEMES: [(&str, usize); 2] = [("RyM Dusk", 0), ("RyM Noir", 3)];
 
-/// A saved layout's place in [`THEMES`] (the light RyM Mist, gone, opens as Dusk).
+/// A saved layout's place in [`THEMES`] (the light RyM Mist, gone, opens as Dusk; RyM Wide as Noir).
 fn theme_slot(saved: usize) -> usize {
+    // RyM Wide, gone, opens as RyM Noir (the same layout).
+    let saved = if saved == 2 { 3 } else { saved };
     THEMES.iter().position(|t| t.1 == saved).unwrap_or(0)
 }
 const SLEEP_CHOICES: [u32; 7] = [0, 15, 30, 45, 60, 90, u32::MAX];

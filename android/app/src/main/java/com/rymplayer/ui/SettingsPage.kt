@@ -284,7 +284,7 @@ fun SettingsPage(vm: AppViewModel) {
                 }
             }
             Section(tr("Theme")) {
-                TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }
+                TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, RyM YTM (pure black, quick picks and big shelves) or RyM Noir (grey tiles, green, a floating player) · tap to switch"), vm.themeName) { vm.toggleTheme() }
                 TapRow(Icons.Default.Palette, tr("Colors"), tr("12 looks, the same as on the PC · tap to change"), vm.palette.ifEmpty { tr("The layout's own") }, onPrev = { vm.cyclePalette(-1) }) { vm.cyclePalette() }
                 SwitchRow(Icons.Default.AutoAwesome, tr("Liquid Aurora"), tr("The cover's colors move behind the player with the bass"), vm.aurora) { vm.toggleAurora() }
                 SwitchRow(Icons.Default.GraphicEq, tr("Vinyl record"), tr("The cover turns like a record: faster with Nightcore, slower with Slowed"), vm.vinyl) { vm.toggleVinyl() }

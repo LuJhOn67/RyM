@@ -122,6 +122,30 @@ import com.rymplayer.data.fmtTime
 fun MiniPlayer(vm: AppViewModel, tint: Color) {
     val p = vm.player
     val t = p.current ?: return
+    if (vm.noirTheme && vm.colors == null) {
+        // RyM Noir: a rounded bar floating over the page, lighter while playing, a thin line under it.
+        val bg by androidx.compose.animation.animateColorAsState(if (p.playing) Color(0xFF333842) else Color(0xFF202020), label = "bar")
+        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(10.dp)).background(bg).clickable { vm.playerOpen = true }) {
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Cover(t.thumb, 44.dp, 120, 3.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Marquee(t.title, 15, FontWeight.Normal, Color(0xFFE0E0E0))
+                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFF898989), fontSize = 13.sp)
+                }
+                PlayPause(vm, 30)
+            }
+            LinearProgressIndicator(
+                progress = { played(p.position, p.duration) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).height(2.dp),
+                color = Color(0xFFE0E0E0),
+                trackColor = Color(0xFF4D4D4D),
+                drawStopIndicator = {},
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+        return
+    }
     if (vm.ytmTheme) {
         // RyM YTM: a flat bar across the screen, the progress as a thin line under it.
         Column(Modifier.fillMaxWidth().background(Color(0xFF212121)).clickable { vm.playerOpen = true }) {
