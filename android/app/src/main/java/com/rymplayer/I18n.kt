@@ -250,6 +250,8 @@ object I18n {
         "More like this" to "راح يطلع أكثر",
         "Won't be suggested" to "ما راح تنقترح",
         "Undo" to "تراجع",
+        "Lyrics on the lock screen" to "الكلمات بشاشة القفل",
+        "The sung line under the song's name on the lock screen and in the notification" to "السطر اللي دينغنّى يطلع تحت اسم الأغنية بشاشة القفل والإشعار",
         "Nothing found for" to "ما لگيت شي لـ",
         "Long talks" to "المحاضرات الطويلة",
         "Long talks' speed" to "سرعة المحاضرات الطويلة",

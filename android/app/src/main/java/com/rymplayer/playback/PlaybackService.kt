@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
+import kotlinx.coroutines.launch
 import androidx.media3.session.MediaSessionService
 
 /**
@@ -35,6 +36,10 @@ object QueueBridge {
     @Volatile var mixNext: (((MediaItem?) -> Unit) -> Unit)? = null
     /** The playing song or the next one is Quran or a talk: they play whole, without a blend. */
     @Volatile var playsWhole: (() -> Boolean)? = null
+    /** The sung line, for the lock screen and the notification (null: none, or turned off). */
+    @Volatile var lyric: String? = null
+    /** The line changed: the service shows it (set by the service, called on the main thread). */
+    @Volatile var lyricChanged: (() -> Unit)? = null
     /** Android Auto or the assistant started a list on the player: the app's queue becomes it. */
     @Volatile var adopt: ((List<com.rymplayer.data.Track>, Int) -> Unit)? = null
     /** A song was picked by hand: a mix that hasn't started sounding yet is dropped. */
@@ -141,6 +146,10 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
         // Started by Android Auto or the assistant without the app: the account and source.
         if (Streams.cookie == null) Streams.cookie = com.rymplayer.data.SecureCookie.read(getSharedPreferences("rym", MODE_PRIVATE))
         Streams.loadSource(this)
+        QueueBridge.lyricChanged = { handler.post { lyricViews.forEach { it() } } }
+        // The home-screen widget follows the song and play / pause.
+        players.forEach { it?.addListener(widgetFollows) }
+        showOnWidget()
         session = androidx.media3.session.MediaLibraryService.MediaLibrarySession.Builder(this, wrap(players[0]!!), Library(this, libraryScope)).setSessionActivity(open).build()
         QueueBridge.cancelMix = { handler.post { cancelMix() } }
         // RyM Link: the PCs on this Wi-Fi hear what plays here.
@@ -218,6 +227,26 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
         )
         fun held() = mix?.let { it.new === exo && it.began == 0L } == true
         return object : ForwardingPlayer(exo) {
+            // The session's listeners, to tell them when the sung line changes.
+            private val listening = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+            init {
+                lyricViews += { listening.forEach { l -> l.onMediaMetadataChanged(mediaMetadata) } }
+            }
+            override fun addListener(listener: Player.Listener) {
+                super.addListener(listener)
+                listening += listener
+            }
+            override fun removeListener(listener: Player.Listener) {
+                super.removeListener(listener)
+                listening -= listener
+            }
+            // Lyrics on the lock screen and in the notification: the sung line under the title,
+            // where the artist is (the artist comes back between lines and after the song).
+            override fun getMediaMetadata(): androidx.media3.common.MediaMetadata {
+                val m = super.getMediaMetadata()
+                val line = QueueBridge.lyric?.takeIf { it.isNotBlank() } ?: return m
+                return m.buildUpon().setArtist("♪ $line").setSubtitle(m.artist).build()
+            }
             override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon().addAll(*skips.toIntArray()).build()
             override fun isCommandAvailable(command: Int) = command in skips || super.isCommandAvailable(command)
             override fun seekToNext() { QueueBridge.next?.invoke() ?: super.seekToNext() }
@@ -239,6 +268,40 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
             }
         }
     }
+
+    private val widgetFollows = object : Player.Listener {
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.containsAny(Player.EVENT_MEDIA_METADATA_CHANGED, Player.EVENT_IS_PLAYING_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION)) showOnWidget()
+        }
+    }
+    private var widgetCoverFor: android.net.Uri? = null
+    private var widgetCover: android.graphics.Bitmap? = null
+
+    /** The widget shows the session's song (its cover loaded once per song). */
+    private fun showOnWidget() {
+        val p = players[active] ?: return
+        val m = p.mediaMetadata
+        val playing = p.isPlaying || (mix?.new?.isPlaying == true)
+        val art = m.artworkUri
+        com.rymplayer.playback.PlayerWidget.show(this, m.title?.toString(), m.artist?.toString(), playing, widgetCover.takeIf { art != null && art == widgetCoverFor })
+        if (art != null && art != widgetCoverFor) {
+            widgetCoverFor = art
+            libraryScope.launch {
+                val bmp = runCatching {
+                    val req = coil.request.ImageRequest.Builder(this@PlaybackService).data(art).size(256).allowHardware(false).build()
+                    (coil.Coil.imageLoader(this@PlaybackService).execute(req).drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                }.getOrNull()
+                if (widgetCoverFor == art) {
+                    widgetCover = bmp
+                    val now = players[active] ?: return@launch
+                    com.rymplayer.playback.PlayerWidget.show(this@PlaybackService, now.mediaMetadata.title?.toString(), now.mediaMetadata.artist?.toString(), now.isPlaying, bmp)
+                }
+            }
+        }
+    }
+
+    /** Each wrapped player's way to show a new sung line. */
+    private val lyricViews = mutableListOf<() -> Unit>()
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): androidx.media3.session.MediaLibraryService.MediaLibrarySession? = session
 
@@ -484,6 +547,8 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        QueueBridge.lyricChanged = null
+        QueueBridge.lyric = null
         libraryScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         (getSystemService(AUDIO_SERVICE) as? android.media.AudioManager)?.unregisterAudioDeviceCallback(plugged)
         handler.removeCallbacksAndMessages(null)

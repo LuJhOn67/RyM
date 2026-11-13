@@ -2,4 +2,5 @@
 <resources>
     <!-- The share menu's entry for RyM. -->
     <string name="play_in_rym">Play in RyM</string>
+    <string name="widget_description">The playing song, with play, previous and next</string>
 </resources>

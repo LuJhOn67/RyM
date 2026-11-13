@@ -309,6 +309,7 @@ fun SettingsPage(vm: AppViewModel) {
                 }
                 Divider()
                 SwitchRow(Icons.Default.AutoAwesome, tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), snd.automix) { vm.changeSound(snd.copy(automix = !snd.automix)) }
+                SwitchRow(Icons.Default.MicOff, tr("Lyrics on the lock screen"), tr("The sung line under the song's name on the lock screen and in the notification"), vm.lockLyrics) { vm.toggleLockLyrics() }
                 SwitchRow(Icons.Default.MicOff, tr("Remove vocals (karaoke)"), tr("The voice taken out (it sits in the middle of the stereo); the music stays"), snd.vocalsOff) { vm.changeSound(snd.copy(vocalsOff = !snd.vocalsOff)) }
                 Divider()
                 SwitchRow(Icons.Default.ContentCut, tr("Skip silence"), tr("Silent parts at the start and end of songs are skipped"), snd.skipSilence) { vm.changeSound(snd.copy(skipSilence = !snd.skipSilence)) }

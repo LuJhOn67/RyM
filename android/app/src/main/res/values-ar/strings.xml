@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="play_in_rym">تشغيل في RyM</string>
+    <string name="widget_description">الأغنية اللي دتشتغل، ويّا تشغيل والسابقة والجاية</string>
 </resources>

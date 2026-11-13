@@ -364,6 +364,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var perfBadge by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("perf_badge", false))
         private set
 
+    /** The sung line on the lock screen and in the notification (backlog 29). */
+    var lockLyrics by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("lock_lyrics", true))
+        private set
+
+    fun toggleLockLyrics() {
+        lockLyrics = !lockLyrics
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("lock_lyrics", lockLyrics).apply()
+        if (!lockLyrics) showOnLockScreen(null)
+    }
+
+    /** The line for the lock screen; the service is told only when it changes. */
+    private fun showOnLockScreen(line: String?) {
+        val shown = line?.takeIf { lockLyrics && it.isNotBlank() }
+        if (com.rymplayer.playback.QueueBridge.lyric == shown) return
+        com.rymplayer.playback.QueueBridge.lyric = shown
+        com.rymplayer.playback.QueueBridge.lyricChanged?.invoke()
+    }
+
     fun cycleFps(step: Int = 1) {
         val steps = listOf(24, 30, 60, 120, 144, 240, 0)
         fpsCap = steps[Math.floorMod(steps.indexOf(fpsCap).coerceAtLeast(0) + step, steps.size)]
@@ -1027,18 +1045,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * the main thread): started at once from init, it set [lyricLine] before that existed.
      */
     private fun followLyrics() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-        androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId) }
+        androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId, lockLyrics) }
             .collectLatest {
                 val synced = lyrics?.synced.orEmpty()
                 if (synced.isEmpty()) {
                     lyricLine = null
+                    showOnLockScreen(null)
                     return@collectLatest
                 }
                 while (true) {
                     val pos = player.exactPosition()
                     val i = Lrclib.currentLine(synced, pos)
                     lyricLine = i
-                    if (!player.playing || !player.visible) break
+                    showOnLockScreen(i?.let { synced[it].second })
+                    // Off screen it goes on only for the lock screen's line.
+                    if (!player.playing || (!player.visible && !lockLyrics)) break
                     val next = synced.getOrNull((i ?: -1) + 1)?.first ?: break
                     delay(((next - pos) / player.speed.coerceAtLeast(0.1f) * 1000).toLong().coerceIn(30L, 10_000L) + 15)
                 }

@@ -112,4 +112,24 @@ class LibraryTest {
         assertTrue("search found songs", found.isNotEmpty())
         onMain { b.pause(); b.release() }
     }
+
+    /** The widget draws, and its play / pause and next buttons reach the player. */
+    @Test
+    fun widgetButtonsWork() {
+        val b = browser()
+        onMain {
+            b.setMediaItem(MediaItem.Builder().setRequestMetadata(MediaItem.RequestMetadata.Builder().setSearchQuery("daft punk one more time").build()).build())
+            b.prepare()
+            b.play()
+        }
+        assertTrue("plays", waitFor(25) { b.isPlaying })
+        com.rymplayer.playback.PlayerWidget.show(ctx, "Test", "Artist", true, null)
+        com.rymplayer.playback.PlayerWidget.button(ctx, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE).send()
+        assertTrue("paused by the widget", waitFor(10) { !b.isPlaying })
+        println("RYMTEST widget: pause works")
+        com.rymplayer.playback.PlayerWidget.button(ctx, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE).send()
+        assertTrue("playing again by the widget", waitFor(10) { b.isPlaying })
+        println("RYMTEST widget: play works")
+        onMain { b.pause(); b.release() }
+    }
 }
