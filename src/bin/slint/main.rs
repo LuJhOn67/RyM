@@ -754,6 +754,15 @@ fn wire(ui: &AppWindow, st: &Shared) {
             }
         });
     }
+    // The lyrics' timing for this song: , earlier, . later (a quarter second each).
+    {
+        let st = st.clone();
+        app.on_lyrics_shift(move |by| {
+            let Some(t) = st.borrow().q.now().cloned() else { return };
+            let now = rymplayer::lyrics_offset::shift(&t.video_id, by);
+            toast(&st, &format!("{}: {now:+.2} s", tr("Lyrics timing")));
+        });
+    }
     app.on_next_theme(w(|st| {
         let next = (theme_slot(st.borrow().config.gui_theme) + 1) % THEMES.len();
         set_theme(st, next);
@@ -3276,6 +3285,8 @@ fn tick(st: &Shared) {
     animations(st);
     let mut s = st.borrow_mut();
     let Some((pos, dur, loaded, playing, finished)) = s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_loaded(), a.is_playing(), a.finished())) else { return };
+    // The lyrics' place: the song's second plus this song's own shift (see `lyrics_offset`).
+    let lpos = pos + s.q.now().map_or(0.0, |t| rymplayer::lyrics_offset::get(&t.video_id));
     if let Some(a) = &mut s.audio {
         a.tick();
     }
@@ -3353,7 +3364,7 @@ fn tick(st: &Shared) {
     } else {
     // The window is told only what changed.
     let sec = pos as u32;
-    let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, pos)).map_or(-1, |l| l as i32);
+    let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, lpos)).map_or(-1, |l| l as i32);
     let old = s.shown;
     s.shown = (playing, sec, dur as u32, line);
     let synced = s.lyrics.as_ref().is_some_and(|l| !l.synced.is_empty());
@@ -3377,8 +3388,8 @@ fn tick(st: &Shared) {
         let i = line as usize;
         let split = s.lyrics.as_ref().and_then(|l| {
             let words = l.words.get(i).filter(|w| !w.is_empty())?;
-            let end = l.synced.get(i + 1).map_or(words.last().map_or(pos, |w| w.0) + 3.0, |n| n.0);
-            Some(rymplayer::lyrics::sung_split(words, end, pos))
+            let end = l.synced.get(i + 1).map_or(words.last().map_or(lpos, |w| w.0) + 3.0, |n| n.0);
+            Some(rymplayer::lyrics::sung_split(words, end, lpos))
         });
         if let Some((sung, left)) = split
             && let Some(mut row) = s.m.lyrics.row_data(i)
@@ -3427,6 +3438,7 @@ fn tick(st: &Shared) {
 fn extras(st: &Shared) {
     let Ok(mut s) = st.try_borrow_mut() else { return };
     let Some((pos, dur, playing, loaded)) = s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_playing(), a.is_loaded())) else { return };
+    let lpos = pos + s.q.now().map_or(0.0, |t| rymplayer::lyrics_offset::get(&t.video_id));
     let ui = s.ui.upgrade();
     // Sleep timer: the last 10 seconds fade out, then the music stops.
     if let Some(sleep) = s.sleep {
@@ -3529,11 +3541,11 @@ fn extras(st: &Shared) {
     }
     // The karaoke and the floating lyrics: the sung line, how far into it, and the next one.
     if let Some(l) = s.lyrics.as_ref().filter(|l| !l.synced.is_empty()) {
-        let line = rymplayer::lyrics::current_line(&l.synced, pos);
+        let line = rymplayer::lyrics::current_line(&l.synced, lpos);
         if let (Some(i), Some(ui), false) = (line, &ui, away) {
             let start = l.synced[i].0;
             let end = l.synced.get(i + 1).map_or(start + 5.0, |n| n.0);
-            ui.global::<App>().set_line_progress(((pos - start) / (end - start).max(0.3)).clamp(0.0, 1.0));
+            ui.global::<App>().set_line_progress(((lpos - start) / (end - start).max(0.3)).clamp(0.0, 1.0));
         }
         let now_line = line.and_then(|i| l.synced.get(i)).map_or("♪".to_string(), |x| if x.1.is_empty() { "♪".into() } else { x.1.clone() });
         let next_line = l.synced.get(line.map_or(0, |i| i + 1)).map(|x| x.1.clone()).unwrap_or_default();

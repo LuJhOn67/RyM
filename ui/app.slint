@@ -184,6 +184,8 @@ export global App {
     // The lyrics stage: the song's lyrics big over its own colors, full screen (F; Esc leaves).
     in-out property <bool> stage;
     callback fullscreen(bool);
+    // The lyrics' timing for this song moved by so many seconds (, and . keys).
+    callback lyrics-shift(float);
     in property <[LyricLine]> lyrics;
     in property <string> lyrics-note;
     in property <int> lyric-line: -1;
@@ -2481,6 +2483,11 @@ export component AppWindow inherits Window {
             // The lyrics stage: F opens and closes it, Esc closes it.
             if (e.text == Key.Escape && App.stage) {
                 App.stage = false;
+                return accept;
+            }
+            // The lyrics' timing for this song: , sooner, . later.
+            if ((e.text == "," || e.text == ".") && App.page != 1) {
+                App.lyrics-shift(e.text == "," ? 0.25 : -0.25);
                 return accept;
             }
             if ((e.text == "f" || e.text == "F") && App.page != 1 && !e.modifiers.control) {

@@ -5311,7 +5311,9 @@ fn tick(ui: &Shared) {
             s.w.pos.set_text(&fmt_time(pos));
         }
     }
-    let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, pos));
+    // The lyrics' place: the song's second plus this song's own shift (see `lyrics_offset`).
+    let lpos = pos + s.q.now().map_or(0.0, |t| rymplayer::lyrics_offset::get(&t.video_id));
+    let line = s.lyrics.as_ref().and_then(|l| rymplayer::lyrics::current_line(&l.synced, lpos));
     // Word by word: the sung line fills as it's sung (sources with word times): the sung part in
     // the line's color, the rest faded; the line before goes back to plain text.
     {

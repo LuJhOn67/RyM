@@ -451,7 +451,9 @@ fn draw_lyrics(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let inner_h = area.height.saturating_sub(2);
     let (lines, scroll): (Vec<Line>, u16) = match &app.lyrics {
         Some(l) if !l.synced.is_empty() => {
-            let cur = lyrics::current_line(&l.synced, app.pos);
+            // The song's second plus its own lyrics shift (< and >).
+            let shift = app.now_playing().map_or(0.0, |t| rymplayer::lyrics_offset::get(&t.video_id));
+            let cur = lyrics::current_line(&l.synced, app.pos + shift);
             let mut lines = Vec::new();
             for (i, (_, text)) in l.synced.iter().enumerate() {
                 let text = if text.is_empty() { "♪".to_string() } else { show(text) };

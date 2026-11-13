@@ -949,6 +949,13 @@ impl App {
             KeyCode::Char('o') => self.open_song_menu(),
             KeyCode::Char('z') => self.next_sleep(),
             KeyCode::Char('e') => self.cycle_repeat(),
+            // The lyrics' timing for this song: < sooner, > later (a quarter second each).
+            KeyCode::Char('<') | KeyCode::Char('>') => {
+                if let Some(t) = self.now_playing().cloned() {
+                    let now = rymplayer::lyrics_offset::shift(&t.video_id, if k.code == KeyCode::Char('<') { 0.25 } else { -0.25 });
+                    self.status = format!("{}: {now:+.2} s", tr("Lyrics timing"));
+                }
+            }
             KeyCode::Char('R') => self.show_recap(),
             KeyCode::Char('[') => self.step_mode(-1),
             KeyCode::Char(']') => self.step_mode(1),

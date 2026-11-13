@@ -205,6 +205,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "sleep timer" => "مؤقت النوم",
         "repeat" => "تكرار",
         "New direction:" => "اتجاه جديد:",
+        "Lyrics timing" => "توقيت الكلمات",
         "Remove vocals (karaoke)" => "شيل الصوت (كاريوكي)",
         "The voice taken out (it sits in the middle of the stereo); the music stays" => "الصوت ينشال (هو بنص الستيريو) والموسيقى تبقى",
         "Your favorite songs (RaM points)" => "أغانيك المفضّلة (نقاط RaM)",
