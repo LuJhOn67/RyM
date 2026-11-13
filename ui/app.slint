@@ -1261,6 +1261,14 @@ component Stage inherits Rectangle {
             Icon { size: 44px * Ui.k; tint: #ffffff; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } }
             Icon { size: 54px * Ui.k; tint: #ffffff; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg"); clicked => { App.toggle-play(); } }
             Icon { size: 44px * Ui.k; tint: #ffffff; source: @image-url("icons/next.svg"); clicked => { App.next(); } }
+            // Like the playing song.
+            Icon {
+                size: 40px * Ui.k;
+                tint: App.liked ? Theme.accent : #ffffffd0;
+                tip: App.tr("Like");
+                source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg");
+                clicked => { App.like-now(); }
+            }
         }
     }
     Lyrics {
