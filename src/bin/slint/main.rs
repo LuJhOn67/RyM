@@ -234,6 +234,8 @@ struct State {
     toast_id: u64,
     /// Songs taken out of the queue, the last first out (Undo puts them back).
     removed: Vec<rymplayer::queue::Removed>,
+    /// Settings > Shortcuts: the action whose new key the next key press is.
+    key_for: Option<&'static str>,
     last_prev: Instant,
     listened_at: Instant,
     stats_written: Instant,
@@ -605,6 +607,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         art_for: String::new(),
         toast_id: 0,
         removed: Vec::new(),
+        key_for: None,
         last_prev: Instant::now() - Duration::from_secs(10),
         listened_at: Instant::now(),
         stats_written: Instant::now(),
@@ -773,6 +776,10 @@ fn wire(ui: &AppWindow, st: &Shared) {
     {
         let st = st.clone();
         app.on_undo_remove(move || undo_remove(&st));
+    }
+    {
+        let st = st.clone();
+        app.on_key(move |text, ctrl, alt, shift| on_key(&st, &text, ctrl, alt, shift));
     }
     app.on_next_theme(w(|st| {
         let next = (theme_slot(st.borrow().config.gui_theme) + 1) % THEMES.len();
@@ -990,6 +997,138 @@ fn take_from_queue(st: &Shared, i: usize, note: &'static str) {
     render_queue(st);
     toast(st, &format!("{}: {title}", tr(note)));
     with_app(st, |a| a.set_toast_action(tr("Undo").into()));
+}
+
+/// The name of a key that has no character of its own (arrows, Enter...), or None.
+fn key_name(text: &str) -> Option<&'static str> {
+    use slint::platform::Key;
+    let c = text.chars().next()?;
+    let is = |k: Key| char::from(k) == c;
+    Some(if is(Key::LeftArrow) {
+        "left"
+    } else if is(Key::RightArrow) {
+        "right"
+    } else if is(Key::UpArrow) {
+        "up"
+    } else if is(Key::DownArrow) {
+        "down"
+    } else if is(Key::Return) {
+        "enter"
+    } else if is(Key::Tab) {
+        "tab"
+    } else if is(Key::Backspace) {
+        "backspace"
+    } else if is(Key::Delete) {
+        "delete"
+    } else if is(Key::Home) {
+        "home"
+    } else if is(Key::End) {
+        "end"
+    } else if is(Key::PageUp) {
+        "pageup"
+    } else if is(Key::PageDown) {
+        "pagedown"
+    } else if is(Key::Escape) {
+        "escape"
+    } else if is(Key::F1) {
+        "f1"
+    } else if is(Key::F2) {
+        "f2"
+    } else if is(Key::F3) {
+        "f3"
+    } else if is(Key::F4) {
+        "f4"
+    } else if is(Key::F5) {
+        "f5"
+    } else if is(Key::F6) {
+        "f6"
+    } else if is(Key::F7) {
+        "f7"
+    } else if is(Key::F8) {
+        "f8"
+    } else if is(Key::F9) {
+        "f9"
+    } else if is(Key::F10) {
+        "f10"
+    } else if is(Key::F11) {
+        "f11"
+    } else if is(Key::F12) {
+        "f12"
+    } else if [Key::Shift, Key::ShiftR, Key::Control, Key::ControlR, Key::Alt, Key::AltGr, Key::Meta, Key::MetaR].into_iter().any(is) {
+        // A modifier alone: not a key yet.
+        "modifier"
+    } else if (c as u32) >= 0xF700 && (c as u32) <= 0xF8FF {
+        "other"
+    } else {
+        return None;
+    })
+}
+
+/// A key press: a new key being set (Settings > Shortcuts), or the shortcut it is.
+fn on_key(st: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let name = key_name(text);
+    if matches!(name, Some("modifier")) {
+        return st.borrow().key_for.is_some();
+    }
+    let combo = rymplayer::shortcuts::combo(ctrl, alt, shift, name.unwrap_or(text));
+    // Setting a key: this press is it (Esc leaves it as it was).
+    let setting = st.borrow_mut().key_for.take();
+    if let Some(id) = setting {
+        if name == Some("escape") {
+            toast(st, tr("Shortcut unchanged"));
+        } else if name == Some("other") {
+            st.borrow_mut().key_for = Some(id);
+            return true;
+        } else {
+            {
+                let mut s = st.borrow_mut();
+                rymplayer::shortcuts::rebind(&mut s.config.shortcuts, id, &combo);
+                s.config.save();
+            }
+            let action = rymplayer::shortcuts::ACTIONS.iter().find(|a| a.id == id).map_or(id, |a| a.name);
+            toast(st, &format!("{}: {}", tr_any(action), rymplayer::shortcuts::label(&combo)));
+        }
+        fill_settings(st);
+        return true;
+    }
+    let (action, page) = {
+        let s = st.borrow();
+        let page = s.ui.upgrade().map_or(0, |ui| ui.global::<App>().get_page());
+        (rymplayer::shortcuts::action_for(&s.config.shortcuts, &combo), page)
+    };
+    let Some(action) = action else { return false };
+    // A plain key types in the search page's box.
+    if page == 1 && rymplayer::shortcuts::types(&combo) {
+        return false;
+    }
+    let Some(ui) = st.borrow().ui.upgrade() else { return false };
+    let app = ui.global::<App>();
+    let zoom = ui.global::<Ui>().get_zoom();
+    match action {
+        "play" => app.invoke_toggle_play(),
+        "next" => app.invoke_next(),
+        "previous" => app.invoke_previous(),
+        "back" => app.invoke_skip_by(-1),
+        "forward" => app.invoke_skip_by(1),
+        "vol-up" => app.invoke_set_volume((app.get_volume() + 0.05).min(1.0)),
+        "vol-down" => app.invoke_set_volume((app.get_volume() - 0.05).max(0.0)),
+        "like" => app.invoke_like_now(),
+        "repeat" => app.invoke_repeat(),
+        "lyrics" => app.set_show_lyrics(!app.get_show_lyrics()),
+        "stage" => app.set_stage(!app.get_stage()),
+        "lyrics-sooner" => app.invoke_lyrics_shift(0.25),
+        "lyrics-later" => app.invoke_lyrics_shift(-0.25),
+        "undo" => app.invoke_undo_remove(),
+        "zoom-in" => app.invoke_zoom(zoom + 0.05),
+        "zoom-out" => app.invoke_zoom(zoom - 0.05),
+        "zoom-reset" => app.invoke_zoom(0.85),
+        "theme" => app.invoke_next_theme(),
+        _ => return false,
+    }
+    true
 }
 
 /// Undo: the last song taken out of the queue goes back to its place.
@@ -1583,6 +1722,20 @@ fn fill_settings(st: &Shared) {
     if rymplayer::vlc::find().is_some() {
         let at = rows.iter().position(|r| r.id == "connections").map_or(rows.len(), |i| i + 1);
         rows.insert(at, switch("vlc", "Play songs in VLC", "Each song opens in VLC", c.play_in_vlc));
+    }
+    // Shortcuts: one row each; its button waits for the new key.
+    if let Some(at) = rows.iter().position(|r| r.kind == 4 && r.title == tr_any("Updates")) {
+        let mut keys = vec![head("Shortcuts")];
+        for a in rymplayer::shortcuts::ACTIONS {
+            let waiting = s.key_for == Some(a.id);
+            let about = if waiting { t("Press the new key (Esc: leave it)") } else { String::new() };
+            let value = if waiting { "…".to_string() } else { rymplayer::shortcuts::label(&rymplayer::shortcuts::key_of(&c.shortcuts, a.id)) };
+            keys.push(button(&format!("key:{}", a.id), a.name, about, &value));
+        }
+        keys.push(button("keys-reset", "Default shortcuts", t("Every shortcut back to how it came"), "Reset"));
+        for (i, row) in keys.into_iter().enumerate() {
+            rows.insert(at + i, row);
+        }
     }
     if let Some(at) = rows.iter().position(|r| r.kind == 4 && r.title == tr_any("Plugins")) {
         let mut extra: Vec<Setting> = s
@@ -2262,7 +2415,25 @@ fn ram_summary() -> String {
 }
 
 fn press(st: &Shared, id: &str) {
+    if let Some(action) = id.strip_prefix("key:") {
+        if let Some(a) = rymplayer::shortcuts::ACTIONS.iter().find(|a| a.id == action) {
+            st.borrow_mut().key_for = Some(a.id);
+            toast(st, &format!("{}: {}", tr_any(a.name), tr("Press the new key (Esc: leave it)")));
+            fill_settings(st);
+        }
+        return;
+    }
     match id {
+        "keys-reset" => {
+            {
+                let mut s = st.borrow_mut();
+                s.config.shortcuts.clear();
+                s.key_for = None;
+                s.config.save();
+            }
+            toast(st, tr("Shortcuts are back to how they came"));
+            fill_settings(st);
+        }
         "ram-reset-all" => {
             let sure = st.borrow().reset_asked.is_some_and(|at| at.elapsed() < Duration::from_secs(5));
             if sure {
