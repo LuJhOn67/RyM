@@ -717,6 +717,7 @@ struct Ui {
     scrobbler: core::Scrobbler,
     peers: core::PeerWatch,
     streak: core::SkipStreak,
+    device_eq: core::DeviceEq,
     loading: bool,
     radio_pending: bool,
     /// Liquid Aurora: the loudest bass lately; the theme extras last shown (vinyl, aurora, colors).
@@ -1573,6 +1574,7 @@ fn build(app: &Application) {
         scrobbler: Default::default(),
         peers: Default::default(),
         streak: Default::default(),
+        device_eq: Default::default(),
         loading: false,
         radio_pending: false,
         bass_peak: 0.05,
@@ -2402,6 +2404,9 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
             let gains = {
                 let mut s = ui.borrow_mut();
                 s.config.eq_preset = d.selected() as usize;
+                // The EQ changed by hand: it's this output device's from now on.
+                let s = &mut *s;
+                s.device_eq.changed(&mut s.config);
                 s.config.fx().eq
             };
             apply_sound(&ui);
@@ -2422,6 +2427,8 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
                 }
                 s.config.eq_custom[i] = v.clamp(-12.0, 12.0) as f32;
                 s.config.eq_preset = custom;
+                let s = &mut *s;
+                s.device_eq.changed(&mut s.config);
             }
             if preset.selected() as usize != custom {
                 preset.set_selected(custom as u32);
@@ -5143,6 +5150,15 @@ fn glide(scroll: &gtk::ScrolledWindow, target: f64) {
 
 fn tick(ui: &Shared) {
     scheduled_reset(ui);
+    // The sound moved to another output device: its own EQ comes back.
+    {
+        let mut s = ui.borrow_mut();
+        let s = &mut *s;
+        if s.device_eq.check(&mut s.config) {
+            rymplayer::fx::set(s.config.fx());
+            s.config.save();
+        }
+    }
     let mut s = ui.borrow_mut();
     let Some((pos, dur, loaded, playing, finished)) =
         s.audio.as_ref().map(|a| (a.position(), a.duration().unwrap_or(0.0), a.is_loaded(), a.is_playing(), a.finished()))

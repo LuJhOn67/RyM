@@ -155,6 +155,7 @@ struct State {
     scrobbler: core::Scrobbler,
     peers: core::PeerWatch,
     streak: core::SkipStreak,
+    device_eq: core::DeviceEq,
     /// yt-dlp, ejs and Node as found (the settings).
     ytdlp_status: String,
     crossfade_for: u64,
@@ -541,6 +542,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         scrobbler: Default::default(),
         peers: Default::default(),
         streak: Default::default(),
+        device_eq: Default::default(),
         ytdlp_status: String::new(),
         crossfade_for: 0,
         resume_at: None,
@@ -1791,6 +1793,11 @@ fn choose(st: &Shared, id: &str, step: i32) {
             rymplayer::fx::set(s.config.fx());
             if let Some(a) = &s.audio {
                 a.set_speed(s.config.speed);
+            }
+            // The EQ changed by hand: it's this output device's from now on.
+            if id == "eq" {
+                let s = &mut *s;
+                s.device_eq.changed(&mut s.config);
             }
             s.config.save();
             let speed_row = id == "mode";
@@ -3248,6 +3255,20 @@ fn save_session(st: &Shared) {
 }
 
 fn tick(st: &Shared) {
+    // The sound moved to another output device: its own EQ comes back.
+    let moved = {
+        let mut s = st.borrow_mut();
+        let s = &mut *s;
+        let moved = s.device_eq.check(&mut s.config);
+        if moved {
+            rymplayer::fx::set(s.config.fx());
+            s.config.save();
+        }
+        moved
+    };
+    if moved {
+        fill_settings(st);
+    }
     media_sync(st);
     mini_sync(st);
     extras(st);

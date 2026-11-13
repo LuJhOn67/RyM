@@ -239,6 +239,7 @@ struct App {
     scrobbler: core::Scrobbler,
     peers: core::PeerWatch,
     streak: core::SkipStreak,
+    device_eq: core::DeviceEq,
     /// When the Last.fm count last moved on.
     scrobble_tick: Instant,
     /// Seamless Music: the account's key (signed in), and what this terminal plays (told to the phones).
@@ -308,6 +309,7 @@ impl App {
             scrobbler: Default::default(),
             peers: Default::default(),
             streak: Default::default(),
+            device_eq: Default::default(),
             scrobble_tick: Instant::now(),
             account_key: None,
             link: Default::default(),
@@ -1366,6 +1368,10 @@ impl App {
 
     fn change_setting(&mut self, i: usize, step: i32) {
         self.config.change(SETTINGS[i], step);
+        // The EQ changed by hand: it's this output device's from now on.
+        if SETTINGS[i] == rymplayer::config::Setting::Equalizer {
+            self.device_eq.changed(&mut self.config);
+        }
         self.apply_sound();
         stream::use_source(self.config.source);
         rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(self.config.music_engine));
@@ -2196,6 +2202,12 @@ impl App {
 
     /// Crossfade, the sleep timer, listening stats and Discord, every tick.
     fn sound_tick(&mut self) {
+        // The sound moved to another output device: its own EQ comes back.
+        if self.device_eq.check(&mut self.config) {
+            self.apply_sound();
+            self.config.save();
+            self.status = format!("{}: {}", tr("Equalizer"), tr(self.config.eq_name()));
+        }
         let Some(a) = &mut self.audio else { return };
         a.tick();
         let (playing, pos, dur) = (a.is_playing(), a.position(), a.duration().unwrap_or(0.0));

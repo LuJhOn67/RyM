@@ -679,3 +679,22 @@ mod live_seek_tests {
         }
     }
 }
+
+/// The name of the device the sound goes to now (the system's default output), for the EQ of
+/// each device.
+pub fn output_name() -> Option<String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let device = rodio::cpal::default_host().default_output_device()?;
+    device.description().ok().map(|d| d.name().to_string())
+}
+
+#[cfg(test)]
+mod output_tests {
+    /// The device the sound goes to now (for the EQ of each device):
+    /// `cargo test --lib output_name -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn output_name() {
+        println!("output: {:?}", super::output_name());
+    }
+}

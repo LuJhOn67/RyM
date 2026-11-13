@@ -168,6 +168,47 @@ impl PeerWatch {
     }
 }
 
+/// The EQ of each output device: the speakers, the headphones and a Bluetooth set each keep their
+/// own; when the sound moves to another device, its EQ comes back.
+#[derive(Default)]
+pub struct DeviceEq {
+    /// The device the sound went to at the last look.
+    device: Option<String>,
+    looked: Option<Instant>,
+}
+
+impl DeviceEq {
+    /// A look every few seconds (each tick is fine): true when the sound moved to a device with
+    /// an EQ of its own and `cfg`'s EQ changed to it (the app puts the sound settings in place).
+    pub fn check(&mut self, cfg: &mut Config) -> bool {
+        if self.looked.is_some_and(|t| t.elapsed() < Duration::from_secs(3)) {
+            return false;
+        }
+        self.looked = Some(Instant::now());
+        let now = crate::audio::output_name();
+        if now == self.device {
+            return false;
+        }
+        let first_look = self.device.is_none();
+        self.device = now.clone();
+        let Some((preset, custom)) = now.and_then(|d| cfg.eq_by_device.get(&d).copied()) else { return false };
+        if first_look && preset == cfg.eq_preset && custom == cfg.eq_custom {
+            return false;
+        }
+        cfg.eq_preset = preset;
+        cfg.eq_custom = custom;
+        true
+    }
+
+    /// The EQ was changed by hand: it's this device's from now on.
+    pub fn changed(&mut self, cfg: &mut Config) {
+        let device = self.device.clone().or_else(crate::audio::output_name);
+        if let Some(d) = device {
+            cfg.eq_by_device.insert(d, (cfg.eq_preset, cfg.eq_custom));
+        }
+    }
+}
+
 /// Three quick skips in a row: Up next takes a new direction (another artist).
 #[derive(Default)]
 pub struct SkipStreak {
