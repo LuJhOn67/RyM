@@ -5098,8 +5098,8 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     };
     let swatch = |r: u8, g: u8, b: u8| to_image(art(r, g, b));
     app.set_has_song(true);
-    app.set_title("Seasons".into());
-    app.set_artist("Rival x Cadmium, feat. Harley Bird".into());
+    app.set_title("Golden Hour".into());
+    app.set_artist("Nora Vale, feat. Kian".into());
     let mut cover = art(70, 60, 170);
     if preset.as_ref().is_some_and(|t| t.muted) {
         rymplayer::themes::mute(&mut cover.2);
@@ -5125,20 +5125,20 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     app.set_len_text("3:25".into());
     app.set_volume(0.5);
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("seasons")))));
-    app.set_artist_name("Rival".into());
+    app.set_artist_name("Nora Vale".into());
     let song = |t: &str, a: &str, c: Image| Song { key: "q:1".into(), title: t.into(), artist: a.into(), cover: c, liked: false, playing: false, video: false, why: SharedString::new() };
     app.set_queue(ModelRc::from(Rc::new(VecModel::from(vec![
-        song("Another Love", "Tom Odell", swatch(40, 90, 120)),
-        song("Die For You", "VALORANT, Grabbitz", swatch(200, 20, 30)),
-        song("I'm Just A Kid", "Moe Zein, Al3s3s", swatch(120, 120, 120)),
-        song("بشرة خير", "حسين الجسمي", swatch(60, 110, 70)),
+        song("Paper Moons", "The Lanterns", swatch(40, 90, 120)),
+        song("Neon Rain", "Kairo", swatch(200, 20, 30)),
+        song("Slow Tide", "Mira Sol", swatch(120, 120, 120)),
+        song("ليل بغداد", "فرقة النخيل", swatch(60, 110, 70)),
     ]))));
     let card = |t: &str, a: &str, c: Image| Card { key: "s:0".into(), title: t.into(), sub: a.into(), cover: c };
     let cards = vec![
-        card("Night Changes", "One Direction", swatch(30, 30, 30)),
-        card("'tis The Damn Season", "Taylor Swift", swatch(110, 100, 90)),
-        card("Royalty", "Egzod, Maestro Chives", swatch(70, 90, 160)),
-        card("Extra", "More", swatch(90, 50, 50)),
+        card("Afterglow", "Lumen", swatch(30, 30, 30)),
+        card("Quiet Streets", "Ana Rey", swatch(110, 100, 90)),
+        card("Skyline", "Orbit 9", swatch(70, 90, 160)),
+        card("Driftwood", "Sana", swatch(90, 50, 50)),
     ];
     app.set_similar(ModelRc::from(Rc::new(VecModel::from(cards.clone()))));
     app.set_same_artist(ModelRc::from(Rc::new(VecModel::from(cards))));
@@ -5155,11 +5155,11 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
         Bar { label: "Husseini".into(), value: 0.3, text: "30%".into() },
     ]))));
     app.set_suggestions(ModelRc::from(Rc::new(VecModel::from(vec![
-        Suggest { text: "tame impala".into(), history: true },
-        Suggest { text: "باسم الكربلائي".into(), history: false },
+        Suggest { text: "lo-fi night".into(), history: true },
+        Suggest { text: "قصائد حسينية".into(), history: false },
     ]))));
     app.set_query("ta".into());
-    let shelf_cards = Rc::new(VecModel::from(vec![card("Night Changes", "One Direction", swatch(30, 30, 30)), card("Royalty", "Egzod", swatch(70, 90, 160))]));
+    let shelf_cards = Rc::new(VecModel::from(vec![card("Afterglow", "Lumen", swatch(30, 30, 30)), card("Skyline", "Orbit 9", swatch(70, 90, 160))]));
     app.set_home(ModelRc::from(Rc::new(VecModel::from(vec![Shelf { title: "For you".into(), cards: ModelRc::from(shelf_cards.clone()) }, Shelf { title: "حسيني لك".into(), cards: ModelRc::from(shelf_cards) }]))));
     app.set_show_lyrics(page == 9);
     app.set_close_ask(page == 7);
