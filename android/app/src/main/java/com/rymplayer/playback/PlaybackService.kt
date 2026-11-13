@@ -67,6 +67,26 @@ class PlaybackService : MediaSessionService() {
     private val effects = arrayOfNulls<SoundEffects>(2)
     /** The player the session shows. */
     private var active = 0
+
+    /** When the music paused because headphones or Bluetooth went away (0: it didn't). */
+    private var pausedByUnplug = 0L
+
+    /** Headphones or Bluetooth back within half an hour of pausing for them: the music goes on. */
+    private val plugged = object : android.media.AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>) {
+            val listening = setOf(
+                android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES, android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+                android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
+            )
+            val at = pausedByUnplug
+            if (at == 0L || SystemClock.elapsedRealtime() - at > 30 * 60 * 1000L) return
+            if (added.none { it.isSink && it.type in listening }) return
+            pausedByUnplug = 0L
+            // A moment for the sound to switch to them first.
+            handler.postDelayed({ players[active]?.play() }, 800)
+        }
+    }
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     /** Sound settings changed in the app: applied at once. */
     private val soundChanged = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> applySound() }
@@ -102,6 +122,7 @@ class PlaybackService : MediaSessionService() {
         for (i in 0..1) players[i] = build(i)
         Sound.listen(this, soundChanged)
         applySound()
+        (getSystemService(AUDIO_SERVICE) as? android.media.AudioManager)?.registerAudioDeviceCallback(plugged, handler)
         // Tapping the notification (or the lock screen's player) opens RyM on the playing song.
         val open = android.app.PendingIntent.getActivity(
             this,
@@ -144,6 +165,10 @@ class PlaybackService : MediaSessionService() {
         effects[i] = SoundEffects(exo)
         exo.addListener(object : Player.Listener {
             override fun onAudioSessionIdChanged(audioSessionId: Int) = applySound()
+            // Headphones or Bluetooth went away and the music paused: noted, so it goes on when they come back.
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                pausedByUnplug = if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY) SystemClock.elapsedRealtime() else 0L
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 val m = mix
                 if (isPlaying && m != null && m.new === exo && m.began == 0L) {
@@ -437,6 +462,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        (getSystemService(AUDIO_SERVICE) as? android.media.AudioManager)?.unregisterAudioDeviceCallback(plugged)
         handler.removeCallbacksAndMessages(null)
         QueueBridge.cancelMix = null
         Link.stop()
