@@ -295,6 +295,30 @@ object RamPoints {
     /** What shows a song is loved, beyond playing it (the same as the PC's ram_points::Love). */
     enum class Love(val points: Float) { BackToStart(4f), Download(12f), AddToPlaylist(12f) }
 
+    /**
+     * Why each song (picked for Up next after [seed]) is there, in a few words ("" when it's
+     * plain): in your likes, heard with the seed's artist, a song you like, an artist you play a
+     * lot, or new for you. The same as the PC's ram_points::reasons.
+     */
+    fun reasons(ctx: Context, songs: List<Track>, seed: Track, liked: Set<String>): List<String> {
+        val notes = load(ctx)
+        val now = System.currentTimeMillis()
+        val seedArtist = firstArtist(seed.artist)
+        val seedName = seed.artist.split(',', '&').first().trim()
+        return songs.map { t ->
+            val artist = firstArtist(t.artist)
+            when {
+                artist.isEmpty() || artist == seedArtist -> ""
+                t.videoId in liked -> com.rymplayer.tr("In your likes")
+                notes.together(seedArtist, artist) >= 2 -> "${com.rymplayer.tr("Heard with")} $seedName"
+                notes.trackPoints(t.videoId, now) >= 15f -> com.rymplayer.tr("A song you like")
+                notes.artistPoints(artist) >= 10f -> com.rymplayer.tr("An artist you play a lot")
+                t.videoId !in notes.tracks && notes.artistPoints(artist) == 0f -> com.rymplayer.tr("New for you")
+                else -> ""
+            }
+        }
+    }
+
     /** A song was loved ([how]): its points go up, and its artist's. */
     @Synchronized
     fun loved(ctx: Context, t: Track, how: Love) {

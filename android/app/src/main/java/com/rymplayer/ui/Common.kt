@@ -224,7 +224,7 @@ private val CoverColors = android.util.LruCache<String, Int>(128)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null, menuOnHold: Boolean = true) {
+fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null, menuOnHold: Boolean = true, why: String = "") {
     Row(
         Modifier.fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = if (menuOnHold) ({ vm.menu = MenuFor(t, queueIndex) }) else null)
@@ -246,8 +246,10 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
                         modifier = Modifier.weight(1f, fill = false).clickable(enabled = t.link == null && com.rymplayer.data.isYouTube(t.videoId)) { vm.goArtist(t) },
                     )
                 }
+                // Why RyM picked it for Up next.
+                if (why.isNotEmpty()) Text(" • $why", maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f), fontSize = 13.sp)
                 val rest = listOf(t.album, t.duration).filter { it.isNotBlank() }.joinToString(" • ")
-                if (rest.isNotEmpty()) Text((if (t.artist.isNotBlank()) " • " else "") + rest, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
+                if (rest.isNotEmpty() && why.isEmpty()) Text((if (t.artist.isNotBlank()) " • " else "") + rest, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Dim, fontSize = 13.sp)
             }
         }
         if (t.videoId in vm.liked) Icon(Icons.Default.Favorite, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))

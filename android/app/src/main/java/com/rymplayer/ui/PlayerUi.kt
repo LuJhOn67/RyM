@@ -586,6 +586,15 @@ private fun QueueView(vm: AppViewModel) {
         }
     }
     val songs = p.queue.toList()
+    // Why each song RyM picked is there (not the ones added by hand), worked out off the screen's thread.
+    val ctx = LocalContext.current
+    val seed = p.current
+    val pickedFrom = p.index + 1 + p.added
+    val reasons by androidx.compose.runtime.produceState(emptyList<String>(), songs, seed) {
+        value = if (seed == null) emptyList() else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.rymplayer.data.RamPoints.reasons(ctx, songs, seed, vm.liked.toSet())
+        }
+    }
     // Keys that follow each row when it moves (a song can be in the queue twice).
     val keys = remember(songs) {
         val seen = HashMap<String, Int>()
@@ -647,7 +656,7 @@ private fun QueueView(vm: AppViewModel) {
                         .shadow(raise, RoundedCornerShape(10.dp), clip = false)
                         .background(shade, RoundedCornerShape(10.dp)),
                 ) {
-                    SongRow(vm, t, i == p.index, { p.play(i) }, queueIndex = i, menuOnHold = false)
+                    SongRow(vm, t, i == p.index, { p.play(i) }, queueIndex = i, menuOnHold = false, why = if (i >= pickedFrom) reasons.getOrNull(i).orEmpty() else "")
                 }
             }
         }

@@ -1130,6 +1130,7 @@ fn song_item(s: &mut State, key: String, t: &Track) -> Song {
         liked: s.liked.contains(&t.video_id),
         playing,
         video: rymplayer::api::found_as_video(&t.video_id),
+        why: SharedString::new(),
     }
 }
 
@@ -1218,7 +1219,17 @@ fn render_queue(st: &Shared) {
     }
     let start = s.q.current.map_or(0, |c| c + 1);
     let rows: Vec<(usize, Track)> = s.q.songs.iter().enumerate().skip(start).take(QUEUE_SHOWN).map(|(i, t)| (i, t.clone())).collect();
-    let items: Vec<Song> = rows.iter().map(|(i, t)| song_item(&mut s, format!("q:{i}"), t)).collect();
+    let mut items: Vec<Song> = rows.iter().map(|(i, t)| song_item(&mut s, format!("q:{i}"), t)).collect();
+    // Why each song RyM picked is there (not the ones added by hand).
+    if let Some(seed) = s.q.now().cloned() {
+        let picked_from = start + s.q.added;
+        let tracks: Vec<Track> = rows.iter().map(|(_, t)| t.clone()).collect();
+        for ((i, _), (item, why)) in rows.iter().zip(items.iter_mut().zip(rymplayer::ram_points::reasons(&tracks, &seed, |id| s.liked.contains(id)))) {
+            if *i >= picked_from {
+                item.why = why.into();
+            }
+        }
+    }
     s.m.queue.set_vec(items);
 }
 
@@ -5041,7 +5052,7 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     app.set_volume(0.5);
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("seasons")))));
     app.set_artist_name("Rival".into());
-    let song = |t: &str, a: &str, c: Image| Song { key: "q:1".into(), title: t.into(), artist: a.into(), cover: c, liked: false, playing: false, video: false };
+    let song = |t: &str, a: &str, c: Image| Song { key: "q:1".into(), title: t.into(), artist: a.into(), cover: c, liked: false, playing: false, video: false, why: SharedString::new() };
     app.set_queue(ModelRc::from(Rc::new(VecModel::from(vec![
         song("Another Love", "Tom Odell", swatch(40, 90, 120)),
         song("Die For You", "VALORANT, Grabbitz", swatch(200, 20, 30)),

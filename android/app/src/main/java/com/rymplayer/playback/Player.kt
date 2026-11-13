@@ -227,7 +227,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     }
 
     /** How many songs added with "Add to queue" / "Play next" wait right after the playing one. */
-    private var added = 0
+    var added = 0
+        private set
 
     /** Counts play() calls, so a song's end is acted on once. */
     private var playCount = 0

@@ -381,6 +381,39 @@ pub fn context_weights(notes: &Notes, unix_secs: u64, hour: usize) -> [f32; 5] {
     w
 }
 
+/// Why each song (picked for Up next after `seed`) is there, in a few words ("" when it's
+/// plain: the seed's own artist, or nothing special): in your likes, heard with the seed's
+/// artist, an artist you play a lot, a song you like, or new for you.
+pub fn reasons(songs: &[Track], seed: &Track, liked: impl Fn(&str) -> bool) -> Vec<String> {
+    let notes = Notes::load();
+    let now = crate::updates::now();
+    let seed_artist = first_artist(&seed.artist);
+    let seed_name = seed.artist.split([',', '&']).next().unwrap_or_default().trim().to_string();
+    songs
+        .iter()
+        .map(|t| {
+            let artist = first_artist(&t.artist);
+            if artist.is_empty() || artist == seed_artist {
+                return String::new();
+            }
+            let tr = crate::i18n::tr;
+            if liked(&t.video_id) {
+                tr("In your likes").into()
+            } else if notes.together(&seed_artist, &artist) >= 2 {
+                format!("{} {seed_name}", tr("Heard with"))
+            } else if notes.track_points(&t.video_id, now) >= 15.0 {
+                tr("A song you like").into()
+            } else if notes.artist_points(&artist) >= 10.0 {
+                tr("An artist you play a lot").into()
+            } else if !notes.tracks.contains_key(&t.video_id) && notes.artist_points(&artist) == 0.0 {
+                tr("New for you").into()
+            } else {
+                String::new()
+            }
+        })
+        .collect()
+}
+
 /// One change to the points file at a time (playing and the settings can come together).
 static FILE: Mutex<()> = Mutex::new(());
 
