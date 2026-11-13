@@ -23,6 +23,14 @@ impl Queue {
         self.current.and_then(|i| self.songs.get(i))
     }
 
+    /// The songs coming after the playing one and the ones added by hand (the radio's) go, for
+    /// a new direction.
+    pub fn drop_coming(&mut self) {
+        if let Some(c) = self.current {
+            self.songs.truncate((c + 1 + self.added).min(self.songs.len()));
+        }
+    }
+
     /// Starts `new` from its row `start`, keeping the songs played so far (up to the playing
     /// one) above it; the songs that were coming next are dropped. Returns the new playing index.
     pub fn start(&mut self, new: Vec<Track>, start: usize) -> usize {

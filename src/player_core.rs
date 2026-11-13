@@ -168,6 +168,40 @@ impl PeerWatch {
     }
 }
 
+/// Three quick skips in a row: Up next takes a new direction (another artist).
+#[derive(Default)]
+pub struct SkipStreak {
+    /// The artists skipped in a row.
+    artists: Vec<String>,
+}
+
+impl SkipStreak {
+    /// A song was left (`left`: the song, seconds heard, its length) for another. A quick skip
+    /// adds to the streak, a song heard ends it; the third skip in a row gives the new
+    /// direction's seed: a liked song by an artist not skipped (None when there's none).
+    pub fn left(&mut self, left: Option<&(Track, f32, f32)>, liked: &[Track]) -> Option<Track> {
+        let (t, listened, length) = left?;
+        if !crate::ram_points::is_skip(*listened, *length) {
+            self.artists.clear();
+            return None;
+        }
+        self.artists.push(crate::radio::first_artist(&t.artist));
+        if self.artists.len() < 3 {
+            return None;
+        }
+        let avoid = std::mem::take(&mut self.artists);
+        let fits: Vec<&Track> = liked.iter().filter(|l| crate::is_youtube(&l.video_id) && !avoid.contains(&crate::radio::first_artist(&l.artist))).collect();
+        (!fits.is_empty()).then(|| fits[crate::updates::now() as usize % fits.len()].clone())
+    }
+}
+
+/// The new direction's songs: the seed's radio (hand them, ranked for the seed, to Up next in
+/// place of the songs that were coming).
+pub async fn new_direction(api: Api, seed: Track) -> anyhow::Result<(Track, Vec<Track>)> {
+    let radio = crate::radio::with_artist(api, seed.clone()).await?;
+    Ok((seed, radio))
+}
+
 /// "Play in RyM": a song by its id, its radio after it (the song first; a bare song when the
 /// radio can't be had).
 pub async fn song_with_radio(api: Api, video_id: String) -> Vec<Track> {
@@ -196,6 +230,23 @@ mod tests {
 
     fn note(device: &str, vid: &str, account: &str, playing: bool) -> crate::link::Announce {
         crate::link::Announce { rym: 1, kind: "phone".into(), device: device.into(), account: account.into(), port: 1, playing, video_id: vid.into(), title: String::new(), artist: String::new(), thumb: None, position: 0.0 }
+    }
+
+    #[test]
+    fn three_skips_turn_to_another_artist() {
+        let song = |id: &str, artist: &str| Track { video_id: id.into(), title: id.into(), artist: artist.into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None };
+        let liked = vec![song("l1aaaaaaaaa", "Skipped One"), song("l2aaaaaaaaa", "Someone Else")];
+        let mut st = SkipStreak::default();
+        assert!(st.left(Some(&(song("a", "Skipped One"), 5.0, 200.0)), &liked).is_none());
+        assert!(st.left(Some(&(song("b", "Skipped One"), 5.0, 200.0)), &liked).is_none());
+        let seed = st.left(Some(&(song("c", "Skipped Two"), 5.0, 200.0)), &liked).expect("a new direction");
+        assert_eq!(seed.artist, "Someone Else");
+        // A song heard ends the streak.
+        let mut st = SkipStreak::default();
+        let _ = st.left(Some(&(song("a", "X"), 5.0, 200.0)), &liked);
+        let _ = st.left(Some(&(song("b", "X"), 150.0, 200.0)), &liked);
+        let _ = st.left(Some(&(song("c", "X"), 5.0, 200.0)), &liked);
+        assert!(st.left(Some(&(song("d", "X"), 5.0, 200.0)), &liked).is_none());
     }
 
     #[test]

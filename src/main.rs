@@ -126,6 +126,8 @@ enum Event {
     SavedQueue(Result<String, String>),
     /// Radio tracks to continue with after the queue ran out.
     Radio(Result<Vec<Track>, String>),
+    /// Three skips in a row: a new direction's seed and its radio (see `player_core::SkipStreak`).
+    NewDirection(Result<(Track, Vec<Track>), String>),
     Playlists(Result<Vec<Playlist>, String>),
     Tracks(Page, Result<Vec<Track>, String>),
     /// The song to play: from the cache, or still arriving (it plays while it downloads).
@@ -236,6 +238,7 @@ struct App {
     non_music: core::NonMusic,
     scrobbler: core::Scrobbler,
     peers: core::PeerWatch,
+    streak: core::SkipStreak,
     /// When the Last.fm count last moved on.
     scrobble_tick: Instant,
     /// Seamless Music: the account's key (signed in), and what this terminal plays (told to the phones).
@@ -304,6 +307,7 @@ impl App {
             non_music: Default::default(),
             scrobbler: Default::default(),
             peers: Default::default(),
+            streak: Default::default(),
             scrobble_tick: Instant::now(),
             account_key: None,
             link: Default::default(),
@@ -477,6 +481,20 @@ impl App {
                 self.likes_synced = Instant::now();
                 self.open(Page::ForYou, tr("For you").into());
             }
+            Event::NewDirection(Ok((seed, radio))) => {
+                let queued: std::collections::HashSet<String> = self.q.songs.iter().map(|t| t.video_id.clone()).collect();
+                let heard = rymplayer::radio::artists_of(self.q.songs.iter().take(self.q.current.map_or(0, |c| c + 1)));
+                let skip: std::collections::HashSet<String> = self.played.union(&queued).cloned().collect();
+                let fresh = rymplayer::ram_points::up_next(radio, &seed, &self.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1);
+                if !fresh.is_empty() {
+                    self.q.drop_coming();
+                    self.q.songs.extend(fresh);
+                    self.sync_queue_page();
+                    self.prefetch_next();
+                    self.status = format!("{} {}", tr("New direction:"), seed.artist);
+                }
+            }
+            Event::NewDirection(Err(_)) => {}
             Event::Radio(result) => {
                 self.radio_pending = false;
                 match result {
@@ -1658,6 +1676,10 @@ impl App {
         let manual = !std::mem::take(&mut self.auto_advance);
         if manual {
             self.peers.played_here();
+        }
+        // Three quick skips in a row: Up next turns to another artist.
+        if let (Some(seed), Some(api)) = (self.streak.left(left.as_ref(), &self.liked_tracks), self.api.clone()) {
+            self.spawn(async move { Event::NewDirection(s(core::new_direction(api, seed).await)) });
         }
         rymplayer::ram_points::moved_on(left, track.clone(), manual);
         self.q.went_to(i);

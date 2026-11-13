@@ -108,6 +108,9 @@ object RamPoints {
      * its first 30 seconds, SKIP; left before 30%, up to EARLY_LEAVE (the earlier the more); from
      * 30% to 80%, from 0 up to FINISH; 80% or more, FINISH.
      */
+    /** A quick skip (in the first 30 seconds, before the song's half). */
+    fun isSkip(listened: Float, length: Float) = heardPoints(listened, length) == SKIP
+
     fun heardPoints(listened: Float, length: Float): Float {
         if (listened < 30f && (length <= 0f || listened < length * 0.5f)) return SKIP
         if (length <= 0f) return 0f

@@ -35,6 +35,7 @@ object I18n {
         "Play" to "تشغيل",
         "Pause" to "إيقاف مؤقت",
         "Save as playlist" to "حفظ كقائمة تشغيل",
+        "New direction:" to "اتجاه جديد:",
         "Songs on this phone" to "أغاني هذا الجهاز",
         "Your own music files" to "ملفات الموسيقى مالتك",
         "RyM needs \"Music and audio\" to show the phone's songs" to "RyM يحتاج صلاحية «الموسيقى والصوت» حتى يعرض أغاني الجهاز",

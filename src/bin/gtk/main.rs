@@ -558,6 +558,8 @@ enum Ev {
     LyricsBg(String, (u8, u8, u8)),
     Rated(String, bool, anyhow::Result<()>),
     Radio(anyhow::Result<Vec<Track>>),
+    /// Three skips in a row: a new direction's seed and its radio (see `player_core::SkipStreak`).
+    NewDirection(anyhow::Result<(Track, Vec<Track>)>),
     Downloaded(anyhow::Result<PathBuf>),
     /// "Go to artist" for a song without its artist's id: found by name.
     ArtistFound(String, anyhow::Result<Option<String>>),
@@ -712,6 +714,7 @@ struct Ui {
     non_music: core::NonMusic,
     scrobbler: core::Scrobbler,
     peers: core::PeerWatch,
+    streak: core::SkipStreak,
     loading: bool,
     radio_pending: bool,
     /// Liquid Aurora: the loudest bass lately; the theme extras last shown (vinyl, aurora, colors).
@@ -1565,6 +1568,7 @@ fn build(app: &Application) {
         non_music: Default::default(),
         scrobbler: Default::default(),
         peers: Default::default(),
+        streak: Default::default(),
         loading: false,
         radio_pending: false,
         bass_peak: 0.05,
@@ -4759,6 +4763,11 @@ fn play_at(ui: &Shared, i: usize) {
             (p, a.map_or(0.0, Audio::position), a.and_then(Audio::duration).unwrap_or(0.0))
         });
         let manual = std::mem::take(&mut s.user_pick);
+        // Three quick skips in a row: Up next turns to another artist.
+        let liked = s.liked_tracks.clone();
+        if let (Some(seed), Some(api)) = (s.streak.left(left.as_ref(), &liked), s.api.clone()) {
+            spawn(&s, async move { Ev::NewDirection(core::new_direction(api, seed).await) });
+        }
         rymplayer::ram_points::moved_on(left, track.clone(), manual);
         if manual {
             s.peers.played_here();
@@ -6309,6 +6318,26 @@ fn poll_events(ui: &Shared) {
                 toast(ui, &format!("{}: {e}", tr("Like failed")));
             }
             Ev::Rated(..) => {}
+            Ev::NewDirection(Ok((seed, radio))) => {
+                let fresh = {
+                    let s = ui.borrow();
+                    let queued: HashSet<String> = s.q.songs.iter().map(|t| t.video_id.clone()).collect();
+                    let heard = rymplayer::radio::artists_of(s.q.songs.iter().take(s.q.current.map_or(0, |c| c + 1)));
+                    let skip: HashSet<String> = s.played.union(&queued).cloned().collect();
+                    rymplayer::ram_points::up_next(radio, &seed, &s.liked_tracks, &skip, &heard, rymplayer::updates::now() | 1)
+                };
+                if !fresh.is_empty() {
+                    {
+                        let mut s = ui.borrow_mut();
+                        s.q.drop_coming();
+                        s.q.songs.extend(fresh);
+                    }
+                    prefetch_next(ui);
+                    render_queue(ui);
+                    toast(ui, &format!("{} {}", tr("New direction:"), seed.artist));
+                }
+            }
+            Ev::NewDirection(Err(_)) => {}
             Ev::Radio(result) => {
                 ui.borrow_mut().radio_pending = false;
                 if let Ok(tracks) = result {

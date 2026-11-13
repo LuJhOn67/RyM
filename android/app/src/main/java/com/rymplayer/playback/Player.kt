@@ -322,6 +322,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         val manual = userPick.also { userPick = false }
         val ctx = context
         scope.launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.movedOn(ctx, left, t, manual) }
+        left?.let { skipStreak(it) }
         index = i
         playCount++
         played += t.videoId
@@ -461,6 +462,36 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
             // Back to its start by hand: a sign it's loved (RaM points).
             val t = current
             if (t != null && pos >= 3f) scope.launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(context, t, com.rymplayer.data.RamPoints.Love.BackToStart) }
+        }
+    }
+
+    /** The artists skipped in a row (quick skips). */
+    private val skipped = mutableListOf<String>()
+
+    /**
+     * Three quick skips in a row: Up next turns to another artist: the songs coming (not the ones
+     * added by hand) give way to the radio of a liked song by an artist not skipped. The same as
+     * the PC's player_core::SkipStreak.
+     */
+    private fun skipStreak(left: Triple<Track, Float, Float>) {
+        val (t, listened, length) = left
+        if (!com.rymplayer.data.RamPoints.isSkip(listened, length)) {
+            skipped.clear()
+            return
+        }
+        skipped += com.rymplayer.data.RamPoints.firstArtist(t.artist)
+        if (skipped.size < 3 || !::api.isInitialized) return
+        val avoid = skipped.toSet()
+        skipped.clear()
+        val seed = likedSongs().filter { com.rymplayer.data.isYouTube(it.videoId) && com.rymplayer.data.RamPoints.firstArtist(it.artist) !in avoid }.randomOrNull() ?: return
+        scope.launch {
+            val radio = runCatching { com.rymplayer.data.Radio.forTrack(api, seed) }.getOrNull().orEmpty()
+            val fresh = tidy(radio, seed)
+            if (fresh.isEmpty()) return@launch
+            val keep = (index + 1 + added).coerceAtMost(queue.size)
+            while (queue.size > keep) queue.removeAt(queue.lastIndex)
+            append(fresh)
+            message = "${com.rymplayer.tr("New direction:")} ${seed.artist}"
         }
     }
 

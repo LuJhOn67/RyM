@@ -303,6 +303,11 @@ pub fn heard_points(listened: f32, length: f32) -> f32 {
     }
 }
 
+/// A quick skip (in the first 30 seconds, before the song's half).
+pub fn is_skip(listened: f32, length: f32) -> bool {
+    heard_points(listened, length) == SKIP
+}
+
 /// Left early (past the first 30 s, before 30% of the song), at most.
 const EARLY: f32 = -6.0;
 /// A song played.
