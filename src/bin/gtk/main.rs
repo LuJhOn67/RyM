@@ -598,6 +598,8 @@ enum Ev {
 /// Widgets the code changes after building them.
 struct Widgets {
     window: ApplicationWindow,
+    /// The volume slider (a song's own volume is put back on it when the song starts).
+    volume: Scale,
     provider: CssProvider,
     /// The lyrics panel's colors, changed for each song.
     lyrics_provider: CssProvider,
@@ -1524,6 +1526,7 @@ fn build(app: &Application) {
             bar_artist,
             bar_heart: bar_heart.clone(),
             play: play.clone(),
+            volume: volume.clone(),
             progress: progress.clone(),
             pos,
             len,
@@ -1849,6 +1852,10 @@ fn build(app: &Application) {
                 st.volume = s.value() as f32;
                 if let Some(a) = &st.audio {
                     a.set_volume(st.volume);
+                }
+                // This song's own volume, for next time.
+                if let Some(t) = st.q.now() {
+                    rymplayer::song_volume::set(&t.video_id, st.volume);
                 }
             }
         });
@@ -6203,6 +6210,11 @@ fn poll_events(ui: &Shared) {
                 match started {
                     Ok(()) => {
                         prefetch_next(ui);
+                        // The volume this song had last time (changed while it played).
+                        if let Some(v) = rymplayer::song_volume::get(&t.video_id) {
+                            let slider = ui.borrow().w.volume.clone();
+                            slider.set_value(v as f64);
+                        }
                         // Last.fm: "now playing", and its listening counts from now.
                         let mut s = ui.borrow_mut();
                         let dur = s.audio.as_ref().and_then(Audio::duration).unwrap_or(0.0);

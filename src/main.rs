@@ -633,6 +633,11 @@ impl App {
                                     if let Some(at) = resume {
                                         a.seek(at);
                                     }
+                                    // The volume this song had last time (changed while it played).
+                                    if let Some(v) = rymplayer::song_volume::get(&vid) {
+                                        a.set_volume(v);
+                                        self.volume = v;
+                                    }
                                     self.status.clear();
                                     self.lastfm_start();
                                 }
@@ -1902,6 +1907,10 @@ impl App {
         self.volume = v.clamp(0.0, 1.0);
         if let Some(a) = &self.audio {
             a.set_volume(self.volume);
+        }
+        // This song's own volume, for next time.
+        if let Some(t) = self.now_playing() {
+            rymplayer::song_volume::set(&t.video_id, self.volume);
         }
     }
 

@@ -793,6 +793,10 @@ fn wire(ui: &AppWindow, st: &Shared) {
             if let Some(a) = &st.borrow().audio {
                 a.set_volume(v);
             }
+            // This song's own volume, for next time.
+            if let Some(t) = st.borrow().q.now() {
+                rymplayer::song_volume::set(&t.video_id, v);
+            }
             with_app(&st, |a| a.set_volume(v));
         });
     }
@@ -4548,6 +4552,10 @@ fn handle(st: &Shared, ev: Ev) {
                 (Ok(song), Some(a)) if crossfade && automix => a.automix_to(&song, known, secs).map_err(|e| e.to_string()),
                 (Ok(song), Some(a)) if crossfade => a.crossfade_to(&song, known, secs).map_err(|e| e.to_string()),
                 (Ok(song), Some(a)) => a.play(&song, known).map_err(|e| e.to_string()).map(|()| {
+                    // The volume this song had last time (changed while it played).
+                    if let Some(v) = rymplayer::song_volume::get(&t.video_id) {
+                        a.set_volume(v);
+                    }
                     if let Some(at) = resume {
                         a.seek(at);
                     }
@@ -4559,6 +4567,10 @@ fn handle(st: &Shared, ev: Ev) {
             with_app(st, |a| a.set_loading(false));
             match started {
                 Ok(()) => {
+                    // The slider shows this song's own volume when it has one.
+                    if let Some(v) = rymplayer::song_volume::get(&t.video_id) {
+                        with_app(st, |a| a.set_volume(v));
+                    }
                     prefetch_next(st);
                     lastfm_start(st);
                     let (ask, limit) = {
