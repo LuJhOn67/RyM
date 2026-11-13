@@ -427,8 +427,10 @@ async fn web_player(way: Way, video_id: &str) -> Result<Audio> {
         "contentCheckOk": true,
         "racyCheckOk": true
     });
-    // Not Premium: YouTube Music's links want a token (only when a token server runs).
-    let pot = if way == Way::Music { po_token(video_id).await } else { None };
+    // Not Premium: YouTube Music's links want a token (only when a token server runs). With
+    // Premium they play to the end without one, and a token takes 3 to 7 s each song (its
+    // binding changes with every answer), so it isn't asked for.
+    let pot = if way == Way::Music && !premium_file().exists() { po_token(video_id).await } else { None };
     if let Some(t) = &pot {
         body["serviceIntegrityDimensions"] = json!({ "poToken": t });
     }
