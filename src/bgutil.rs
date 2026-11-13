@@ -104,7 +104,21 @@ async fn run(cmd: &mut tokio::process::Command, what: &str) -> Result<()> {
         return Ok(());
     }
     let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    Err(anyhow!("{what}: {}", text.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("failed")))
+    Err(anyhow!("{what}: {}", why(&text)))
+}
+
+/// The line that says what went wrong: an "Error: ..." line, not npm's "a complete log of this
+/// run can be found in ..." at the end.
+fn why(text: &str) -> &str {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let useful = |l: &&&str| !l.to_lowercase().contains("complete log") && !l.to_lowercase().contains("verbose");
+    lines
+        .iter()
+        .filter(useful)
+        .rfind(|l| l.contains("Error:") || l.contains("ERR!") || l.starts_with("npm error") && !l.ends_with("error"))
+        .or_else(|| lines.iter().rfind(useful))
+        .copied()
+        .unwrap_or("failed")
 }
 
 /// Installs bgutil (or brings it to RyM's version) and the yt-dlp plugin; what happened, to show.
@@ -117,7 +131,13 @@ pub async fn install() -> Result<String> {
         run(command("git").args(["clone", "-q", "--depth", "1", "--branch", VERSION, REPO]).arg(&dir), "git clone").await?;
     }
     let server = dir.join("server");
-    run(command("npm").current_dir(&server).args(["ci", "--no-audit", "--no-fund"]), "npm ci").await?;
+    // A clean start: a half-done earlier install (a library without its own helpers) made the
+    // next `npm ci` fail. If it fails anyway, `npm install` works the lock file out again.
+    let _ = std::fs::remove_dir_all(server.join("node_modules"));
+    if let Err(first) = run(command("npm").current_dir(&server).args(["ci", "--no-audit", "--no-fund"]), "npm ci").await {
+        let _ = std::fs::remove_dir_all(server.join("node_modules"));
+        run(command("npm").current_dir(&server).args(["install", "--no-audit", "--no-fund"]), "npm install").await.map_err(|e| anyhow!("{first}; {e}"))?;
+    }
     run(command("npx").current_dir(&server).arg("tsc"), "npx tsc").await?;
     // The plugin lets yt-dlp use it too (it looks in the same folder).
     let mut plugin = Err(anyhow!("Python wasn't found"));
@@ -143,6 +163,14 @@ pub fn status() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn says_what_went_wrong() {
+        let npm = "npm error code 1\nnpm error path C:\\x\\node_modules\\canvas\nnpm error Error: Cannot find module 'prebuild-install\\bin.js'\nnpm error A complete log of this run can be found in: C:\\logs\\debug-0.log\n";
+        assert_eq!(super::why(npm), "npm error Error: Cannot find module 'prebuild-install\\bin.js'");
+        assert_eq!(super::why("one\ntwo\n"), "two");
+        assert_eq!(super::why(""), "failed");
+    }
+
     #[test]
     fn reads_the_scripts_answer() {
         let out = "Generating POT for abc\n{\"poToken\":\"MnQ_tok\",\"contentBinding\":\"abc\",\"expiresAt\":\"2026-11-12T03:00:00.000Z\"}\n";
