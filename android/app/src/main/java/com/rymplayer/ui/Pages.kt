@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NorthWest
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
@@ -362,6 +363,17 @@ fun LibraryPage(vm: AppViewModel) {
         item {
             LibraryRow(tr("Downloads"), tr("Saved on this phone, play without internet"), Brush.linearGradient(listOf(Color(0xFF19B6A5), Color(0xFF2878D0))), Icons.Default.Download) {
                 vm.open(Screen.Songs(Screen.Kind.Downloads, "downloads", tr("Downloads")))
+            }
+        }
+        item {
+            // Every song on the phone (Android asks for "Music and audio" the first time).
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val openDevice = { vm.open(Screen.Songs(Screen.Kind.Device, "device", tr("Songs on this phone"))) }
+            val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+                if (ok) openDevice() else vm.status = tr("RyM needs \"Music and audio\" to show the phone's songs")
+            }
+            LibraryRow(tr("Songs on this phone"), tr("Your own music files"), Brush.linearGradient(listOf(Color(0xFF7B61FF), Color(0xFF00B4D8))), Icons.Default.PhoneAndroid) {
+                if (com.rymplayer.data.LocalSongs.allowed(ctx)) openDevice() else ask.launch(com.rymplayer.data.LocalSongs.permission)
             }
         }
         if (vm.api.signedIn) {

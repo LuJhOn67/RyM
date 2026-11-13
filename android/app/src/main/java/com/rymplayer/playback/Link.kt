@@ -84,7 +84,8 @@ object Link {
         if (!enabled) return null
         val key = account ?: return null
         val s = snapshot
-        val t = s?.queue?.getOrNull(s.index)
+        // A song only on this phone (its own files) isn't offered to the PCs: they can't play it.
+        val t = s?.queue?.getOrNull(s.index)?.takeIf { com.rymplayer.data.isYouTube(it.videoId) || com.rymplayer.data.SoundCloud.isSoundCloud(it.videoId) }
         return buildJsonObject {
             put("rym", 1)
             put("kind", "phone")
@@ -103,7 +104,7 @@ object Link {
     }
 
     fun state(): JsonObject? {
-        val s = snapshot ?: return null
+        val s = snapshot?.takeIf { snap -> snap.queue.getOrNull(snap.index)?.let { !com.rymplayer.data.LocalSongs.isLocal(it.videoId) } == true } ?: return null
         // The queue around the song (100 before, 400 after), like the session file.
         val from = (s.index - 100).coerceAtLeast(0)
         val to = (s.index + 401).coerceAtMost(s.queue.size)

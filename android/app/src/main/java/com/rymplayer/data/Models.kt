@@ -52,7 +52,7 @@ fun thumbSized(url: String?, px: Int): String? {
 
 /** "3:45" or "1:02:03" to seconds. */
 /** A YouTube (Music) song, not a SoundCloud one: likes, radio, artist pages and videos are for these. */
-fun isYouTube(id: String) = !SoundCloud.isSoundCloud(id)
+fun isYouTube(id: String) = !SoundCloud.isSoundCloud(id) && !LocalSongs.isLocal(id)
 
 fun parseDuration(d: String): Float? {
     if (d.isBlank()) return null

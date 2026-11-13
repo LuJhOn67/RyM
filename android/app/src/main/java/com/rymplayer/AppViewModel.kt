@@ -44,7 +44,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -641,8 +641,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun open(page: Screen.Songs) {
         stack += page
         playerOpen = false
-        // Downloads can change at any time; the rest is loaded once.
-        if (pages[page] == null || page.kind == Screen.Kind.Downloads) load(page)
+        // Downloads and the phone's songs can change at any time; the rest is loaded once.
+        if (pages[page] == null || page.kind == Screen.Kind.Downloads || page.kind == Screen.Kind.Device) load(page)
     }
 
     /** True when something was closed. */
@@ -1070,6 +1070,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.History -> api.history()
                     Screen.Kind.Results -> api.searchPaged(page.id).also { p -> p.more?.let { pageMore[page] = it } }.tracks
                     Screen.Kind.Downloads -> Downloads.list(getApplication())
+                    Screen.Kind.Device -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.LocalSongs.list(getApplication()) }
                     Screen.Kind.SoundCloud -> com.rymplayer.data.SoundCloud.search(getApplication(), page.id)
                     Screen.Kind.SoundCloudLink -> com.rymplayer.data.SoundCloud.openLink(getApplication(), page.id)
                     Screen.Kind.Spotify -> com.rymplayer.data.Spotify.import(api, page.id)
@@ -1158,7 +1159,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
-    fun download(t: Track) = viewModelScope.launch {
+    fun download(t: Track) = if (com.rymplayer.data.LocalSongs.isLocal(t.videoId)) {
+        status = tr("This song is already on your device")
+        null
+    } else downloadOnline(t)
+
+    private fun downloadOnline(t: Track) = viewModelScope.launch {
         status = "${tr("Downloading")} \"${t.title}\"..."
         status = runCatching { Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)

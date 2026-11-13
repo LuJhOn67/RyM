@@ -90,6 +90,8 @@ object Streams {
     fun loadSource(ctx: Context) = useSource(ctx, ctx.getSharedPreferences("rym", Context.MODE_PRIVATE).getInt("audio_source", 0))
 
     suspend fun playable(ctx: Context, videoId: String): String {
+        // A song on this phone plays from its own file.
+        if (com.rymplayer.data.LocalSongs.isLocal(videoId)) return com.rymplayer.data.LocalSongs.uri(videoId).toString()
         cachedFile(ctx, videoId)?.let { return Uri.fromFile(it).toString() }
         if (com.rymplayer.data.SoundCloud.isSoundCloud(videoId)) return com.rymplayer.data.SoundCloud.streamUrl(ctx, videoId)
         return kotlinx.coroutines.withContext(Dispatchers.IO) {
