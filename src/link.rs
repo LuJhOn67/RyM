@@ -221,6 +221,21 @@ pub fn lan_ipv4() -> Option<std::net::Ipv4Addr> {
     }
 }
 
+/// RaM points sync: the phone's song points, fetched and merged (the newer play of each song
+/// wins). At most once in half an hour; how many songs changed.
+pub async fn sync_points(ip: IpAddr, port: u16, account: &str) -> Result<usize> {
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST.lock().map_err(|_| anyhow!("busy"))?;
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(30 * 60)) {
+            return Ok(0);
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    let text = http().get(format!("http://{ip}:{port}/points")).query(&[("account", account)]).send().await?.error_for_status()?.text().await?;
+    Ok(tokio::task::spawn_blocking(move || crate::ram_points::merge_scores(&text)).await?)
+}
+
 /// Tells the phones what this computer plays (a note every 3 seconds; every second while it
 /// plays, so "Play along" keeps in step) and answers their `/state`, `/pause` and `/control`
 /// (with the account's key); `pause` runs when a phone took the music, `control` for the remote.
@@ -245,6 +260,8 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
                 match (ok, method) {
                     (false, _) => (403, "{}".to_string()),
                     (true, "GET") if target.starts_with("/state") => p.state().map_or((404, "{}".to_string()), |s| (200, s)),
+                    // RaM points sync: this computer's song points.
+                    (true, "GET") if target.starts_with("/points") => (200, crate::ram_points::export_scores()),
                     (true, "POST") if target.starts_with("/pause") => {
                         pause();
                         (200, "{}".to_string())

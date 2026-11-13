@@ -4232,6 +4232,15 @@ fn check_updates(st: &Shared, asked: bool) {
 
 /// Seamless Music: a phone of the same account plays while this app is idle: the music moves here.
 fn heard_peer(st: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
+    // RaM points sync with the phone of the same account (at most every half hour).
+    let mine = st.borrow().account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));
+    if let Some(key) = mine.filter(|k| note.kind == "phone" && *k == note.account) {
+        let port = note.port;
+        post(async move {
+            let _ = rymplayer::link::sync_points(ip, port, &key).await;
+            Ev::Done
+        });
+    }
     let key = {
         let mut s = st.borrow_mut();
         let key = s.account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));

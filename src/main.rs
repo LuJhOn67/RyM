@@ -1771,6 +1771,13 @@ impl App {
     /// Seamless Music: a phone of the same account plays while this terminal is idle: the music
     /// moves here (Settings in RyM Slint: "Music Cross Ears" and "Take over from the phone").
     fn heard_peer(&mut self, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
+        // RaM points sync with the phone of the same account (at most every half hour).
+        if let Some(key) = self.account_key.clone().filter(|k| note.kind == "phone" && *k == note.account) {
+            let port = note.port;
+            tokio::spawn(async move {
+                let _ = rymplayer::link::sync_points(ip, port, &key).await;
+            });
+        }
         let idle = !self.loading && !self.audio.as_ref().is_some_and(Audio::is_playing);
         let on = self.config.cross_ears && self.config.link_auto;
         if !self.peers.wants(&note, self.account_key.as_deref(), idle, on) {

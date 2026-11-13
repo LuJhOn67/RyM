@@ -66,6 +66,19 @@ object Link {
     @Volatile var pause: (() -> Unit)? = null
     /** Music Cross Ears on (the setting): off, nothing is sent and nothing answered. */
     @Volatile var enabled = true
+    /** For the RaM points sync (set by the player's service). */
+    @Volatile var appContext: android.content.Context? = null
+
+    /** When the PC's points were last fetched (at most every half hour). */
+    @Volatile private var pointsAt = 0L
+
+    /** RaM points sync: the PC's song points, merged here (the newer play wins). Blocking. */
+    fun syncPoints(ctx: android.content.Context, ip: String, port: Int) {
+        val now = System.currentTimeMillis()
+        if (now - pointsAt < 30 * 60 * 1000L) return
+        pointsAt = now
+        call(ip, port, "GET", "/points")?.let { com.rymplayer.data.RamPoints.mergeScores(ctx, it) }
+    }
 
     /** The same key as the PC's for one account: a hash, so the notes don't carry its name. */
     fun accountKey(name: String, handle: String): String =
@@ -139,6 +152,8 @@ object Link {
                         val (code, body) = when {
                             !ok -> 403 to "{}"
                             method == "GET" && target.startsWith("/state") -> (state()?.let { 200 to it.toString() } ?: (404 to "{}"))
+                            // RaM points sync: this phone's song points.
+                            method == "GET" && target.startsWith("/points") -> appContext?.let { 200 to com.rymplayer.data.RamPoints.exportScores(it) } ?: (404 to "{}")
                             method == "POST" && target.startsWith("/pause") -> {
                                 main.post { pause?.invoke() }
                                 200 to "{}"

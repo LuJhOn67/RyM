@@ -114,6 +114,7 @@ class PlaybackService : MediaSessionService() {
         session = MediaSession.Builder(this, wrap(players[0]!!)).setSessionActivity(open).build()
         QueueBridge.cancelMix = { handler.post { cancelMix() } }
         // RyM Link: the PCs on this Wi-Fi hear what plays here.
+        Link.appContext = applicationContext
         Link.start(android.os.Build.MODEL)
     }
 

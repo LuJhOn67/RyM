@@ -192,4 +192,16 @@ class RamPointsTest {
         n.played(t("c", "C", "Other"), false, now + 20_000)
         assertEquals(0, n.together("ziad rahbani", "other"))
     }
+
+    @Test
+    fun pointsMergeByTheNewerPlay() {
+        val n = RamPoints.Notes()
+        n.tracks["a"] = RamPoints.Score(10f, 100_000L)
+        n.tracks["b"] = RamPoints.Score(10f, 500_000L)
+        val changed = n.mergeScores("a\t-20\t200\t2\t0\nb\t50\t300\nc\t5\t50\nnot a line")
+        assertEquals(2, changed)
+        assertEquals(-20f, n.tracks.getValue("a").points)
+        assertEquals(10f, n.tracks.getValue("b").points)
+        assertEquals(50_000L, n.tracks.getValue("c").last)
+    }
 }

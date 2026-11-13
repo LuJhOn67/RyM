@@ -5727,6 +5727,15 @@ fn media_sync(ui: &Shared) {
 /// Seamless Music (RyM Link): a phone of the same account plays while this app is idle: the music moves here
 /// (or, with "ask" chosen, a question first). Once per song and phone.
 fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr) {
+    // RaM points sync with the phone of the same account (at most every half hour).
+    let mine = ui.borrow().account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));
+    if let Some(key) = mine.filter(|k| note.kind == "phone" && *k == note.account) {
+        let port = note.port;
+        post(ui, async move {
+            let _ = rymplayer::link::sync_points(ip, port, &key).await;
+            Ev::Done
+        });
+    }
     let (mine, auto) = {
         let mut s = ui.borrow_mut();
         let mine = s.account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));

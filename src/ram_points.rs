@@ -414,6 +414,26 @@ pub fn reasons(songs: &[Track], seed: &Track, liked: impl Fn(&str) -> bool) -> V
         .collect()
 }
 
+/// Song points for the other device (RaM points sync over the Wi-Fi): a line a song with its
+/// id, points, last play and the week's start (seconds since 1970) and plays this week.
+pub fn export_scores() -> String {
+    let _one = FILE.lock();
+    let notes = Notes::load();
+    notes.tracks.iter().map(|(id, s)| format!("{}\t{}\t{}\t{}\t{}", id.replace(['\t', '\n'], " "), s.points, s.last, s.plays, s.week)).collect::<Vec<_>>().join("\n")
+}
+
+/// The other device's song points (as [`export_scores`] writes them): for each song, the
+/// device that played it last wins. Returns how many songs changed.
+pub fn merge_scores(text: &str) -> usize {
+    let _one = FILE.lock();
+    let mut notes = Notes::load();
+    let changed = notes.merge_scores(text);
+    if changed > 0 {
+        notes.save();
+    }
+    changed
+}
+
 /// The favorite songs (with their points) and artists (by name, with theirs).
 pub type Favorites = (Vec<(Track, f32)>, Vec<(String, f32)>);
 
@@ -673,6 +693,27 @@ impl Notes {
             let hour = chrono::DateTime::from_timestamp(now as i64, 0).map(|d| d.with_timezone(&chrono::Local).hour() as usize).unwrap_or(0);
             self.hours[k as usize][hour % 24] += 1;
         }
+    }
+
+    /// The other device's song points: the newer play of each song wins.
+    pub fn merge_scores(&mut self, text: &str) -> usize {
+        let mut changed = 0;
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 3 || f[0].is_empty() {
+                continue;
+            }
+            let (Ok(points), Ok(last)) = (f[1].parse::<f32>(), f[2].parse::<u64>()) else { continue };
+            let theirs = Score { points: points.clamp(-100.0, 100.0), last, plays: f.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), week: f.get(4).and_then(|w| w.parse().ok()).unwrap_or(0) };
+            match self.tracks.get(f[0]) {
+                Some(mine) if mine.last >= theirs.last => {}
+                _ => {
+                    self.tracks.insert(f[0].to_string(), theirs);
+                    changed += 1;
+                }
+            }
+        }
+        changed
     }
 
     /// A sign the song is loved: its points go up (and 30% to its artist).
@@ -1451,6 +1492,20 @@ mod tests {
         assert!(super::discovery_points(true, 20.0) > 0, "liked songs gain toward familiar");
         super::set_discovery(2);
         assert_eq!(super::discovery_points(false, 0.0), 0);
+    }
+
+
+    #[test]
+    fn points_merge_by_the_newer_play() {
+        let mut n = Notes::default();
+        n.tracks.insert("a".into(), super::Score { points: 10.0, last: 100, plays: 1, week: 0 });
+        n.tracks.insert("b".into(), super::Score { points: 10.0, last: 500, plays: 1, week: 0 });
+        // a: theirs is newer (wins); b: mine is newer (stays); c: only theirs (comes); junk is skipped.
+        let changed = n.merge_scores("a\t-20\t200\t2\t0\nb\t50\t300\nc\t5\t50\nnot a line");
+        assert_eq!(changed, 2);
+        assert_eq!(n.tracks["a"].points, -20.0);
+        assert_eq!(n.tracks["b"].points, 10.0);
+        assert_eq!(n.tracks["c"].last, 50);
     }
 
 }

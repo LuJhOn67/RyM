@@ -123,6 +123,25 @@ object RamPoints {
         return songs to artists
     }
 
+    /**
+     * Song points for the other device (RaM points sync over the Wi-Fi): a line a song with its
+     * id, points, last play and the week's start (seconds since 1970) and plays this week. The
+     * same as the PC's ram_points::export_scores.
+     */
+    @Synchronized
+    fun exportScores(ctx: Context): String = load(ctx).tracks.entries.joinToString("\n") { (id, s) ->
+        "${clean(id)}\t${s.points}\t${s.last / 1000}\t${s.plays}\t${s.week / 1000}"
+    }
+
+    /** The other device's song points: for each song, the device that played it last wins. */
+    @Synchronized
+    fun mergeScores(ctx: Context, text: String): Int {
+        val notes = load(ctx)
+        val changed = notes.mergeScores(text)
+        if (changed > 0) save(ctx, notes)
+        return changed
+    }
+
     /** Up next from familiar songs (0) to new ones (4), 2 balanced (the setting, set by the app). */
     @Volatile var discovery = 2
 
@@ -216,6 +235,22 @@ object RamPoints {
             heardWith(t, now)
             // What kind plays at this hour (local time).
             kindOf(t)?.let { k -> hours[k.ordinal][java.util.Calendar.getInstance().apply { timeInMillis = now }.get(java.util.Calendar.HOUR_OF_DAY)]++ }
+        }
+
+        /** The other device's song points (times in seconds): the newer play of each song wins. */
+        fun mergeScores(text: String): Int {
+            var changed = 0
+            for (line in text.lineSequence()) {
+                val f = line.split('\t')
+                if (f.size < 3 || f[0].isEmpty()) continue
+                val points = f[1].toFloatOrNull() ?: continue
+                val last = (f[2].toLongOrNull() ?: continue) * 1000
+                val mine = tracks[f[0]]
+                if (mine != null && mine.last >= last) continue
+                tracks[f[0]] = Score(points.coerceIn(-100f, 100f), last, f.getOrNull(3)?.toIntOrNull() ?: 0, (f.getOrNull(4)?.toLongOrNull() ?: 0L) * 1000)
+                changed++
+            }
+            return changed
         }
 
         /** A sign the song is loved: its points go up (and 30% to its artist). */
