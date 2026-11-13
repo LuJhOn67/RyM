@@ -258,5 +258,16 @@ private fun Main(vm: AppViewModel) {
         vm.update?.let { com.rymplayer.ui.UpdateDialog(vm, it) }
         if (vm.linkOpen) com.rymplayer.ui.LinkDialog(vm)
         if (vm.remoteOpen) com.rymplayer.ui.RemoteSheet(vm) { vm.remoteOpen = false }
+        // A song taken out of the queue: Undo, for a few seconds.
+        if (vm.player.undoNote.isNotEmpty()) {
+            LaunchedEffect(vm.player.undoNoteId) {
+                kotlinx.coroutines.delay(5000)
+                vm.player.undoNote = ""
+            }
+            androidx.compose.material3.Snackbar(
+                action = { androidx.compose.material3.TextButton({ vm.player.undo() }) { Text(tr("Undo"), color = MaterialTheme.colorScheme.primary) } },
+                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = if (vm.playerOpen) 40.dp else 150.dp).takesAllTouches(),
+            ) { Text(vm.player.undoNote, maxLines = 2) }
+        }
     }
 }

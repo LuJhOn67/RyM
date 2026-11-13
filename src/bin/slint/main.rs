@@ -113,6 +113,8 @@ enum Ev {
     /// What yt-dlp, ejs and Node are (the settings' line).
     YtDlpStatus(String),
     TookOver(String, anyhow::Result<rymplayer::link::State>),
+    /// "Clear cache" finished: the bytes freed.
+    CacheCleared(u64),
     Done,
 }
 
@@ -230,6 +232,8 @@ struct State {
     requested: HashSet<String>,
     art_for: String,
     toast_id: u64,
+    /// Songs taken out of the queue, the last first out (Undo puts them back).
+    removed: Vec<rymplayer::queue::Removed>,
     last_prev: Instant,
     listened_at: Instant,
     stats_written: Instant,
@@ -598,6 +602,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         requested: HashSet::new(),
         art_for: String::new(),
         toast_id: 0,
+        removed: Vec::new(),
         last_prev: Instant::now() - Duration::from_secs(10),
         listened_at: Instant::now(),
         stats_written: Instant::now(),
@@ -762,6 +767,10 @@ fn wire(ui: &AppWindow, st: &Shared) {
             let now = rymplayer::lyrics_offset::shift(&t.video_id, by);
             toast(&st, &format!("{}: {now:+.2} s", tr("Lyrics timing")));
         });
+    }
+    {
+        let st = st.clone();
+        app.on_undo_remove(move || undo_remove(&st));
     }
     app.on_next_theme(w(|st| {
         let next = (theme_slot(st.borrow().config.gui_theme) + 1) % THEMES.len();
@@ -948,13 +957,47 @@ fn toast(st: &Shared, text: &str) {
         s.toast_id += 1;
         s.toast_id
     };
-    with_app(st, |a| a.set_toast(text.into()));
+    with_app(st, |a| {
+        a.set_toast(text.into());
+        a.set_toast_action(SharedString::new());
+    });
     let st = st.clone();
     slint::Timer::single_shot(Duration::from_millis(3200), move || {
         if st.borrow().toast_id == id {
-            with_app(&st, |a| a.set_toast(SharedString::new()));
+            with_app(&st, |a| {
+                a.set_toast(SharedString::new());
+                a.set_toast_action(SharedString::new());
+            });
         }
     });
+}
+
+/// Takes song `i` out of the queue, with "Undo" on the notice (and Ctrl+Z).
+fn take_from_queue(st: &Shared, i: usize, note: &'static str) {
+    let taken = st.borrow_mut().q.take(i);
+    let Some(r) = taken else { return };
+    let title = r.song.title.clone();
+    {
+        let mut s = st.borrow_mut();
+        s.removed.push(r);
+        let n = s.removed.len();
+        if n > 30 {
+            s.removed.drain(..n - 30);
+        }
+    }
+    render_queue(st);
+    toast(st, &format!("{}: {title}", tr(note)));
+    with_app(st, |a| a.set_toast_action(tr("Undo").into()));
+}
+
+/// Undo: the last song taken out of the queue goes back to its place.
+fn undo_remove(st: &Shared) {
+    let last = st.borrow_mut().removed.pop();
+    let Some(r) = last else { return };
+    let title = r.song.title.clone();
+    st.borrow_mut().q.put_back(r);
+    render_queue(st);
+    toast(st, &format!("{}: {title}", tr("Back in the queue")));
 }
 
 /// Start: sign in with the saved session (or as a guest), the last home feed at once, media
@@ -1495,6 +1538,7 @@ fn fill_settings(st: &Shared) {
         choice("quality", "Download quality", t(if c.download_best { "Best (yt-dlp)" } else { "Fast" })),
         choice("connections", "Download connections", c.download_connections.to_string()),
         choice("cache", "Keep played songs up to", if c.cache_limit_gb == 0 { t("No limit") } else { format!("{} GB", c.cache_limit_gb) }),
+        button("cache-clear", "Clear cache", format!("{}: {}", t("Played songs kept on this PC"), stream::size_text(stream::cache_size())), "Clear"),
         button("innertube", "YouTube's ways", {
             let r = rymplayer::innertube::report();
             if r.is_empty() { t("How each way of asking YouTube did (after a few songs)") } else { r }
@@ -2244,6 +2288,13 @@ fn press(st: &Shared, id: &str) {
             fill_settings(st);
             post(async move { Ev::Parsers(rymplayer::ytmusicapi::update_parsers(nightly).await) });
         }
+        "cache-clear" => {
+            let keep = st.borrow().q.now().map(|t| t.video_id.clone()).unwrap_or_default();
+            post(async move {
+                let freed = tokio::task::spawn_blocking(move || stream::clear_cache(&keep)).await.unwrap_or(0);
+                Ev::CacheCleared(freed)
+            });
+        }
         "ytdlp" => {
             let nightly = st.borrow().config.ytdlp_nightly;
             st.borrow_mut().ytdlp_text = tr("Updating…").into();
@@ -2811,10 +2862,10 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
             rymplayer::ram_points::dont_recommend(&t);
             // Out of Up next too, if it's waiting there.
             if let Some(i) = key.strip_prefix("q:").and_then(|i| i.parse::<usize>().ok()) {
-                st.borrow_mut().q.remove(i);
-                render_queue(st);
+                take_from_queue(st, i, "Won't be suggested");
+            } else {
+                toast(st, &format!("{}: {}", tr("Won't be suggested"), t.title));
             }
-            toast(st, &format!("{}: {}", tr("Won't be suggested"), t.title));
         }
         "next" | "add" if t.link.is_some() => link_songs(st, &t, if action == "next" { 1 } else { 2 }),
         "next" => {
@@ -2843,8 +2894,7 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         }
         "remove" => {
             if let Some(i) = key.strip_prefix("q:").and_then(|i| i.parse::<usize>().ok()) {
-                st.borrow_mut().q.remove(i);
-                render_queue(st);
+                take_from_queue(st, i, "Removed from the queue");
             }
         }
         _ => {}
@@ -3321,7 +3371,15 @@ fn tick(st: &Shared) {
     let next_index = s.q.current.map(|c| c + 1).filter(|n| *n < s.q.songs.len());
     let lead = if automix { rymplayer::automix::LOAD_LEAD } else { 0.0 };
     let due = pos >= dur - fade_secs - lead || (automix && pos >= dur - rymplayer::automix::WINDOW_SECS && s.audio.as_ref().is_some_and(|a| a.faded_out()));
-    if fade_secs > 0.0 && playing && !s.repeat_one && dur > fade_secs + 10.0 && due && s.crossfade_for != s.request_id && let Some(n) = next_index {
+    if fade_secs > 0.0
+        && playing
+        && !s.repeat_one
+        && dur > fade_secs + 10.0
+        && due
+        && s.crossfade_for != s.request_id
+        && let Some(n) = next_index
+        && rymplayer::ram_points::blends(s.q.now(), s.q.songs.get(n))
+    {
         s.crossfade_for = s.request_id;
         s.crossfade_next = true;
         drop(s);
@@ -5035,6 +5093,11 @@ fn handle(st: &Shared, ev: Ev) {
             toast(st, &format!("{} {device}", tr("Playing here, moved from")));
         }
         Ev::TookOver(_, Err(e)) => log(&format!("seamless music: {e}")),
+        Ev::CacheCleared(freed) => {
+            log(&format!("cache cleared: {} freed", stream::size_text(freed)));
+            toast(st, &format!("{}: {}", tr("Cache cleared"), stream::size_text(freed)));
+            fill_settings(st);
+        }
         Ev::Done => {}
     }
 }
@@ -5067,6 +5130,11 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     paint(&ui.global::<Theme>(), preset.as_ref());
     ui.global::<Theme>().set_vinyl(extras.iter().any(|e| e == "vinyl"));
     ui.global::<Theme>().set_aurora(extras.iter().any(|e| e == "aurora"));
+    // "toast": the notice with its Undo button.
+    if extras.iter().any(|e| e == "toast") {
+        app.set_toast("Removed from the queue: Paper Moons".into());
+        app.set_toast_action("Undo".into());
+    }
     ui.global::<Theme>().set_energy(0.6);
     ui.global::<Theme>().set_vu_l(0.62);
     ui.global::<Theme>().set_vu_r(0.55);

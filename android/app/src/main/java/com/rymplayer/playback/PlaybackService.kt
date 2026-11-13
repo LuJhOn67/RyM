@@ -33,6 +33,8 @@ object QueueBridge {
      * item (null when it can't, and then nothing moved), for the service to start itself.
      */
     @Volatile var mixNext: (((MediaItem?) -> Unit) -> Unit)? = null
+    /** The playing song or the next one is Quran or a talk: they play whole, without a blend. */
+    @Volatile var playsWhole: (() -> Boolean)? = null
     /** A song was picked by hand: a mix that hasn't started sounding yet is dropped. */
     @Volatile var cancelMix: (() -> Unit)? = null
 }
@@ -393,7 +395,10 @@ class PlaybackService : MediaSessionService() {
             val dur = p.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
             val speed = s.speed.coerceAtLeast(0.1f)
             var volume = 1f
-            if (s.automix) {
+            val whole = QueueBridge.playsWhole?.invoke() == true
+            if (whole) {
+                // Quran and talks: no blend, no fade; the song plays to its end.
+            } else if (s.automix) {
                 // Smart automix: on the fade-out in the last 15 s, or at the mix window.
                 val mixMs = (Automix.mixSecs(s.crossfade) * 1000).toLong()
                 val fromEnd = ((dur - pos) / speed).toLong()

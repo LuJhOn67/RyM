@@ -343,7 +343,7 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
             item(tr("Download video"), Icons.Default.Download) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true) }()
         }
         if (queueIndex != null && queueIndex != vm.player.index) {
-            item(tr("Remove from queue"), Icons.Default.MoreVert) { vm.player.remove(queueIndex) }()
+            item(tr("Remove from queue"), Icons.Default.MoreVert) { vm.player.take(queueIndex, tr("Removed from the queue")) }()
         }
         Spacer(Modifier.height(24.dp))
     }

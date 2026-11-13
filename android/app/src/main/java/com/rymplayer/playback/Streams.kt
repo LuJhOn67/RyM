@@ -475,6 +475,26 @@ object Streams {
         return total
     }
 
+    /** How much the played songs kept on this phone take (bytes). */
+    fun cacheSize(ctx: Context): Long = dir(ctx).listFiles()?.sumOf { it.length() } ?: 0L
+
+    /** "Clear cache": every played song kept on this phone goes, except [keep] (the playing one)
+     *  and songs still downloading; the bytes freed. Downloads stay. The same as the PC's. */
+    fun clearCache(ctx: Context, keep: String?): Long {
+        var freed = 0L
+        dir(ctx).listFiles { f -> !f.name.endsWith(".part") && (keep == null || f.nameWithoutExtension != keep) }?.forEach {
+            val size = it.length()
+            if (it.delete()) freed += size
+        }
+        return freed
+    }
+
+    /** Bytes as "1.4 GB" or "320 MB". */
+    fun sizeText(bytes: Long): String {
+        val mb = bytes / (1024.0 * 1024.0)
+        return if (mb >= 1024) String.format(java.util.Locale.US, "%.1f GB", mb / 1024) else String.format(java.util.Locale.US, "%.0f MB", mb)
+    }
+
     private fun trim(ctx: Context) {
         val files = dir(ctx).listFiles { f -> !f.name.endsWith(".part") }?.sortedByDescending { it.lastModified() } ?: return
         files.drop(KEEP).forEach { it.delete() }

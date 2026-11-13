@@ -52,7 +52,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material.icons.filled.Storefront
-import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -272,6 +272,16 @@ fun SettingsPage(vm: AppViewModel) {
                 SwitchRow(Icons.Default.NewReleases, tr("Nightly builds"), tr("The newest yt-dlp every day (fixes come sooner)"), vm.ytdlpNightly) { vm.toggleYtdlpNightly() }
                 Divider()
                 TapRow(Icons.Default.SystemUpdate, tr("Update yt-dlp"), vm.ytdlpStatus.ifEmpty { tr("yt-dlp finds songs YouTube refuses, and downloads") }, tr("Update")) { vm.updateYtDlp() }
+            }
+            Section(tr("Storage")) {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                val streams = com.rymplayer.playback.Streams
+                var cacheBytes by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(streams.cacheSize(ctx)) }
+                TapRow(Icons.Default.Delete, tr("Clear cache"), "${tr("Played songs kept on this phone")}: ${streams.sizeText(cacheBytes)}", tr("Clear")) {
+                    val freed = streams.clearCache(ctx, vm.player.current?.videoId)
+                    cacheBytes = streams.cacheSize(ctx)
+                    vm.player.message = "${tr("Cache cleared")}: ${streams.sizeText(freed)}"
+                }
             }
             Section(tr("Theme")) {
                 TapRow(Icons.Default.Palette, tr("Theme"), tr("Classic, or RyM YTM: pure black, quick picks and big shelves · tap to switch"), if (vm.ytmTheme) "RyM YTM" else tr("Classic")) { vm.toggleTheme() }

@@ -568,7 +568,18 @@ object RamPoints {
     }
 
     /** The user says the song's artist is of [kind]: kept, and it wins over words and radios. */
+    /** Songs already looked at by [playsWhole] (the player asks often near a song's end). */
+    private val whole = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** Quran and talks play whole (backlog 47): no automix or crossfade into or out of them, so a
+     *  verse or a sentence isn't cut or mixed with music. The same as the PC's. */
+    fun playsWhole(ctx: Context, t: Track): Boolean = whole.getOrPut(t.videoId) {
+        if (whole.size > 2000) whole.clear()
+        load(ctx).kindOf(t).let { it == Kind.Quran || it == Kind.Talk }
+    }
+
     fun correct(ctx: Context, t: Track, kind: Kind) {
+        whole.clear()
         val artist = firstArtist(t.artist).takeIf { it.isNotEmpty() } ?: return
         val notes = load(ctx)
         notes.fixed[artist] = kind

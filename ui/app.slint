@@ -253,6 +253,9 @@ export global App {
     in property <[Setting]> settings;
     in property <string> version;
     in property <string> toast;
+    // A button on the notice ("Undo"), empty for none; it calls undo-remove.
+    in property <string> toast-action;
+    callback undo-remove();
     // The X was pressed: close RyM, or keep it playing in the background?
     in-out property <bool> close-ask;
     // The library's playlists (Save to playlist), and the plugins in use.
@@ -2525,6 +2528,11 @@ export component AppWindow inherits Window {
                     return accept;
                 }
             }
+            // Undo taking a song out of the queue.
+            if (e.modifiers.control && (e.text == "z" || e.text == "Z")) {
+                App.undo-remove();
+                return accept;
+            }
             if (e.modifiers.control && (e.text == "=" || e.text == "+")) {
                 App.zoom(Ui.zoom + 0.05);
                 return accept;
@@ -2724,15 +2732,35 @@ export component AppWindow inherits Window {
     if App.toast != "": Rectangle {
         y: root.height - (Theme.wide ? 150px : 90px);
         x: (root.width - self.width) / 2;
-        width: min(root.width - 40px, note.preferred-width + 48px);
+        width: min(root.width - 40px, note.preferred-width + 48px + (App.toast-action != "" ? act.preferred-width + 24px : 0px));
         height: 48px;
         border-radius: (24px) * Theme.round;
         background: Theme.dark ? #1d1c28ee : #222222ee;
-        note := Text {
-            text: App.toast;
-            font-size: 16px;
-            color: #ffffff;
-            overflow: elide;
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: App.toast-action != "" ? 24px : 0px;
+            note := Text {
+                text: App.toast;
+                font-size: 16px;
+                color: #ffffff;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            act := Text {
+                text: App.toast-action;
+                visible: App.toast-action != "";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.accent;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { App.undo-remove(); }
+                }
+            }
         }
     }
 }

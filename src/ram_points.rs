@@ -594,8 +594,36 @@ pub fn kind_of_track(t: &Track) -> Kind {
     Notes::load().kind_of(t).unwrap_or(Kind::Songs)
 }
 
+/// Songs already looked at by [`plays_whole`] (the answer kept, so the player's tick doesn't read
+/// the notes again and again).
+static WHOLE: std::sync::LazyLock<std::sync::Mutex<HashMap<String, bool>>> = std::sync::LazyLock::new(Default::default);
+
+/// Quran and talks play whole (backlog 47): no Smart Automix or crossfade into or out of them, so
+/// a verse or a sentence isn't cut or mixed with music.
+pub fn plays_whole(t: &Track) -> bool {
+    if let Some(w) = WHOLE.lock().ok().and_then(|m| m.get(&t.video_id).copied()) {
+        return w;
+    }
+    let w = matches!(kind_of_track(t), Kind::Quran | Kind::Talk);
+    if let Ok(mut m) = WHOLE.lock() {
+        if m.len() > 2000 {
+            m.clear();
+        }
+        m.insert(t.video_id.clone(), w);
+    }
+    w
+}
+
+/// No blend between `now` and `next` when either plays whole.
+pub fn blends(now: Option<&Track>, next: Option<&Track>) -> bool {
+    !now.is_some_and(plays_whole) && !next.is_some_and(plays_whole)
+}
+
 /// The user says the song's artist is of `kind`: kept, and it wins over words and radios.
 pub fn correct(t: &Track, kind: Kind) {
+    if let Ok(mut m) = WHOLE.lock() {
+        m.clear();
+    }
     let mut notes = Notes::load();
     let artist = first_artist(&t.artist);
     if artist.is_empty() {

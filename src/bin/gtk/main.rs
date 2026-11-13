@@ -5281,6 +5281,7 @@ fn tick(ui: &Shared) {
         && s.crossfade_for != s.request_id
         && s.sleep != Some(Sleep::EndOfSong)
         && let Some(n) = next_index
+        && rymplayer::ram_points::blends(s.q.now(), s.q.songs.get(n))
     {
         s.crossfade_for = s.request_id;
         s.crossfade_next = true;

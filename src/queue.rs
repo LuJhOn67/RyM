@@ -9,6 +9,15 @@ use crate::api::Track;
 /// Songs kept above a new start, at most (the oldest go first).
 pub const HISTORY: usize = 100;
 
+/// A song taken out of the queue, kept so Undo can put it back where it was.
+#[derive(Debug, Clone)]
+pub struct Removed {
+    pub at: usize,
+    pub song: Track,
+    /// It was one of the songs added with "Add to queue".
+    pub added: bool,
+}
+
 /// The queue: songs, the playing one, and how many songs added with "Add to queue" wait right
 /// after it.
 #[derive(Debug, Clone, Default)]
@@ -110,6 +119,29 @@ impl Queue {
     }
 
     /// Removes row `i` (not the playing one).
+    /// Like [`Queue::remove`], keeping what was taken for [`Queue::put_back`].
+    pub fn take(&mut self, i: usize) -> Option<Removed> {
+        if i >= self.songs.len() || Some(i) == self.current {
+            return None;
+        }
+        let added = matches!(self.current, Some(c) if i > c && i <= c + self.added);
+        let song = self.songs[i].clone();
+        self.remove(i);
+        Some(Removed { at: i, song, added })
+    }
+
+    /// Undo: the song goes back to its place (or the end, if the queue got shorter); its place.
+    pub fn put_back(&mut self, r: Removed) -> usize {
+        let at = r.at.min(self.songs.len());
+        self.songs.insert(at, r.song);
+        match self.current {
+            Some(c) if at <= c => self.current = Some(c + 1),
+            Some(c) if r.added && at <= c + self.added + 1 => self.added += 1,
+            _ => {}
+        }
+        at
+    }
+
     pub fn remove(&mut self, i: usize) {
         if i >= self.songs.len() || Some(i) == self.current {
             return;
@@ -138,6 +170,31 @@ pub fn share_link(t: &Track) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_song_goes_back() {
+        let ids = |q: &Queue| q.songs.iter().map(|s| s.video_id.clone()).collect::<Vec<_>>().join(" ");
+        let mut q = Queue { songs: ["a", "b", "c", "d", "e"].iter().map(|i| t(i)).collect(), current: Some(2), added: 1 };
+        // Before the playing one.
+        let r = q.take(0).unwrap();
+        assert_eq!((ids(&q).as_str(), q.current), ("b c d e", Some(1)));
+        q.put_back(r);
+        assert_eq!((ids(&q).as_str(), q.current, q.added), ("a b c d e", Some(2), 1));
+        // An added one after it.
+        let r = q.take(3).unwrap();
+        assert!(r.added);
+        assert_eq!((ids(&q).as_str(), q.added), ("a b c e", 0));
+        q.put_back(r);
+        assert_eq!((ids(&q).as_str(), q.current, q.added), ("a b c d e", Some(2), 1));
+        // The playing one can't be taken; a place past the end goes to the end.
+        assert!(q.take(2).is_none());
+        let r = q.take(4).unwrap();
+        q.songs.truncate(2);
+        q.current = Some(1);
+        q.added = 0;
+        assert_eq!(q.put_back(r), 2);
+        assert_eq!(ids(&q), "a b e");
+    }
 
     fn t(id: &str) -> Track {
         Track {

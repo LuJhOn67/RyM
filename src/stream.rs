@@ -106,6 +106,24 @@ pub fn trim_cache(limit_gb: u32, keep: &str) -> u64 {
     trim_dir(&cache_dir(), limit_gb as u64 * 1024 * 1024 * 1024, keep)
 }
 
+/// "Clear cache": every played song kept on disk goes (with its notes), except `keep` (the
+/// playing one); the bytes freed. Downloads (in Music) and the lyrics stay.
+pub fn clear_cache(keep: &str) -> u64 {
+    trim_dir(&cache_dir(), 0, keep)
+}
+
+/// How much the played songs kept on disk take (bytes).
+pub fn cache_size() -> u64 {
+    let Ok(entries) = std::fs::read_dir(cache_dir()) else { return 0 };
+    entries.flatten().filter(|e| e.path().is_file()).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()
+}
+
+/// Bytes as "1.4 GB" or "320 MB".
+pub fn size_text(bytes: u64) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb >= 1024.0 { format!("{:.1} GB", mb / 1024.0) } else { format!("{mb:.0} MB") }
+}
+
 fn trim_dir(dir: &Path, limit: u64, keep: &str) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
     let mut songs: Vec<(std::time::SystemTime, u64, PathBuf)> = entries

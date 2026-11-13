@@ -253,8 +253,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun dontRecommend(t: Track) {
         com.rymplayer.data.RamPoints.dontRecommend(getApplication(), t)
         val i = player.queue.indexOfFirst { it.videoId == t.videoId }
-        if (i > player.index) player.remove(i)
-        status = "${tr("Won't be suggested")}: ${t.title}"
+        if (i > player.index) player.take(i, tr("Won't be suggested"))
+        else status = "${tr("Won't be suggested")}: ${t.title}"
     }
 
     fun setArtistKind(t: Track, kind: com.rymplayer.data.RamPoints.Kind) {

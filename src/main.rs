@@ -193,6 +193,8 @@ struct App {
 
     /// What plays: the songs, the playing one, and the ones added to play after it.
     pub q: rymplayer::queue::Queue,
+    /// Songs taken out of the queue, the last first out (Ctrl+Z puts them back).
+    removed: Vec<rymplayer::queue::Removed>,
     /// The search box looks on SoundCloud (Tab in the box, with the SoundCloud plugin).
     pub search_sc: bool,
     /// The liked songs (mixed into Up next).
@@ -299,6 +301,7 @@ impl App {
             tracks: Vec::new(),
             track_state: TableState::default(),
             q: Default::default(),
+            removed: Vec::new(),
             search_sc: false,
             liked_tracks: Vec::new(),
             sleep: None,
@@ -947,6 +950,14 @@ impl App {
             KeyCode::Char('h') => self.open(Page::History, tr("History").into()),
             KeyCode::Char('a') => self.open_picker(),
             KeyCode::Char('o') => self.open_song_menu(),
+            // Undo taking a song out of the queue.
+            KeyCode::Char('z') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(r) = self.removed.pop() {
+                    self.status = format!("{}: {}", tr("Back in the queue"), r.song.title);
+                    self.q.put_back(r);
+                    self.sync_queue_page();
+                }
+            }
             KeyCode::Char('z') => self.next_sleep(),
             KeyCode::Char('e') => self.cycle_repeat(),
             // The lyrics' timing for this song: < sooner, > later (a quarter second each).
@@ -980,8 +991,9 @@ impl App {
             KeyCode::Up if self.page == Page::Queue && k.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected(-1),
             KeyCode::Down if self.page == Page::Queue && k.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected(1),
             KeyCode::Char('x') | KeyCode::Delete if self.page == Page::Queue => {
-                if let Some(i) = self.track_state.selected() {
-                    self.q.remove(i);
+                if let Some(r) = self.track_state.selected().and_then(|i| self.q.take(i)) {
+                    self.status = format!("{}: {} (Ctrl+Z: {})", tr("Removed from the queue"), r.song.title, tr("Undo"));
+                    self.removed.push(r);
                     self.sync_queue_page();
                 }
             }
@@ -2291,7 +2303,9 @@ impl App {
         let end_of_song_sleep = matches!(self.sleep, Some((None, _)));
         let lead = if automix { rymplayer::automix::LOAD_LEAD } else { 0.0 };
         let due = pos >= dur - secs - lead || (automix && pos >= dur - rymplayer::automix::WINDOW_SECS && self.audio.as_ref().is_some_and(|a| a.faded_out()));
-        if secs > 0.0 && playing && dur > secs + 10.0 && due && has_next && !end_of_song_sleep && self.crossfade_for != now_id {
+        // Quran and talks play whole: no blend into or out of them.
+        let blends = || rymplayer::ram_points::blends(self.now_playing(), self.q.current.and_then(|c| self.q.songs.get(c + 1)));
+        if secs > 0.0 && playing && dur > secs + 10.0 && due && has_next && !end_of_song_sleep && self.crossfade_for != now_id && blends() {
             self.crossfade_for = now_id;
             self.crossfade_next = true;
             self.next();

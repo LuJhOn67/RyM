@@ -74,6 +74,9 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.prev = { prev() }
         QueueBridge.hasNext = { (index + 1 < queue.size || repeatMode == 1) && !repeatOne }
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
+        QueueBridge.playsWhole = {
+            listOfNotNull(queue.getOrNull(index), queue.getOrNull(index + 1)).any { com.rymplayer.data.RamPoints.playsWhole(context, it) }
+        }
         Link.pause = { pause() }
         // Seamless Music from the PC: while nothing plays here, a PC of the same account's music moves here.
         Link.listen(context) { fromPc(it) }
@@ -683,6 +686,39 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         linkSnapshot((secs * 1000).toLong())
     }
 
+    /** A song taken out of the queue, kept so Undo can put it back where it was. */
+    data class Removed(val at: Int, val song: Track, val added: Boolean)
+
+    private val removed = mutableListOf<Removed>()
+
+    /** The notice with an Undo button ("Removed from the queue: ..."), empty for none. */
+    var undoNote by mutableStateOf("")
+
+    /** Counts the notices, so each one gets its own few seconds. */
+    var undoNoteId by mutableIntStateOf(0)
+
+    /** Like [remove], with Undo on a notice ([note]: the song's title). The same as the PC's. */
+    fun take(i: Int, note: String) {
+        if (i !in queue.indices || i == index) return
+        val wasAdded = i > index && i <= index + added
+        val song = queue[i]
+        remove(i)
+        removed += Removed(i, song, wasAdded)
+        if (removed.size > 30) removed.removeAt(0)
+        undoNote = "$note: ${song.title}"
+        undoNoteId++
+    }
+
+    /** Undo: the last song taken out goes back to its place (or the end, if the queue got shorter). */
+    fun undo() {
+        val r = removed.removeLastOrNull() ?: return
+        val at = r.at.coerceAtMost(queue.size)
+        queue.add(at, r.song)
+        if (index >= 0 && at <= index) index++
+        else if (r.added && at <= index + added + 1) added++
+        undoNote = ""
+    }
+
     fun remove(i: Int) {
         if (i !in queue.indices || i == index) return
         queue.removeAt(i)
@@ -706,6 +742,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.prev = null
         QueueBridge.hasNext = null
         QueueBridge.mixNext = null
+        QueueBridge.playsWhole = null
         Link.pause = null
         loadJob?.cancel()
         ticker?.cancel()
