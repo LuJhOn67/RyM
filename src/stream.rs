@@ -824,3 +824,24 @@ mod trim_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod clear_cache_tests {
+    #[test]
+    fn clearing_keeps_the_playing_song() {
+        let dir = std::env::temp_dir().join(format!("rym-clear-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("player")).unwrap();
+        for (name, size) in [("a.webm", 1000), ("a.secs", 4), ("a.loud", 4), ("b.m4a", 2000), ("b.secs", 4), ("now.webm", 3000), ("now.secs", 4)] {
+            std::fs::write(dir.join(name), vec![0u8; size]).unwrap();
+        }
+        std::fs::write(dir.join("player").join("x.js"), "js").unwrap();
+        let freed = super::trim_dir(&dir, 0, "now");
+        assert_eq!(freed, 3000, "the two songs, not the playing one");
+        let left: std::collections::BTreeSet<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left.into_iter().collect::<Vec<_>>(), ["now.secs", "now.webm", "player"], "notes go with their songs; the player script stays");
+        assert_eq!(super::size_text(3 * 1024 * 1024), "3 MB");
+        assert_eq!(super::size_text(1536 * 1024 * 1024), "1.5 GB");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

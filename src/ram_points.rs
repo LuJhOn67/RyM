@@ -1537,3 +1537,24 @@ mod tests {
     }
 
 }
+
+#[cfg(test)]
+mod plays_whole_tests {
+    use crate::api::Track;
+
+    fn track(id: &str, title: &str, artist: &str) -> Track {
+        Track { video_id: id.into(), title: title.into(), artist: artist.into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None }
+    }
+
+    #[test]
+    fn quran_and_talks_play_whole() {
+        let quran = track("whole-test-q", "سورة الكهف كاملة", "قارئ");
+        let song = track("whole-test-s", "Golden Hour", "Nora Vale");
+        assert!(super::plays_whole(&quran));
+        assert!(!super::plays_whole(&song));
+        assert!(super::blends(Some(&song), Some(&song)));
+        assert!(!super::blends(Some(&song), Some(&quran)), "no blend into the Quran");
+        assert!(!super::blends(Some(&quran), Some(&song)), "nor out of it");
+        assert!(super::blends(Some(&song), None));
+    }
+}
