@@ -147,11 +147,22 @@ object RamPoints {
         /** The song starts. Picked by hand, its minus points go first (back to 0). */
         fun played(t: Track, manual: Boolean, now: Long) {
             if (t.videoId.isEmpty()) return
+            // Played again by hand soon after (and not skipped before): a replay.
+            val replay = manual && tracks[t.videoId]?.let { it.points >= 0f && it.last > 0 && now - it.last < REPLAY_WITHIN_MS } == true
             val below = tracks[t.videoId]?.points?.takeIf { it < 0f }
             if (manual && below != null) give(t, -below)
-            give(t, PLAY)
-            tracks.getValue(t.videoId).last = now
+            give(t, PLAY + if (replay) REPLAY else 0f)
+            val s = tracks.getValue(t.videoId)
+            s.last = now
+            if (now - s.week >= WEEK_MS) {
+                s.week = now
+                s.plays = 0
+            }
+            s.plays++
         }
+
+        /** A sign the song is loved: its points go up (and 30% to its artist). */
+        fun love(t: Track, how: Love) = give(t, how.points)
 
         /** The song stopped after [listened] of its [length] seconds: a quick skip loses points, hearing it to the end gives some. */
         fun left(t: Track, listened: Float, length: Float) {
@@ -163,8 +174,11 @@ object RamPoints {
         fun trackPoints(id: String, now: Long): Float {
             val s = tracks[id] ?: return 0f
             val ago = (now - s.last).coerceAtLeast(0L)
-            var p = s.points * Math.pow(DECAY.toDouble(), ago.toDouble() / DAY).toFloat()
+            // Minus points fade faster; heard a lot this week, it ranks lower (fatigue).
+            val decay = if (s.points < 0f) DECAY_NEGATIVE else DECAY
+            var p = s.points * Math.pow(decay.toDouble(), ago.toDouble() / DAY).toFloat()
             if (p > 0f && ago < COOLDOWN_MS) p *= COOLDOWN
+            if (p > 0f && s.plays >= FATIGUE_PLAYS && now - s.week < WEEK_MS) p *= FATIGUE
             return p
         }
 
@@ -247,8 +261,20 @@ object RamPoints {
         }
     }
 
-    /** A song's points, and when it last played (ms). */
-    class Score(var points: Float = 0f, var last: Long = 0L)
+    /** A song's points, when it last played (ms), and its plays this week (since [week] began). */
+    class Score(var points: Float = 0f, var last: Long = 0L, var plays: Int = 0, var week: Long = 0L)
+
+    /** What shows a song is loved, beyond playing it (the same as the PC's ram_points::Love). */
+    enum class Love(val points: Float) { BackToStart(4f), Download(12f), AddToPlaylist(12f) }
+
+    /** A song was loved ([how]): its points go up, and its artist's. */
+    @Synchronized
+    fun loved(ctx: Context, t: Track, how: Love) {
+        if (t.videoId.isEmpty()) return
+        val notes = load(ctx)
+        notes.love(t, how)
+        save(ctx, notes)
+    }
 
     /** What the settings show: songs with points, and the artists with the most. */
     data class Summary(val tracked: Int, val topArtists: List<String>)
@@ -262,6 +288,11 @@ object RamPoints {
     private const val COOLDOWN = 0.35f
     private const val COOLDOWN_MS = 6L * 60 * 60 * 1000
     private const val DECAY = 0.95f
+    private const val DECAY_NEGATIVE = 0.85f
+    private const val REPLAY_WITHIN_MS = 15L * 60 * 1000
+    private const val REPLAY = 8f
+    private const val FATIGUE_PLAYS = 5
+    private const val FATIGUE = 0.6f
     private const val TRACKS_KEPT = 5000
 
     private fun clean(s: String) = s.replace('\t', ' ').replace('\n', ' ')
@@ -344,9 +375,10 @@ object RamPoints {
         }.toMap(HashMap())
         val hidden = p.getStringSet("hidden", emptySet()).orEmpty().toHashSet()
         val tracks = p.getString("tracks", "").orEmpty().lineSequence().mapNotNull { line ->
-            val parts = line.split('\t').takeIf { it.size == 3 } ?: return@mapNotNull null
+            // id, points, last (and plays, week since 7.4.4.2).
+            val parts = line.split('\t').takeIf { it.size >= 3 } ?: return@mapNotNull null
             val points = parts[1].toFloatOrNull() ?: return@mapNotNull null
-            parts[0] to Score(points, parts[2].toLongOrNull() ?: 0L)
+            parts[0] to Score(points, parts[2].toLongOrNull() ?: 0L, parts.getOrNull(3)?.toIntOrNull() ?: 0, parts.getOrNull(4)?.toLongOrNull() ?: 0L)
         }.toMap(HashMap())
         val affinity = HashMap<String, Float>()
         val names = HashMap<String, String>()
@@ -380,7 +412,7 @@ object RamPoints {
             .putString("bias", notes.bias.entries.joinToString("\n") { (a, n) -> a.replace('\t', ' ').replace('\n', ' ') + "\t" + n })
             .putStringSet("hidden", notes.hidden.toSet())
             .putString("tracks", notes.tracks.entries.sortedByDescending { kotlin.math.abs(it.value.points) }.take(TRACKS_KEPT)
-                .joinToString("\n") { (id, s) -> clean(id) + "\t" + s.points + "\t" + s.last })
+                .joinToString("\n") { (id, s) -> clean(id) + "\t" + s.points + "\t" + s.last + "\t" + s.plays + "\t" + s.week })
             .putString("affinity", notes.affinity.entries.joinToString("\n") { (a, n) -> clean(a) + "\t" + n + "\t" + clean(notes.names[a].orEmpty()) })
             .apply()
     }

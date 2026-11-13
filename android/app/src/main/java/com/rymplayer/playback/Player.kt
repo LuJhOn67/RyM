@@ -456,7 +456,12 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         val again = now - lastPrev < 1500
         lastPrev = now
         val pos = (controller?.currentPosition ?: 0L) / 1000f
-        if (index > 0 && (pos < 3f || again)) play(index - 1) else seekTo(0f)
+        if (index > 0 && (pos < 3f || again)) play(index - 1) else {
+            seekTo(0f)
+            // Back to its start by hand: a sign it's loved (RaM points).
+            val t = current
+            if (t != null && pos >= 3f) scope.launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(context, t, com.rymplayer.data.RamPoints.Love.BackToStart) }
+        }
     }
 
     /** Songs like the one playing, added when the queue reaches its last song (the radio). */

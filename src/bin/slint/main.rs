@@ -2745,6 +2745,7 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
             };
             if let (Some(api), Some(p)) = (api, list) {
                 let (vid, title) = (t.video_id.clone(), p.title.clone());
+                rymplayer::ram_points::loved(t.clone(), rymplayer::ram_points::Love::AddToPlaylist);
                 post(async move { Ev::AddedTo(title, api.add_to_playlist(p.id, vid).await) });
             }
         }
@@ -2775,6 +2776,7 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         "like" => toggle_like(st, &t),
         "artist" => go_artist(st, &t),
         "download" => {
+            rymplayer::ram_points::loved(t.clone(), rymplayer::ram_points::Love::Download);
             toast(st, &format!("{} \"{}\"…", tr("Downloading"), t.title));
             post(async move { Ev::Downloaded(stream::save_to_music(&t.video_id, &t.artist, &t.title).await) });
         }
@@ -3157,6 +3159,11 @@ fn previous(st: &Shared) {
         Some(_) => {
             if let Some(a) = &st.borrow().audio {
                 a.seek(0.0);
+            }
+            // Back to its start by hand: a sign it's loved (RaM points).
+            let now = st.borrow().q.now().cloned();
+            if let Some(t) = now.filter(|_| pos >= 3.0) {
+                rymplayer::ram_points::loved(t, rymplayer::ram_points::Love::BackToStart);
             }
         }
         None => {}

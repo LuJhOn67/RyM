@@ -4743,6 +4743,7 @@ fn pick_source(ui: &Shared, p: &'static str) {
 }
 
 fn download(ui: &Shared, t: Track) {
+    rymplayer::ram_points::loved(t.clone(), rymplayer::ram_points::Love::Download);
     toast(ui, &format!("Downloading \"{}\"…", t.title));
     post(ui, async move { Ev::Downloaded(stream::save_to_music(&t.video_id, &t.artist, &t.title).await) });
 }
@@ -4956,6 +4957,11 @@ fn previous(ui: &Shared) {
         Some(_) => {
             if let Some(a) = &ui.borrow().audio {
                 a.seek(0.0);
+            }
+            // Back to its start by hand: a sign it's loved (RaM points).
+            let now = ui.borrow().q.now().cloned();
+            if let Some(t) = now.filter(|_| pos >= 3.0) {
+                rymplayer::ram_points::loved(t, rymplayer::ram_points::Love::BackToStart);
             }
         }
         None => {}

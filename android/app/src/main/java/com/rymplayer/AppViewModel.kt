@@ -1165,6 +1165,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     } else downloadOnline(t)
 
     private fun downloadOnline(t: Track) = viewModelScope.launch {
+        launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(getApplication(), t, com.rymplayer.data.RamPoints.Love.Download) }
         status = "${tr("Downloading")} \"${t.title}\"..."
         status = runCatching { Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
             android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
@@ -1240,6 +1241,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addToPlaylist(p: Playlist, t: Track) = viewModelScope.launch {
+        launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(getApplication(), t, com.rymplayer.data.RamPoints.Love.AddToPlaylist) }
         status = runCatching { api.addToPlaylist(p.id, t.videoId) }.fold({ "${tr("Added to")} \"${p.title}\"" }, { "${tr("Couldn't add")}: ${it.message}" })
     }
 

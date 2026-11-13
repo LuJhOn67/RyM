@@ -141,4 +141,29 @@ class RamPointsTest {
             last = now
         }
     }
+
+    @Test
+    fun loveReplaysFadingAndFatigue() {
+        val day = 24L * 60 * 60 * 1000
+        val n = RamPoints.Notes()
+        n.played(t("a", "A", "Singer"), true, 1_000_000_000L)
+        val first = n.trackPoints("a", 1_000_000_000L + 6 * day)
+        n.played(t("a", "A", "Singer"), true, 1_000_000_000L + 10 * 60 * 1000)
+        assertTrue("the replay gave extra", n.tracks.getValue("a").points > 20f)
+        val before = n.tracks.getValue("a").points
+        n.love(t("a", "A", "Singer"), RamPoints.Love.Download)
+        assertTrue(n.tracks.getValue("a").points > before)
+        assertTrue(first > 0f)
+        // Minus points fade faster than plus points.
+        val m = RamPoints.Notes()
+        m.tracks["up"] = RamPoints.Score(20f, 0L)
+        m.tracks["down"] = RamPoints.Score(-20f, 0L)
+        assertTrue(kotlin.math.abs(m.trackPoints("down", 10 * day)) < m.trackPoints("up", 10 * day))
+        // Five plays this week: it ranks lower until the week is over.
+        val f = RamPoints.Notes()
+        repeat(5) { k -> f.played(t("b", "B", "Singer"), false, 2_000_000_000L + k * day / 2) }
+        val tired = f.trackPoints("b", 2_000_000_000L + 3 * day)
+        f.tracks.getValue("b").plays = 1
+        assertTrue(tired < f.trackPoints("b", 2_000_000_000L + 3 * day))
+    }
 }

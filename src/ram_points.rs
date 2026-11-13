@@ -233,11 +233,49 @@ impl Notes {
     }
 }
 
-/// A song's points, and when it last played (seconds since 1970).
+/// A song's points, when it last played (seconds since 1970), and its plays this week (since
+/// `week` began), for the fatigue.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Score {
     pub points: f32,
     pub last: u64,
+    #[serde(default)]
+    pub plays: u32,
+    #[serde(default)]
+    pub week: u64,
+}
+
+/// What shows a song is loved, beyond playing it: points for each (see [`loved`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Love {
+    /// Back to its start by hand (Previous while it plays).
+    BackToStart,
+    /// Downloaded.
+    Download,
+    /// Put in a playlist.
+    AddToPlaylist,
+}
+
+impl Love {
+    fn points(self) -> f32 {
+        match self {
+            Love::BackToStart => 4.0,
+            Love::Download | Love::AddToPlaylist => 12.0,
+        }
+    }
+}
+
+/// A song was loved (`how`): its points go up, and its artist's. Done off the UI thread.
+pub fn loved(t: Track, how: Love) {
+    if t.video_id.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let _one = FILE.lock();
+        let mut notes = Notes::load();
+        notes.love(&t, how);
+        notes.save();
+    });
 }
 
 /// Points for how much of a song was heard before it ended or was left:
@@ -278,6 +316,14 @@ const COOLDOWN: f32 = 0.35;
 const COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// Points kept each day since the song last played.
 const DECAY: f32 = 0.95;
+/// Minus points fade faster (a skip on a bad day doesn't hide a song for long).
+const DECAY_NEGATIVE: f32 = 0.85;
+/// Played again by hand this soon after it last started: a replay, a sign it's loved.
+const REPLAY_WITHIN: u64 = 15 * 60;
+const REPLAY: f32 = 8.0;
+/// Heard this many times this week: it ranks lower until the week is over (fatigue).
+const FATIGUE_PLAYS: u32 = 5;
+const FATIGUE: f32 = 0.6;
 /// Songs kept, at most (the weakest go first).
 const TRACKS_KEPT: usize = 5000;
 
@@ -468,11 +514,24 @@ impl Notes {
         if t.video_id.is_empty() {
             return;
         }
+        // Played again by hand soon after (and not skipped before): a replay.
+        let replay = manual && self.tracks.get(&t.video_id).is_some_and(|s| s.points >= 0.0 && s.last > 0 && now.saturating_sub(s.last) < REPLAY_WITHIN);
         if manual && let Some(below) = self.tracks.get(&t.video_id).map(|s| s.points).filter(|p| *p < 0.0) {
             self.give(t, -below);
         }
-        self.give(t, PLAY);
-        self.tracks.entry(t.video_id.clone()).or_default().last = now;
+        self.give(t, PLAY + if replay { REPLAY } else { 0.0 });
+        let s = self.tracks.entry(t.video_id.clone()).or_default();
+        s.last = now;
+        if now.saturating_sub(s.week) >= WEEK {
+            s.week = now;
+            s.plays = 0;
+        }
+        s.plays += 1;
+    }
+
+    /// A sign the song is loved: its points go up (and 30% to its artist).
+    pub fn love(&mut self, t: &Track, how: Love) {
+        self.give(t, how.points());
     }
 
     /// The song stopped after `listened` of its `length` seconds: a quick skip loses points,
@@ -484,13 +543,18 @@ impl Notes {
         }
     }
 
-    /// The song's points now: 5% less each day since it played, a third for 6 hours after.
+    /// The song's points now: 5% less each day since it played (minus points 15%), a third for
+    /// 6 hours after, and less while it was heard a lot this week (fatigue).
     pub fn track_points(&self, id: &str, now: u64) -> f32 {
         let Some(s) = self.tracks.get(id) else { return 0.0 };
         let ago = now.saturating_sub(s.last);
-        let mut p = s.points * DECAY.powf(ago as f32 / DAY as f32);
+        let decay = if s.points < 0.0 { DECAY_NEGATIVE } else { DECAY };
+        let mut p = s.points * decay.powf(ago as f32 / DAY as f32);
         if p > 0.0 && ago < COOLDOWN_SECS {
             p *= COOLDOWN;
+        }
+        if p > 0.0 && s.plays >= FATIGUE_PLAYS && now.saturating_sub(s.week) < WEEK {
+            p *= FATIGUE;
         }
         p
     }
@@ -1123,6 +1187,40 @@ mod tests {
             assert!(now >= last, "at {s} s");
             last = now;
         }
+    }
+
+
+    #[test]
+    fn love_replays_fading_and_fatigue() {
+        let t = |id: &str| Track { video_id: id.into(), title: id.into(), artist: "Singer".into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None };
+        let day = 24 * 60 * 60;
+        let mut n = super::Notes::default();
+        // A replay by hand within 15 minutes is worth more than the first play.
+        n.played(&t("a"), true, 1_000_000);
+        let first = n.tracks["a"].points;
+        n.played(&t("a"), true, 1_000_000 + 600);
+        assert!(n.tracks["a"].points - first > super::PLAY, "the replay gave extra");
+        // Loving a song (downloaded) adds points.
+        let before = n.tracks["a"].points;
+        n.love(&t("a"), super::Love::Download);
+        assert!(n.tracks["a"].points > before);
+        // Minus points fade faster than plus points.
+        let mut m = super::Notes::default();
+        m.give(&t("up"), 20.0);
+        m.give(&t("down"), -20.0);
+        m.tracks.get_mut("up").unwrap().last = 0;
+        m.tracks.get_mut("down").unwrap().last = 0;
+        let (up, down) = (m.track_points("up", 10 * day), m.track_points("down", 10 * day));
+        assert!(down.abs() < up, "after 10 days: {down} vs {up}");
+        // Five plays this week: it ranks lower until the week is over.
+        let mut f = super::Notes::default();
+        for k in 0..5 {
+            f.played(&t("b"), false, 2_000_000 + k * day / 2);
+        }
+        let tired = f.track_points("b", 2_000_000 + 3 * day);
+        f.tracks.get_mut("b").unwrap().plays = 1;
+        let fresh = f.track_points("b", 2_000_000 + 3 * day);
+        assert!(tired < fresh, "{tired} vs {fresh}");
     }
 
 }

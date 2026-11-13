@@ -1289,6 +1289,7 @@ impl App {
             return;
         }
         self.status = format!("Downloading \"{}\"...", t.title);
+        rymplayer::ram_points::loved(t.clone(), rymplayer::ram_points::Love::Download);
         self.spawn(async move { Event::Downloaded(s(stream::save_to_music(&t.video_id, &t.artist, &t.title).await)) });
     }
 
@@ -1428,6 +1429,7 @@ impl App {
             }
             'd' => {
                 self.status = format!("{} \"{}\"...", tr("Downloading"), t.title);
+                rymplayer::ram_points::loved(t.clone(), rymplayer::ram_points::Love::Download);
                 self.spawn(async move { Event::Downloaded(s(stream::save_to_music(&t.video_id, &t.artist, &t.title).await)) });
             }
             'l' => self.like(t),
@@ -1539,6 +1541,9 @@ impl App {
     fn add_to(&mut self, p: Playlist, video_id: String) {
         let Some(api) = self.api.clone() else { return };
         self.status = format!("Adding to \"{}\"...", p.title);
+        if let Some(t) = self.q.songs.iter().chain(self.tracks.iter()).find(|t| t.video_id == video_id).cloned() {
+            rymplayer::ram_points::loved(t, rymplayer::ram_points::Love::AddToPlaylist);
+        }
         self.spawn(async move { Event::Added(p.title, s(api.add_to_playlist(p.id, video_id).await)) });
     }
 
@@ -1835,6 +1840,12 @@ impl App {
         if (pos > 3.0 && !again) || i == 0 {
             if let Some(a) = &self.audio {
                 a.seek(0.0);
+            }
+            // Back to its start by hand: a sign it's loved (RaM points).
+            if pos > 3.0
+                && let Some(t) = self.now_playing().cloned()
+            {
+                rymplayer::ram_points::loved(t, rymplayer::ram_points::Love::BackToStart);
             }
         } else {
             self.play(i - 1);
