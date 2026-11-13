@@ -131,6 +131,8 @@ object RamPoints {
         val tracks: MutableMap<String, Score> = HashMap(),
         val affinity: MutableMap<String, Float> = HashMap(),
         val names: MutableMap<String, String> = HashMap(),
+        /** Songs of each kind played at each hour of the day (local time): what fits this hour. */
+        val hours: Array<IntArray> = Array(5) { IntArray(24) },
     ) {
         /** [delta] points to the song, and 30% of it to its artist. */
         private fun give(t: Track, delta: Float) {
@@ -159,6 +161,8 @@ object RamPoints {
                 s.plays = 0
             }
             s.plays++
+            // What kind plays at this hour (local time).
+            kindOf(t)?.let { k -> hours[k.ordinal][java.util.Calendar.getInstance().apply { timeInMillis = now }.get(java.util.Calendar.HOUR_OF_DAY)]++ }
         }
 
         /** A sign the song is loved: its points go up (and 30% to its artist). */
@@ -388,7 +392,13 @@ object RamPoints {
             affinity[parts[0]] = n
             parts.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { names[parts[0]] = it }
         }
-        return Notes(rekey(base.artists) { a, b -> IntArray(a.size) { a[it] + b.getOrElse(it) { 0 } } }, rekey(base.fixed) { a, _ -> a }, rekey(bias) { a, b -> a + b }, hidden, tracks, rekey(affinity) { a, b -> a + b }, rekey(names) { a, _ -> a })
+        // Kind, hour, count lines.
+        val hours = Array(5) { IntArray(24) }
+        p.getString("hours", "").orEmpty().lineSequence().forEach { line ->
+            val (k, h, n) = line.split('\t').takeIf { it.size == 3 }?.map { it.toIntOrNull() ?: -1 } ?: return@forEach
+            if (k in 0..4 && h in 0..23 && n > 0) hours[k][h] = n
+        }
+        return Notes(rekey(base.artists) { a, b -> IntArray(a.size) { a[it] + b.getOrElse(it) { 0 } } }, rekey(base.fixed) { a, _ -> a }, rekey(bias) { a, b -> a + b }, hidden, tracks, rekey(affinity) { a, b -> a + b }, rekey(names) { a, _ -> a }, hours)
     }
 
     /**
@@ -414,6 +424,7 @@ object RamPoints {
             .putString("tracks", notes.tracks.entries.sortedByDescending { kotlin.math.abs(it.value.points) }.take(TRACKS_KEPT)
                 .joinToString("\n") { (id, s) -> clean(id) + "\t" + s.points + "\t" + s.last + "\t" + s.plays + "\t" + s.week })
             .putString("affinity", notes.affinity.entries.joinToString("\n") { (a, n) -> clean(a) + "\t" + n + "\t" + clean(notes.names[a].orEmpty()) })
+            .putString("hours", (0..4).flatMap { k -> (0..23).filter { notes.hours[k][it] > 0 }.map { h -> "$k\t$h\t${notes.hours[k][h]}" } }.joinToString("\n"))
             .apply()
     }
 
@@ -549,9 +560,39 @@ object RamPoints {
     }
 
     /** The kinds the home page shows, from how much each was heard lately: the main one, and a second when it's at least a quarter. */
-    fun pageKinds(heard: List<Pair<Kind, Float>>): List<Kind> {
+    /**
+     * The Hijri month (1 Muharram ... 9 Ramadan ... 12 Dhu al-Hijjah) of a day, by the tabular
+     * Islamic calendar (within a day or so of the moon's sighting). The same as the PC's.
+     */
+    fun hijriMonth(ms: Long): Int {
+        val jd = Math.floorDiv(ms, 86_400_000L) + 2_440_588L
+        var l = jd - 1_948_440L + 10_632L
+        val n = (l - 1) / 10_631L
+        l = l - 10_631L * n + 354L
+        val j = ((10_985L - l) / 5_316L) * ((50L * l) / 17_719L) + (l / 5_670L) * ((43L * l) / 15_238L)
+        l = l - ((30L - j) / 15L) * ((17_719L * j) / 50L) - (j / 16L) * ((15_238L * j) / 43L) + 29L
+        return ((24L * l) / 709L).toInt()
+    }
+
+    /**
+     * Each kind's weight now for the home page: the season (Muharram and Safar favor Husseini,
+     * Ramadan Quran and nasheeds) and what's played at this [hour], as learned.
+     */
+    fun contextWeights(notes: Notes, now: Long, hour: Int): FloatArray {
+        val w = FloatArray(5) { 1f }
+        when (hijriMonth(now)) {
+            1, 2 -> w[Kind.Husseini.ordinal] *= 1.6f
+            9 -> { w[Kind.Quran.ordinal] *= 1.6f; w[Kind.Nasheed.ordinal] *= 1.4f }
+        }
+        val at = IntArray(5) { notes.hours[it][hour % 24] }
+        val total = at.sum()
+        if (total >= 5) for (k in 0..4) w[k] *= 1f + 0.8f * at[k] / total
+        return w
+    }
+
+    fun pageKinds(heard: List<Pair<Kind, Float>>, context: FloatArray = FloatArray(5) { 1f }): List<Kind> {
         val sum = FloatArray(5)
-        for ((k, w) in heard) sum[k.ordinal] += w
+        for ((k, w) in heard) sum[k.ordinal] += w * context[k.ordinal]
         val total = sum.sum()
         if (total <= 0f) return listOf(Kind.Songs)
         val kinds = (0..4).filter { sum[it] > 0f }.sortedByDescending { sum[it] }

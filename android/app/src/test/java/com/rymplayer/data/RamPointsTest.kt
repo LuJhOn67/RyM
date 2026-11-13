@@ -166,4 +166,16 @@ class RamPointsTest {
         f.tracks.getValue("b").plays = 1
         assertTrue(tired < f.trackPoints("b", 2_000_000_000L + 3 * day))
     }
+
+    @Test
+    fun hijriMonthsAndTheirWeights() {
+        // The same days as the PC's test: 1 Muharram 1448, Ramadan 1448, Jumada al-Akhirah.
+        assertEquals(1, RamPoints.hijriMonth((1_781_568_000L + 86_400L) * 1000))
+        assertEquals(9, RamPoints.hijriMonth(1_802_390_400L * 1000))
+        assertEquals(6, RamPoints.hijriMonth(1_794_528_000L * 1000))
+        val muharram = RamPoints.contextWeights(RamPoints.Notes(), (1_781_568_000L + 86_400L) * 1000, 12)
+        val heard = listOf(RamPoints.Kind.Songs to 1f, RamPoints.Kind.Husseini to 0.9f)
+        assertEquals(RamPoints.Kind.Songs, RamPoints.pageKinds(heard)[0])
+        assertEquals(RamPoints.Kind.Husseini, RamPoints.pageKinds(heard, muharram)[0])
+    }
 }

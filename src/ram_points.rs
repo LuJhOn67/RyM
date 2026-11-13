@@ -203,6 +203,9 @@ pub struct Notes {
     /// Artists as they're written (the keys above are lowercase), for the settings.
     #[serde(default)]
     names: HashMap<String, String>,
+    /// Songs of each kind played at each hour of the day (local time): what fits this hour.
+    #[serde(default)]
+    hours: [[u32; 24]; 5],
 }
 
 impl Notes {
@@ -326,6 +329,41 @@ const FATIGUE_PLAYS: u32 = 5;
 const FATIGUE: f32 = 0.6;
 /// Songs kept, at most (the weakest go first).
 const TRACKS_KEPT: usize = 5000;
+
+/// The Hijri month (1 Muharram ... 9 Ramadan ... 12 Dhu al-Hijjah) of a day (seconds since
+/// 1970), by the tabular Islamic calendar (within a day or so of the moon's sighting: enough
+/// for a month's mood).
+pub fn hijri_month(unix_secs: u64) -> u32 {
+    let jd = (unix_secs / 86_400) as i64 + 2_440_588; // Julian day number
+    let l = jd - 1_948_440 + 10_632;
+    let n = (l - 1) / 10_631;
+    let l = l - 10_631 * n + 354;
+    let j = ((10_985 - l) / 5_316) * ((50 * l) / 17_719) + (l / 5_670) * ((43 * l) / 15_238);
+    let l = l - ((30 - j) / 15) * ((17_719 * j) / 50) - (j / 16) * ((15_238 * j) / 43) + 29;
+    ((24 * l) / 709) as u32
+}
+
+/// Each kind's weight now for the home page: the season (Muharram and Safar favor Husseini,
+/// Ramadan Quran and nasheeds) and what's played at this hour (`hour`, local), as learned.
+pub fn context_weights(notes: &Notes, unix_secs: u64, hour: usize) -> [f32; 5] {
+    let mut w = [1.0f32; 5];
+    match hijri_month(unix_secs) {
+        1 | 2 => w[Kind::Husseini as usize] *= 1.6,
+        9 => {
+            w[Kind::Quran as usize] *= 1.6;
+            w[Kind::Nasheed as usize] *= 1.4;
+        }
+        _ => {}
+    }
+    let at: Vec<u32> = (0..5).map(|k| notes.hours[k][hour % 24]).collect();
+    let total: u32 = at.iter().sum();
+    if total >= 5 {
+        for k in 0..5 {
+            w[k] *= 1.0 + 0.8 * at[k] as f32 / total as f32;
+        }
+    }
+    w
+}
 
 /// One change to the points file at a time (playing and the settings can come together).
 static FILE: Mutex<()> = Mutex::new(());
@@ -527,6 +565,12 @@ impl Notes {
             s.plays = 0;
         }
         s.plays += 1;
+        // What kind plays at this hour (local time).
+        if let Some(k) = self.kind_of(t) {
+            use chrono::Timelike;
+            let hour = chrono::DateTime::from_timestamp(now as i64, 0).map(|d| d.with_timezone(&chrono::Local).hour() as usize).unwrap_or(0);
+            self.hours[k as usize][hour % 24] += 1;
+        }
     }
 
     /// A sign the song is loved: its points go up (and 30% to its artist).
@@ -822,9 +866,14 @@ impl Candidate {
 /// The kinds the home page shows, from how much each was heard lately (`(kind, weight)`): the
 /// main one, and a second one when it's at least a quarter. Songs when nothing was heard.
 pub fn page_kinds(heard: &[(Kind, f32)]) -> Vec<Kind> {
+    page_kinds_with(heard, [1.0; 5])
+}
+
+/// [`page_kinds`] with each kind's weight multiplied by `context` (see [`context_weights`]).
+pub fn page_kinds_with(heard: &[(Kind, f32)], context: [f32; 5]) -> Vec<Kind> {
     let mut sum = [0f32; 5];
     for (k, w) in heard {
-        sum[*k as usize] += w;
+        sum[*k as usize] += w * context[*k as usize];
     }
     let total: f32 = sum.iter().sum();
     if total <= 0.0 {
@@ -1221,6 +1270,22 @@ mod tests {
         f.tracks.get_mut("b").unwrap().plays = 1;
         let fresh = f.track_points("b", 2_000_000 + 3 * day);
         assert!(tired < fresh, "{tired} vs {fresh}");
+    }
+
+
+    #[test]
+    fn hijri_months_and_their_weights() {
+        // 2026-06-16 is 1 Muharram 1448; 2027-02-08 is in Ramadan 1448; 2026-11-13 in Jumada al-Akhirah.
+        assert_eq!(super::hijri_month(1_781_568_000 + 86_400), 1);
+        assert_eq!(super::hijri_month(1_802_390_400), 9);
+        assert_eq!(super::hijri_month(1_794_528_000), 6);
+        let n = Notes::default();
+        let muharram = super::context_weights(&n, 1_781_568_000 + 86_400, 12);
+        assert!(muharram[Kind::Husseini as usize] > 1.0 && muharram[Kind::Songs as usize] == 1.0);
+        // Husseini and songs heard alike: in Muharram Husseini comes first.
+        let heard = [(Kind::Songs, 1.0), (Kind::Husseini, 0.9)];
+        assert_eq!(super::page_kinds(&heard)[0], Kind::Songs);
+        assert_eq!(super::page_kinds_with(&heard, muharram)[0], Kind::Husseini);
     }
 
 }

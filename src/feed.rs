@@ -117,7 +117,12 @@ pub async fn refresh(api: Api) -> Result<Refreshed> {
     // "Only this kind" in the settings (a Muharram, say): the page keeps to it.
     let kinds = match ram_points::only_kind() {
         Some(k) => vec![k],
-        None => ram_points::page_kinds(&heard),
+        // The season (Muharram, Ramadan) and what's played at this hour count too.
+        None => {
+            use chrono::Timelike;
+            let hour = chrono::Local::now().hour() as usize;
+            ram_points::page_kinds_with(&heard, ram_points::context_weights(&notes, now, hour))
+        }
     };
     for (seed, radio) in &new_radios {
         let kind = notes.seed_kind(seed, radio);

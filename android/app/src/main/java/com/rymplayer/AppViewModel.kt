@@ -828,7 +828,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         notes.kindOf(t)?.let { heard += it to 0.6f / (1 + i * 0.3f) }
                     }
                     // "Only this kind" in the settings (a Muharram, say): the page keeps to it.
-                    val kinds = com.rymplayer.data.RamPoints.onlyKind(ctx)?.let { listOf(it) } ?: com.rymplayer.data.RamPoints.pageKinds(heard)
+                    // The season (Muharram, Ramadan) and what's played at this hour count too.
+                    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                    val kinds = com.rymplayer.data.RamPoints.onlyKind(ctx)?.let { listOf(it) }
+                        ?: com.rymplayer.data.RamPoints.pageKinds(heard, com.rymplayer.data.RamPoints.contextWeights(notes, System.currentTimeMillis(), hour))
                     for ((seed, radio) in newRadios.awaitAll()) {
                         val kind = notes.seedKind(seed, radio)
                         notes.learn(kind, seed, radio)
