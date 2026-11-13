@@ -42,6 +42,7 @@ pub mod secret;
 pub mod session;
 pub mod song_volume;
 pub mod lyrics_offset;
+pub mod talk_place;
 pub mod soundcloud;
 pub mod spotify;
 pub mod stats;

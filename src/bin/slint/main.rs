@@ -1539,6 +1539,7 @@ fn fill_settings(st: &Shared) {
         choice("source", "Audio source", t(c.source.label())),
         choice("quality", "Download quality", t(if c.download_best { "Best (yt-dlp)" } else { "Fast" })),
         choice("connections", "Download connections", c.download_connections.to_string()),
+        choice("talk-speed", "Long talks' speed", format!("{}×", c.talk_speed)),
         choice("cache", "Keep played songs up to", if c.cache_limit_gb == 0 { t("No limit") } else { format!("{} GB", c.cache_limit_gb) }),
         button("cache-clear", "Clear cache", format!("{}: {}", t("Played songs kept on this PC"), stream::size_text(stream::cache_size())), "Clear"),
         button("innertube", "YouTube's ways", {
@@ -1800,6 +1801,16 @@ fn choose(st: &Shared, id: &str, step: i32) {
             s.config.download_best = !s.config.download_best;
             stream::download_best(s.config.download_best);
             s.config.save();
+        }
+        "talk-speed" => {
+            let mut s = st.borrow_mut();
+            let at = rymplayer::talk_place::SPEEDS.iter().position(|v| (*v - s.config.talk_speed).abs() < 0.01).unwrap_or(0);
+            s.config.talk_speed = rymplayer::talk_place::SPEEDS[cycle(at, rymplayer::talk_place::SPEEDS.len())];
+            s.config.save();
+            let talk = s.audio.as_ref().and_then(|a| a.duration()).is_some_and(rymplayer::talk_place::is_long);
+            if talk && let Some(a) = &s.audio {
+                a.set_speed(s.config.talk_speed);
+            }
         }
         "cache" => {
             const SIZES: [u32; 7] = [0, 1, 2, 5, 10, 20, 50];
@@ -2336,12 +2347,19 @@ fn set_speed(st: &Shared, id: &str) {
             "slowed" => s.config.set_mode("Slowed"),
             other => {
                 s.config.set_mode("Normal");
-                s.config.speed = other.parse::<f32>().unwrap_or(1.0).clamp(0.5, 2.0);
+                let v = other.parse::<f32>().unwrap_or(1.0).clamp(0.5, 2.0);
+                // During a long talk the button sets the talks' own speed; the songs keep theirs.
+                if s.audio.as_ref().and_then(|a| a.duration()).is_some_and(rymplayer::talk_place::is_long) {
+                    s.config.talk_speed = v;
+                } else {
+                    s.config.speed = v;
+                }
             }
         }
         rymplayer::fx::set(s.config.fx());
+        let talk = s.audio.as_ref().and_then(|a| a.duration()).is_some_and(rymplayer::talk_place::is_long);
         if let Some(a) = &s.audio {
-            a.set_speed(s.config.speed);
+            a.set_speed(if talk { s.config.talk_speed } else { s.config.speed });
         }
         s.config.save();
     }
@@ -3341,6 +3359,10 @@ fn tick(st: &Shared) {
     let lpos = pos + s.q.now().map_or(0.0, |t| rymplayer::lyrics_offset::get(&t.video_id));
     if let Some(a) = &mut s.audio {
         a.tick();
+    }
+    // A long talk keeps where it is (every 10 s).
+    if loaded && let Some(t) = s.q.now() {
+        rymplayer::talk_place::note(&t.video_id, pos, dur);
     }
     let since = s.listened_at.elapsed();
     s.listened_at = Instant::now();
@@ -4636,6 +4658,10 @@ fn handle(st: &Shared, ev: Ev) {
             let Some(t) = s.q.now().cloned() else { return };
             let known = parse_duration(&t.duration).or_else(|| stream::cached_duration(&t.video_id));
             let resume = s.resume_at.take().filter(|(id, at)| *id == t.video_id && *at > 1.0).map(|(_, at)| at);
+            // A long talk: where it was stopped, and its own speed (songs keep theirs).
+            let long = known.is_some_and(rymplayer::talk_place::is_long);
+            let resume = resume.or_else(|| known.and_then(|k| rymplayer::talk_place::place(&t.video_id, k)));
+            let speed = if long { s.config.talk_speed } else { s.config.speed };
             let crossfade = std::mem::take(&mut s.crossfade_next);
             let gapless = std::mem::take(&mut s.gapless_next);
             let automix = s.config.automix;
@@ -4652,6 +4678,7 @@ fn handle(st: &Shared, ev: Ev) {
                     if let Some(at) = resume {
                         a.seek(at);
                     }
+                    a.set_speed(speed);
                 }),
                 (Ok(_), None) => Err("no audio device".into()),
                 (Err(e), _) => Err(e.to_string()),
@@ -4660,6 +4687,9 @@ fn handle(st: &Shared, ev: Ev) {
             with_app(st, |a| a.set_loading(false));
             match started {
                 Ok(()) => {
+                    if long && let Some(at) = resume {
+                        toast(st, &format!("{} {}", tr("Going on from"), rymplayer::fmt_time(at)));
+                    }
                     // The slider shows this song's own volume when it has one.
                     if let Some(v) = rymplayer::song_volume::get(&t.video_id) {
                         with_app(st, |a| a.set_volume(v));

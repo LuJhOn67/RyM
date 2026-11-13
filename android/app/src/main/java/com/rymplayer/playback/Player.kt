@@ -542,9 +542,22 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         scope.launch {
             var forId: String? = null
             var parts: List<Pair<Float, Float>> = emptyList()
+            var placedFor: String? = null
             while (isActive) {
                 delay(500)
                 val id = current?.videoId
+                // A long talk: it goes on from where it was stopped, and its place is kept.
+                controller?.let { c ->
+                    val secs = c.duration.takeIf { it > 0 }?.div(1000f) ?: return@let
+                    if (id == null) return@let
+                    if (placedFor != id) {
+                        placedFor = id
+                        com.rymplayer.data.TalkPlace.place(context, id, secs)?.let { at ->
+                            seekTo(at)
+                            message = "${com.rymplayer.tr("Going on from")} ${com.rymplayer.data.fmtTime(at)}"
+                        }
+                    } else if (c.isPlaying) com.rymplayer.data.TalkPlace.note(context, id, c.currentPosition / 1000f, secs)
+                }
                 if (id != forId) {
                     forId = id
                     parts = emptyList()

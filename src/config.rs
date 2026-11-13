@@ -187,6 +187,8 @@ pub struct Config {
     pub gapless: bool,
     /// Downloaded songs kept under this many GB (0: no limit).
     pub cache_limit_gb: u32,
+    /// Long talks' own speed (over 20 minutes; see `talk_place`); the songs keep `speed`.
+    pub talk_speed: f32,
     /// The phone can control this computer's music (play, pause, skip, seek, volume).
     pub remote_control: bool,
 }
@@ -384,6 +386,7 @@ impl Default for Config {
             sponsorblock: true,
             gapless: true,
             cache_limit_gb: 5,
+            talk_speed: 1.0,
             remote_control: true,
         }
     }

@@ -207,6 +207,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "New direction:" => "اتجاه جديد:",
         "Lyrics timing" => "توقيت الكلمات",
         "Undo" => "تراجع",
+        "Long talks' speed" => "سرعة المحاضرات الطويلة",
+        "Going on from" => "يكمّل من",
         "Cache cleared" => "انمسح الكاش",
         "Played songs kept on this PC" => "الأغاني المحفوظة بالحاسبة",
         "Clear" => "امسح",

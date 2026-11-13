@@ -273,6 +273,14 @@ fun SettingsPage(vm: AppViewModel) {
                 Divider()
                 TapRow(Icons.Default.SystemUpdate, tr("Update yt-dlp"), vm.ytdlpStatus.ifEmpty { tr("yt-dlp finds songs YouTube refuses, and downloads") }, tr("Update")) { vm.updateYtDlp() }
             }
+            Section(tr("Long talks")) {
+                // Over 20 minutes: they go on from where they stopped, at their own speed.
+                TapRow(Icons.Default.SystemUpdate, tr("Long talks' speed"), tr("Talks over 20 minutes go on from where they stopped, at this speed; songs keep theirs"), "${vm.sound.talkSpeed}×") {
+                    val all = com.rymplayer.data.TalkPlace.SPEEDS
+                    val at = all.indexOfFirst { kotlin.math.abs(it - vm.sound.talkSpeed) < 0.01f }
+                    vm.changeSound(vm.sound.copy(talkSpeed = all[(at + 1) % all.size]))
+                }
+            }
             Section(tr("Storage")) {
                 val ctx = androidx.compose.ui.platform.LocalContext.current
                 val streams = com.rymplayer.playback.Streams

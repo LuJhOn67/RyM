@@ -50,6 +50,8 @@ object Sound {
         val automix: Boolean = false,
         /** Karaoke: the voice taken out (the middle of the stereo). */
         val vocalsOff: Boolean = false,
+        /** Long talks' own speed (over 20 minutes, see [com.rymplayer.data.TalkPlace]). */
+        val talkSpeed: Float = 1f,
     ) {
         val gains: List<Float> get() = if (eqPreset == PRESETS.lastIndex) eqCustom else PRESETS[eqPreset.coerceIn(0, PRESETS.lastIndex)].second.toList()
         val modeName: String get() = MODES.firstOrNull { abs(it.speed - speed) < 0.01f && abs(it.pitch - pitch) < 0.01f }?.name ?: "Custom"
@@ -73,6 +75,7 @@ object Sound {
             sleepAt = p.getLong("sleep_at", 0),
             automix = p.getBoolean("automix", false),
             vocalsOff = p.getBoolean("vocals_off", false),
+            talkSpeed = p.getFloat("talk_speed", 1f),
         )
     }
 
@@ -89,6 +92,7 @@ object Sound {
             putLong("sleep_at", s.sleepAt)
             putBoolean("automix", s.automix)
             putBoolean("vocals_off", s.vocalsOff)
+            putFloat("talk_speed", s.talkSpeed)
         }.apply()
     }
 

@@ -393,7 +393,10 @@ class PlaybackService : MediaSessionService() {
             }
             val pos = p.currentPosition
             val dur = p.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
-            val speed = s.speed.coerceAtLeast(0.1f)
+            // A long talk plays at its own speed; songs at theirs.
+            val want = if (com.rymplayer.data.TalkPlace.isLong(dur / 1000f)) s.talkSpeed else s.speed
+            if (easing == null && kotlin.math.abs(p.playbackParameters.speed - want) > 0.01f) p.playbackParameters = PlaybackParameters(want, s.pitch)
+            val speed = want.coerceAtLeast(0.1f)
             var volume = 1f
             val whole = QueueBridge.playsWhole?.invoke() == true
             if (whole) {
