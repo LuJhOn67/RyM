@@ -110,6 +110,8 @@ pub struct Config {
     pub only_kind: String,
     /// RaM points: Up next from familiar songs (0) to new ones (4); 2 balanced.
     pub discovery: u8,
+    /// Karaoke: the voice taken out (the middle of the stereo).
+    pub vocals_off: bool,
     /// The accent color from the playing song's cover (Slint app).
     pub accent_from_cover: bool,
     /// The colors: a built-in theme's name, "Custom" (`custom_theme`), or empty (the layout's own).
@@ -213,7 +215,7 @@ impl Config {
         let presets = &crate::fx::PRESETS;
         let i = self.eq_preset.min(presets.len() - 1);
         let eq = if i == presets.len() - 1 { self.eq_custom } else { presets[i].1 };
-        crate::fx::Settings { eq, normalize: self.normalize, skip_silence: self.skip_silence, pitch: crate::fx::shift_for(self.speed, self.pitch), reverb: self.reverb }
+        crate::fx::Settings { eq, normalize: self.normalize, skip_silence: self.skip_silence, pitch: crate::fx::shift_for(self.speed, self.pitch), reverb: self.reverb, vocals_off: self.vocals_off }
     }
 
     pub fn eq_name(&self) -> &'static str {
@@ -346,6 +348,7 @@ impl Default for Config {
             ui_zoom: 0.85,
             only_kind: String::new(),
             discovery: 2,
+            vocals_off: false,
             accent_from_cover: false,
             seek_step: seek_step(),
             window_glass: 0,
@@ -548,6 +551,8 @@ pub enum Setting {
     Discord,
     /// RaM points: familiar songs or new ones.
     Discovery,
+    /// Karaoke: the voice taken out.
+    VocalsOff,
     /// SponsorBlock skips a music video's non-music parts.
     SponsorBlock,
     /// English under Japanese lyrics.
@@ -558,7 +563,7 @@ pub enum Setting {
     Reset,
 }
 
-pub const SETTINGS: [Setting; 29] = [
+pub const SETTINGS: [Setting; 30] = [
     Setting::Theme,
     Setting::Library,
     Setting::LibraryWidth,
@@ -583,6 +588,7 @@ pub const SETTINGS: [Setting; 29] = [
     Setting::Mode,
     Setting::Discord,
     Setting::Discovery,
+    Setting::VocalsOff,
     Setting::SponsorBlock,
     Setting::Translate,
     Setting::Romaji,
@@ -643,6 +649,7 @@ impl Config {
             Setting::Mode => "Speed and pitch",
             Setting::Discord => "Discord",
             Setting::Discovery => "Familiar or new",
+            Setting::VocalsOff => "Remove vocals (karaoke)",
             Setting::SponsorBlock => "Skip non-music parts",
             Setting::Translate => "Translate Japanese lyrics",
             Setting::Romaji => "Romaji",
@@ -681,6 +688,7 @@ impl Config {
                 (true, false) => tr("On").to_string(),
             },
             Setting::Discovery => tr(crate::ram_points::DISCOVERY_NAMES[self.discovery.min(4) as usize]).to_string(),
+            Setting::VocalsOff => tr(if self.vocals_off { "On" } else { "Off" }).to_string(),
             Setting::SponsorBlock => tr(if self.sponsorblock { "On" } else { "Off" }).to_string(),
             Setting::Translate => tr(if self.lyrics_translation { "On" } else { "Off" }).to_string(),
             Setting::Romaji => tr(if self.romaji { "On" } else { "Off" }).to_string(),
@@ -721,6 +729,7 @@ impl Config {
                 self.set_mode(names[i]);
             }
             Setting::Discord => self.discord = !self.discord,
+            Setting::VocalsOff => self.vocals_off = !self.vocals_off,
             Setting::Discovery => {
                 self.discovery = (self.discovery as i32 + step).clamp(0, 4) as u8;
                 crate::ram_points::set_discovery(self.discovery);
@@ -740,7 +749,7 @@ impl Config {
             }
             // Keeps the theme, puts every panel back where it started.
             Setting::Reset => {
-                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, music_engine: self.music_engine, automix: self.automix, link_auto: self.link_auto, cross_ears: self.cross_ears, lyrics_translation: self.lyrics_translation, lyrics_font: self.lyrics_font, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ui_zoom: self.ui_zoom, only_kind: std::mem::take(&mut self.only_kind), discovery: self.discovery, accent_from_cover: self.accent_from_cover, visualizer: self.visualizer, romaji: self.romaji, karaoke: self.karaoke, alarm_on: self.alarm_on, alarm_time: std::mem::take(&mut self.alarm_time), alarm_rang: std::mem::take(&mut self.alarm_rang), lastfm_key: std::mem::take(&mut self.lastfm_key), lastfm_secret: std::mem::take(&mut self.lastfm_secret), lastfm_session: std::mem::take(&mut self.lastfm_session), lastfm_user: std::mem::take(&mut self.lastfm_user), ytdlp_nightly: self.ytdlp_nightly, link_announce: self.link_announce, close_action: std::mem::take(&mut self.close_action), ytdlp_auto_update: self.ytdlp_auto_update, ytdlp_updated_at: self.ytdlp_updated_at, sponsorblock: self.sponsorblock, gapless: self.gapless, cache_limit_gb: self.cache_limit_gb, remote_control: self.remote_control, ..Config::default() }
+                *self = Config { theme: self.theme, gui_theme: self.gui_theme, gui_icon: self.gui_icon.take(), source: self.source, download_best: self.download_best, download_connections: self.download_connections, download_piece_mb: self.download_piece_mb, play_in_vlc: self.play_in_vlc, arabic: self.arabic, auto_update_check: self.auto_update_check, beta_updates: self.beta_updates, last_update_check: self.last_update_check, plugins: std::mem::take(&mut self.plugins), crossfade: self.crossfade, music_engine: self.music_engine, automix: self.automix, link_auto: self.link_auto, cross_ears: self.cross_ears, lyrics_translation: self.lyrics_translation, lyrics_font: self.lyrics_font, skip_silence: self.skip_silence, eq_preset: self.eq_preset, eq_custom: self.eq_custom, normalize: self.normalize, speed: self.speed, pitch: self.pitch, reverb: self.reverb, discord: self.discord, discord_app_id: std::mem::take(&mut self.discord_app_id), lyrics_overlay: self.lyrics_overlay, overlay_click_through: self.overlay_click_through, ui_zoom: self.ui_zoom, only_kind: std::mem::take(&mut self.only_kind), discovery: self.discovery, vocals_off: self.vocals_off, accent_from_cover: self.accent_from_cover, visualizer: self.visualizer, romaji: self.romaji, karaoke: self.karaoke, alarm_on: self.alarm_on, alarm_time: std::mem::take(&mut self.alarm_time), alarm_rang: std::mem::take(&mut self.alarm_rang), lastfm_key: std::mem::take(&mut self.lastfm_key), lastfm_secret: std::mem::take(&mut self.lastfm_secret), lastfm_session: std::mem::take(&mut self.lastfm_session), lastfm_user: std::mem::take(&mut self.lastfm_user), ytdlp_nightly: self.ytdlp_nightly, link_announce: self.link_announce, close_action: std::mem::take(&mut self.close_action), ytdlp_auto_update: self.ytdlp_auto_update, ytdlp_updated_at: self.ytdlp_updated_at, sponsorblock: self.sponsorblock, gapless: self.gapless, cache_limit_gb: self.cache_limit_gb, remote_control: self.remote_control, ..Config::default() }
             }
         }
     }

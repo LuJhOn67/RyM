@@ -34,6 +34,8 @@ object Automix {
 
     /** The playing song's latest bass (below about 150 Hz), left and right (RMS): Liquid Aurora and the needle meters. */
     object Levels {
+        /** Karaoke: left minus right in the sound chain, so the voice in the middle goes. */
+        @Volatile var vocalsOff = false
         @Volatile var bass = 0f
         @Volatile var left = 0f
         @Volatile var right = 0f
@@ -258,11 +260,19 @@ object Automix {
                 if (want >= 1f) filters.forEach { it.set(want, rate.toFloat()) }
             }
             val frames = bytes / (2 * channels)
+            val frame = FloatArray(channels)
             repeat(frames) {
                 var power = 0f
                 var mono = 0f
+                for (c in 0 until channels) frame[c] = inputBuffer.short / 32768f
+                // Karaoke: left minus right cancels the middle (the voice), the sides stay.
+                if (Levels.vocalsOff && channels >= 2) {
+                    val side = (frame[0] - frame[1]) * 0.7f
+                    frame[0] = side
+                    frame[1] = side
+                }
                 for (c in 0 until channels) {
-                    var x = inputBuffer.short / 32768f
+                    var x = frame[c]
                     power += x * x
                     mono += x
                     if (c == 0) leftSum += x * x

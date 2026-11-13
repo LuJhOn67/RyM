@@ -203,6 +203,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun applySound() {
         val s = Sound.load(this)
+        Automix.Levels.vocalsOff = s.vocalsOff
         effects.forEach { it?.apply(s) }
         if (players.any { it?.isPlaying == true }) {
             handler.removeCallbacks(fades)

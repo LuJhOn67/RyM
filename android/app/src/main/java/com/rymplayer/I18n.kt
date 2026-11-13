@@ -36,6 +36,8 @@ object I18n {
         "Pause" to "إيقاف مؤقت",
         "Save as playlist" to "حفظ كقائمة تشغيل",
         "New direction:" to "اتجاه جديد:",
+        "Remove vocals (karaoke)" to "شيل الصوت (كاريوكي)",
+        "The voice taken out (it sits in the middle of the stereo); the music stays" to "الصوت ينشال (هو بنص الستيريو) والموسيقى تبقى",
         "Your favorite songs (RaM points)" to "أغانيك المفضّلة (نقاط RaM)",
         "Your favorite artists (RaM points)" to "فنانينك المفضّلين (نقاط RaM)",
         "points" to "نقطة",

@@ -1448,6 +1448,7 @@ fn fill_settings(st: &Shared) {
         switch("normalize", "Even loudness", "Every song about as loud (by YouTube's own measure when it has one)", c.normalize),
         switch("gapless", "Gapless", "With no crossfade, the next song starts the instant this one ends", c.gapless),
         switch("sponsorblock", "Skip non-music parts", "SponsorBlock: a music video's intro, talk and outro are skipped", c.sponsorblock),
+        switch("vocals-off", "Remove vocals (karaoke)", "The voice taken out (it sits in the middle of the stereo); the music stays", c.vocals_off),
         choice("eq", "Equalizer", t(c.eq_name())),
         choice("mode", "Speed", t(c.mode_name())),
         choice("sleep", "Sleep timer", sleep),
@@ -1569,6 +1570,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "remote" => c.remote_control = on,
             "gapless" => c.gapless = on,
             "sponsorblock" => c.sponsorblock = on,
+            "vocals-off" => c.vocals_off = on,
             "ytdlp-auto" => c.ytdlp_auto_update = on,
             "vlc" => c.play_in_vlc = on,
             p if p.starts_with("plugin:") => {

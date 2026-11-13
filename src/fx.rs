@@ -44,15 +44,17 @@ pub struct Settings {
     pub pitch: f32,
     /// Reverb mix (0 = off).
     pub reverb: f32,
+    /// Karaoke: what's in the middle of the stereo (most often the voice) is taken out.
+    pub vocals_off: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0 }
+        Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0, vocals_off: false }
     }
 }
 
-static SETTINGS: RwLock<Settings> = RwLock::new(Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0 });
+static SETTINGS: RwLock<Settings> = RwLock::new(Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0, vocals_off: false });
 static VERSION: AtomicU64 = AtomicU64::new(1);
 
 pub fn set(s: Settings) {
@@ -320,6 +322,12 @@ impl<S: Source<Item = f32>> Effects<S> {
             break;
         }
         let s = self.settings;
+        // Karaoke: left minus right cancels the middle (the voice), the sides stay.
+        if s.vocals_off && self.channels >= 2 {
+            let side = (self.frame[0] - self.frame[1]) * 0.7;
+            self.frame[0] = side;
+            self.frame[1] = side;
+        }
         for c in 0..self.channels {
             let mut x = self.frame[c];
             for f in &mut self.eq[c] {
@@ -431,7 +439,7 @@ mod tests {
 
     #[test]
     fn silence_loudness_equalizer_pitch_reverb() {
-        set(Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0 });
+        set(Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0, vocals_off: false });
         // 2 s of silence first: skipped.
         let out: Vec<f32> = Effects::new(tone(0.02, 2.0, 8.0)).collect();
         assert!(out.len() <= 8 * 8000 + 10, "{}", out.len());
@@ -441,7 +449,13 @@ mod tests {
         let loud: Vec<f32> = Effects::new(tone(1.0, 0.0, 4.0)).collect();
         assert!(loud.iter().all(|x| x.abs() <= 1.0));
         // (One test: the settings are shared by every player.)
-        set(Settings { eq: [6.0, 0.0, 0.0, 0.0, -6.0], normalize: false, skip_silence: false, pitch: 1.2, reverb: 0.3 });
+        // Karaoke: a voice in the middle (the same on both sides) goes; a side-only sound stays.
+        set(Settings { eq: [0.0; 5], normalize: false, skip_silence: false, pitch: 1.0, reverb: 0.0, vocals_off: true });
+        let middle: Vec<f32> = Effects::new(rodio::buffer::SamplesBuffer::new(std::num::NonZero::new(2).unwrap(), std::num::NonZero::new(8000).unwrap(), vec![0.5f32; 8000])).collect();
+        assert!(middle.iter().all(|x| x.abs() < 1e-4), "the middle is gone");
+        let side: Vec<f32> = Effects::new(rodio::buffer::SamplesBuffer::new(std::num::NonZero::new(2).unwrap(), std::num::NonZero::new(8000).unwrap(), [0.5f32, 0.0].repeat(4000))).collect();
+        assert!(side.iter().any(|x| x.abs() > 0.2), "a side stays");
+        set(Settings { eq: [6.0, 0.0, 0.0, 0.0, -6.0], normalize: false, skip_silence: false, pitch: 1.2, reverb: 0.3, vocals_off: false });
         let out: Vec<f32> = Effects::new(tone(0.5, 0.0, 1.0)).collect();
         assert_eq!(out.len(), 8000);
         assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0));

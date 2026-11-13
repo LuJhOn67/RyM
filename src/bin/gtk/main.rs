@@ -2274,6 +2274,10 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     page.append(&setting_row(tr("Crossfade"), tr("Seconds the end of a song and the start of the next play together (0 = off)"), &fade));
     page.append(&setting_row(tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), &switch(config.automix, ui, |c, on| c.automix = on)));
     page.append(&setting_row(tr("Skip non-music parts"), tr("SponsorBlock: a music video's intro, talk and outro are skipped"), &switch(config.sponsorblock, ui, |c, on| c.sponsorblock = on)));
+    page.append(&setting_row(tr("Remove vocals (karaoke)"), tr("The voice taken out (it sits in the middle of the stereo); the music stays"), &switch(config.vocals_off, ui, |c, on| {
+        c.vocals_off = on;
+        rymplayer::fx::set(c.fx());
+    })));
     page.append(&setting_row(tr("Romaji"), tr("Japanese lines in Latin letters under them"), &switch(config.romaji, ui, |c, on| c.romaji = on)));
     {
         // RaM points: Up next from familiar songs to new ones.
