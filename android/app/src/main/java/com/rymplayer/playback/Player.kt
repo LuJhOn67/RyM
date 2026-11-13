@@ -74,6 +74,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.prev = { prev() }
         QueueBridge.hasNext = { (index + 1 < queue.size || repeatMode == 1) && !repeatOne }
         QueueBridge.mixNext = { done -> scope.launch { done(advanceForMix()) } }
+        QueueBridge.adopt = { list, at -> scope.launch { adopt(list, at) } }
         QueueBridge.playsWhole = {
             listOfNotNull(queue.getOrNull(index), queue.getOrNull(index + 1)).any { com.rymplayer.data.RamPoints.playsWhole(context, it) }
         }
@@ -268,6 +269,20 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         queue += list
         added = 0
         play(at)
+    }
+
+    /** Android Auto or the assistant started [list] at [at] on the player itself: the queue becomes
+     *  it (the song is already loading there), so Next and the radio go on from it. */
+    fun adopt(list: List<Track>, at: Int) {
+        if (list.isEmpty()) return
+        queue.clear()
+        queue += list
+        index = at.coerceIn(0, list.lastIndex)
+        added = 0
+        playCount++
+        position = 0f
+        onTrackChanged(current)
+        saveSession()
     }
 
     fun append(list: List<Track>) {
@@ -755,6 +770,7 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         QueueBridge.prev = null
         QueueBridge.hasNext = null
         QueueBridge.mixNext = null
+        QueueBridge.adopt = null
         QueueBridge.playsWhole = null
         Link.pause = null
         loadJob?.cancel()

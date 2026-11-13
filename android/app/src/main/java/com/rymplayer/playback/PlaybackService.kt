@@ -35,6 +35,8 @@ object QueueBridge {
     @Volatile var mixNext: (((MediaItem?) -> Unit) -> Unit)? = null
     /** The playing song or the next one is Quran or a talk: they play whole, without a blend. */
     @Volatile var playsWhole: (() -> Boolean)? = null
+    /** Android Auto or the assistant started a list on the player: the app's queue becomes it. */
+    @Volatile var adopt: ((List<com.rymplayer.data.Track>, Int) -> Unit)? = null
     /** A song was picked by hand: a mix that hasn't started sounding yet is dropped. */
     @Volatile var cancelMix: (() -> Unit)? = null
 }
@@ -62,8 +64,10 @@ private class KeepTrying : androidx.media3.exoplayer.upstream.DefaultLoadErrorHa
  * mix starts, the session moves to the other player and the app starts the next song on it, while
  * the first one plays on, fading out with its bass taken away; both sound at once.
  */
-class PlaybackService : MediaSessionService() {
-    private var session: MediaSession? = null
+class PlaybackService : androidx.media3.session.MediaLibraryService() {
+    private var session: androidx.media3.session.MediaLibraryService.MediaLibrarySession? = null
+    /** Android Auto's and the assistant's searches. */
+    private val libraryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
     private val players = arrayOfNulls<ExoPlayer>(2)
     private val meters = arrayOf(Automix.Meter(), Automix.Meter())
     private val effects = arrayOfNulls<SoundEffects>(2)
@@ -134,7 +138,10 @@ class PlaybackService : MediaSessionService() {
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        session = MediaSession.Builder(this, wrap(players[0]!!)).setSessionActivity(open).build()
+        // Started by Android Auto or the assistant without the app: the account and source.
+        if (Streams.cookie == null) Streams.cookie = com.rymplayer.data.SecureCookie.read(getSharedPreferences("rym", MODE_PRIVATE))
+        Streams.loadSource(this)
+        session = androidx.media3.session.MediaLibraryService.MediaLibrarySession.Builder(this, wrap(players[0]!!), Library(this, libraryScope)).setSessionActivity(open).build()
         QueueBridge.cancelMix = { handler.post { cancelMix() } }
         // RyM Link: the PCs on this Wi-Fi hear what plays here.
         Link.appContext = applicationContext
@@ -157,7 +164,14 @@ class PlaybackService : MediaSessionService() {
         }
         val exo = ExoPlayer.Builder(this, renderers)
             .setLoadControl(load)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, WebDataSource.Factory())).setLoadErrorHandlingPolicy(KeepTrying()))
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(
+                    // rym://song/<id> (Android Auto, the assistant): the song's link is looked up as it loads.
+                    androidx.media3.datasource.ResolvingDataSource.Factory(DefaultDataSource.Factory(this, WebDataSource.Factory())) { spec ->
+                        if (spec.uri.scheme == "rym") spec.withUri(android.net.Uri.parse(Streams.resolve(spec.uri.lastPathSegment.orEmpty()))) else spec
+                    },
+                ).setLoadErrorHandlingPolicy(KeepTrying()),
+            )
             // Only the session's player holds the audio focus (the other would take it away).
             .setAudioAttributes(attributes, i == 0)
             .setHandleAudioBecomingNoisy(true)
@@ -206,8 +220,8 @@ class PlaybackService : MediaSessionService() {
         return object : ForwardingPlayer(exo) {
             override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon().addAll(*skips.toIntArray()).build()
             override fun isCommandAvailable(command: Int) = command in skips || super.isCommandAvailable(command)
-            override fun seekToNext() { QueueBridge.next?.invoke() }
-            override fun seekToNextMediaItem() { QueueBridge.next?.invoke() }
+            override fun seekToNext() { QueueBridge.next?.invoke() ?: super.seekToNext() }
+            override fun seekToNextMediaItem() { QueueBridge.next?.invoke() ?: super.seekToNextMediaItem() }
             override fun seekToPrevious() { QueueBridge.prev?.invoke() ?: super.seekToPrevious() }
             override fun seekToPreviousMediaItem() { QueueBridge.prev?.invoke() ?: super.seekToPrevious() }
             override fun play() {
@@ -226,7 +240,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): androidx.media3.session.MediaLibraryService.MediaLibrarySession? = session
 
     private fun applySound() {
         val s = Sound.load(this)
@@ -470,6 +484,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        libraryScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         (getSystemService(AUDIO_SERVICE) as? android.media.AudioManager)?.unregisterAudioDeviceCallback(plugged)
         handler.removeCallbacksAndMessages(null)
         QueueBridge.cancelMix = null

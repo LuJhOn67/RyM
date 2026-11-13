@@ -1115,6 +1115,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- playback
 
+    /** "Ok Google, play X on RyM": the first song found for the words plays, with its list after
+     *  it; no words: the music goes on. */
+    fun playFromSearch(q: String) {
+        if (q.isBlank()) {
+            if (player.current != null) player.toggle() else Recent.tracks(getApplication()).takeIf { it.isNotEmpty() }?.let { playFrom(it, 0) }
+            return
+        }
+        viewModelScope.launch {
+            val found = runCatching { api.builtinSearch(q) }.getOrNull().orEmpty().ifEmpty { runCatching { api.search(q) }.getOrNull().orEmpty() }
+                .filter { it.link == null }
+            if (found.isEmpty()) status = "${tr("Nothing found for")} \"$q\"" else playFrom(found, 0)
+        }
+    }
+
     /** Plays row `index` of a list; the queue becomes the list's songs. */
     fun playFrom(list: List<Track>, index: Int) {
         val songs = list.filter { it.link == null }

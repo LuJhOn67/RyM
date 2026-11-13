@@ -147,6 +147,9 @@ object Streams {
     /** One lookup per song at a time: a play waits for a running prefetch of it instead of starting another. */
     private val pending = ConcurrentHashMap<String, Any>()
 
+    /** A song's link to play (blocking; the player's loading thread calls it for rym:// items). */
+    fun resolve(videoId: String): String = cachedLink(videoId).url
+
     private fun cachedLink(videoId: String): Link {
         fun fresh() = links[videoId]?.takeIf { it.until > System.currentTimeMillis() }
         fresh()?.let { return it }

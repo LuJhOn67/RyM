@@ -14,6 +14,7 @@ android {
         targetSdk = 35
         versionCode = 105
         versionName = "7.4.5"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // yt-dlp brings Python for each processor type: one APK per type keeps each small.
     // arm64-v8a is nearly every phone from the last years; x86_64 is the emulator.
@@ -82,6 +83,9 @@ dependencies {
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     testImplementation("junit:junit:4.13.2")
+    // On the emulator: Android Auto's library and the assistant's search (src/androidTest).
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
     // The real org.json for unit tests (the Android one is only a stub off the phone).
     testImplementation("org.json:json:20240303")
 }

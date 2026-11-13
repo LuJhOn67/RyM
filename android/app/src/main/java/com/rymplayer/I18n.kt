@@ -250,6 +250,7 @@ object I18n {
         "More like this" to "راح يطلع أكثر",
         "Won't be suggested" to "ما راح تنقترح",
         "Undo" to "تراجع",
+        "Nothing found for" to "ما لگيت شي لـ",
         "Long talks" to "المحاضرات الطويلة",
         "Long talks' speed" to "سرعة المحاضرات الطويلة",
         "Talks over 20 minutes go on from where they stopped, at this speed; songs keep theirs" to "المحاضرات الأطول من 20 دقيقة تكمّل من وين وقفت، بهالسرعة، والأغاني تبقى على سرعتها",

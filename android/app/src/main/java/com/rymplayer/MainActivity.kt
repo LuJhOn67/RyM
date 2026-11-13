@@ -128,6 +128,8 @@ class MainActivity : ComponentActivity() {
             intent.getBooleanExtra(OPEN_PLAYER, false) -> vm.playerOpen = vm.player.current != null
             intent.action == android.content.Intent.ACTION_VIEW -> intent.dataString?.let(vm::openLink)
             intent.action == android.content.Intent.ACTION_SEND -> intent.getStringExtra(android.content.Intent.EXTRA_TEXT)?.let(vm::openShared)
+            // "Ok Google, play X on RyM".
+            intent.action == android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH -> vm.playFromSearch(intent.getStringExtra(android.app.SearchManager.QUERY).orEmpty())
         }
     }
 
