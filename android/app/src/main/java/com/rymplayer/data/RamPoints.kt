@@ -108,6 +108,21 @@ object RamPoints {
      * its first 30 seconds, SKIP; left before 30%, up to EARLY_LEAVE (the earlier the more); from
      * 30% to 80%, from 0 up to FINISH; 80% or more, FINISH.
      */
+    /** Up next from familiar songs (0) to new ones (4), 2 balanced (the setting, set by the app). */
+    @Volatile var discovery = 2
+
+    val DISCOVERY_NAMES = listOf("Familiar", "Mostly familiar", "Balanced", "Mostly new", "New")
+
+    /** Points for familiar or new: a song never heard gains toward "new", a liked one toward "familiar". */
+    fun discoveryPoints(heardBefore: Boolean, likedPoints: Float): Int {
+        val lean = discovery - 2
+        return when {
+            !heardBefore -> lean * 8
+            likedPoints > 5f -> -lean * 6
+            else -> 0
+        }
+    }
+
     /** A quick skip (in the first 30 seconds, before the song's half). */
     fun isSkip(listened: Float, length: Float) = heardPoints(listened, length) == SKIP
 
@@ -595,6 +610,8 @@ object RamPoints {
             if (artist.isNotEmpty() && artist == seedArtist) points += 35 else if (artist in heard) points += 10
             // Heard together with the seed's artist in earlier sessions.
             points += notes.together(seedArtist, artist).coerceAtMost(6) * 2
+            // Familiar or new (the setting).
+            points += discoveryPoints(t.videoId in notes.tracks, notes.trackPoints(t.videoId, now))
             if (artist in likedArtists) points += 6
             val s = script(t)
             if (s == seedScript) points += 12 else if (s != Script.Other && seedScript != Script.Other) points -= 25

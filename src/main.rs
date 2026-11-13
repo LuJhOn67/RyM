@@ -362,6 +362,7 @@ impl App {
         tokio::spawn(rymplayer::innertube::warm_up());
         stream::use_source(self.config.source);
         rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(self.config.music_engine));
+        rymplayer::ram_points::set_discovery(self.config.discovery);
         rymplayer::ytmusicapi::use_language(self.config.arabic);
         stream::download_best(self.config.download_best);
         stream::download_parallel(self.config.download_connections, self.config.download_piece_mb);

@@ -1052,6 +1052,7 @@ fn build(app: &Application) {
     gtk::Widget::set_default_direction(if config.arabic { gtk::TextDirection::Rtl } else { gtk::TextDirection::Ltr });
     stream::use_source(config.source);
     rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(config.music_engine));
+    rymplayer::ram_points::set_discovery(config.discovery);
     rymplayer::ytmusicapi::use_language(config.arabic);
     stream::prefer_lossless(config.prefer_lossless);
     stream::download_best(config.download_best);
@@ -2274,6 +2275,22 @@ fn sound_settings(ui: &Shared, page: &gtk::Box, config: &Config) {
     page.append(&setting_row(tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), &switch(config.automix, ui, |c, on| c.automix = on)));
     page.append(&setting_row(tr("Skip non-music parts"), tr("SponsorBlock: a music video's intro, talk and outro are skipped"), &switch(config.sponsorblock, ui, |c, on| c.sponsorblock = on)));
     page.append(&setting_row(tr("Romaji"), tr("Japanese lines in Latin letters under them"), &switch(config.romaji, ui, |c, on| c.romaji = on)));
+    {
+        // RaM points: Up next from familiar songs to new ones.
+        let names: Vec<&str> = rymplayer::ram_points::DISCOVERY_NAMES.iter().map(|n| tr(n)).collect();
+        let pick = gtk::DropDown::from_strings(&names);
+        pick.set_selected(config.discovery.min(4) as u32);
+        pick.set_valign(Align::Center);
+        let ui = ui.clone();
+        pick.connect_selected_notify(move |d| {
+            let level = d.selected().min(4) as u8;
+            rymplayer::ram_points::set_discovery(level);
+            let mut s = ui.borrow_mut();
+            s.config.discovery = level;
+            s.config.save();
+        });
+        page.append(&setting_row(tr("Familiar or new"), tr("Up next: songs you like, or songs you haven't heard"), &pick));
+    }
     {
         // The alarm: on or off, and its time (07:30).
         let row = gtk::Box::new(Orientation::Horizontal, 8);

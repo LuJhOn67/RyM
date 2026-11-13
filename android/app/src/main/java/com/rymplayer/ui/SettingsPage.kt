@@ -226,6 +226,7 @@ fun SettingsPage(vm: AppViewModel) {
                 SwitchRow(Icons.Default.Devices, "Seamless Music", tr("Music moves between this phone and RyM on your PC (same Wi-Fi and Google account): to the PC when it's idle, and here when this phone is idle"), vm.crossEars) { vm.toggleCrossEars() }
             }
             Section(tr("Suggestions (RaM points)")) {
+                TapRow(Icons.Default.Tune, tr("Familiar or new"), tr("Up next: songs you like, or songs you haven't heard"), tr(com.rymplayer.data.RamPoints.DISCOVERY_NAMES[vm.discovery]), onPrev = { vm.cycleDiscovery(-1) }) { vm.cycleDiscovery() }
                 TapRow(Icons.Default.Tune, tr("Only this kind"), tr("For you shows only this kind (a Muharram, say) · tap to change"), vm.onlyKind?.let { tr(it.title) } ?: tr("Every kind heard"), onPrev = { vm.cycleOnlyKind(-1) }) { vm.cycleOnlyKind() }
                 androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshRamSummary() }
                 val sum = vm.ramSummary

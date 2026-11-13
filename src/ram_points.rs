@@ -414,6 +414,30 @@ pub fn reasons(songs: &[Track], seed: &Track, liked: impl Fn(&str) -> bool) -> V
         .collect()
 }
 
+/// Up next from familiar songs (0) to new ones (4), 2 balanced (the setting, set by the app).
+static DISCOVERY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// The steps of [`set_discovery`], as the settings show them.
+pub const DISCOVERY_NAMES: [&str; 5] = ["Familiar", "Mostly familiar", "Balanced", "Mostly new", "New"];
+
+/// "Familiar or new" in the settings: 0 favors songs you like, 4 songs never heard.
+pub fn set_discovery(level: u8) {
+    DISCOVERY.store(level.min(4), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Points for familiar or new, by the setting: a song never heard gains toward "new", a song
+/// you like gains toward "familiar".
+fn discovery_points(heard_before: bool, liked_points: f32) -> i32 {
+    let lean = DISCOVERY.load(std::sync::atomic::Ordering::Relaxed) as i32 - 2;
+    if !heard_before {
+        lean * 8
+    } else if liked_points > 5.0 {
+        -lean * 6
+    } else {
+        0
+    }
+}
+
 /// One change to the points file at a time (playing and the settings can come together).
 static FILE: Mutex<()> = Mutex::new(());
 
@@ -904,6 +928,8 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
         }
         // Heard together with the seed's artist in earlier sessions.
         points += notes.together(&seed_artist, &artist).min(6) as i32 * 2;
+        // Familiar or new (the setting).
+        points += discovery_points(notes.tracks.contains_key(&t.video_id), notes.track_points(&t.video_id, lately.now));
         if liked_artists.contains(&artist) {
             points += 6;
         }
@@ -1384,6 +1410,19 @@ mod tests {
         n.left(&t("b", "Ziad Rahbani"), 5.0, 200.0);
         n.played(&t("c", "Other"), false, now + 20);
         assert_eq!(n.together("ziad rahbani", "other"), 0);
+    }
+
+
+    #[test]
+    fn familiar_or_new() {
+        super::set_discovery(4);
+        assert!(super::discovery_points(false, 0.0) > 0, "new songs gain toward new");
+        assert!(super::discovery_points(true, 20.0) < 0);
+        super::set_discovery(0);
+        assert!(super::discovery_points(false, 0.0) < 0);
+        assert!(super::discovery_points(true, 20.0) > 0, "liked songs gain toward familiar");
+        super::set_discovery(2);
+        assert_eq!(super::discovery_points(false, 0.0), 0);
     }
 
 }

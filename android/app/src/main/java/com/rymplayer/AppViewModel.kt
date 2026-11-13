@@ -226,6 +226,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         player.message = tr("Negative points are back to 0")
     }
 
+    /** RaM points: Up next from familiar songs (0) to new ones (4). */
+    var discovery by mutableStateOf(prefs.getInt("discovery", 2).also { com.rymplayer.data.RamPoints.discovery = it })
+        private set
+
+    fun cycleDiscovery(step: Int = 1) {
+        discovery = (discovery + step).coerceIn(0, 4)
+        com.rymplayer.data.RamPoints.discovery = discovery
+        prefs.edit().putInt("discovery", discovery).apply()
+    }
+
     fun cycleOnlyKind(step: Int = 1) {
         val all = listOf<com.rymplayer.data.RamPoints.Kind?>(null) + com.rymplayer.data.RamPoints.Kind.entries
         onlyKind = all[Math.floorMod(all.indexOf(onlyKind) + step, all.size)]

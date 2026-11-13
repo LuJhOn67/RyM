@@ -386,6 +386,7 @@ fn main() {
     rymplayer::fx::set(config.fx());
     stream::use_source(config.source);
     rymplayer::ytmusicapi::use_engine(rymplayer::ytmusicapi::Engine::from_index(config.music_engine));
+    rymplayer::ram_points::set_discovery(config.discovery);
     rymplayer::ytmusicapi::use_language(config.arabic);
     stream::prefer_lossless(config.prefer_lossless);
     stream::download_best(config.download_best);
@@ -1460,6 +1461,7 @@ fn fill_settings(st: &Shared) {
         switch("float", "Floating lyrics", "The sung line in a small window above the others", c.lyrics_overlay),
         head("Suggestions (RaM points)"),
         choice("only-kind", "Only this kind", only),
+        choice("discovery", "Familiar or new", t(rymplayer::ram_points::DISCOVERY_NAMES[c.discovery.min(4) as usize])),
         button("ram-reset-all", "Reset all points", ram_summary(), "Reset all"),
         button("ram-reset-neg", "Reset negative points only", t("Skipped songs come back; your favorites stay"), "Reset"),
         field("ram-reset-date", "Reset on a date", "Like 2026-12-31; empty: no date. On that day all points go back to 0", &c.ram_reset_date),
@@ -1751,6 +1753,12 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let mut s = st.borrow_mut();
             s.config.download_connections = (s.config.download_connections as i32 + step).clamp(1, 16) as u8;
             stream::download_parallel(s.config.download_connections, s.config.download_piece_mb);
+            s.config.save();
+        }
+        "discovery" => {
+            let mut s = st.borrow_mut();
+            s.config.discovery = (s.config.discovery as i32 + step).clamp(0, 4) as u8;
+            rymplayer::ram_points::set_discovery(s.config.discovery);
             s.config.save();
         }
         "only-kind" => {
