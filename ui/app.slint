@@ -179,6 +179,9 @@ export global App {
     // Repeat all: the list starts over when it ends (every time).
     in property <bool> repeat-all;
     in-out property <bool> show-lyrics;
+    // The lyrics stage: the song's lyrics big over its own colors, full screen (F; Esc leaves).
+    in-out property <bool> stage;
+    callback fullscreen(bool);
     in property <[LyricLine]> lyrics;
     in property <string> lyrics-note;
     in property <int> lyric-line: -1;
@@ -1073,15 +1076,19 @@ component FlatVolume inherits Rectangle {
 // The synced lyrics: the sung line bright (the karaoke fills it as it's sung), romaji and
 // English small under Japanese lines.
 component Lyrics inherits Rectangle {
+    // The stage: no box behind them, bigger, white over the cover's colors.
+    in property <bool> bare;
+    in property <float> grow: 1;
+    property <color> ink: bare ? #ffffff : Theme.text;
     border-radius: (6px * Ui.k) * Theme.round;
-    background: Theme.dark ? #00000040 : #ffffff80;
+    background: bare ? transparent : (Theme.dark ? #00000040 : #ffffff80);
     clip: true;
-    property <length> pills-h: App.sources.length > 1 ? 44px * Ui.k : 0;
+    property <length> pills-h: App.sources.length > 1 && !bare ? 44px * Ui.k : 0;
     property <length> glide-to;
     animate glide-to { duration: 520ms; easing: cubic-bezier(0.22, 1, 0.36, 1); }
     changed glide-to => { flick.content-y = self.glide-to; }
     // The sources: one pill each, the shown one in the accent color.
-    if App.sources.length > 1: Flickable {
+    if App.sources.length > 1 && !root.bare: Flickable {
         y: 8px * Ui.k;
         height: 30px * Ui.k;
         content-width: pills.preferred-width;
@@ -1111,7 +1118,10 @@ component Lyrics inherits Rectangle {
         content-height: col.preferred-height;
         col := VerticalLayout {
             padding: 20px * Ui.k;
-            spacing: 10px * Ui.k;
+            // The stage: the lines start a third of the way down, and the last can come up there.
+            padding-top: root.bare ? root.height * 0.32 : 20px * Ui.k;
+            padding-bottom: root.bare ? root.height * 0.5 : 20px * Ui.k;
+            spacing: (root.bare ? 18px : 10px) * Ui.k;
             if App.lyrics-note != "": Text {
                 text: App.lyrics-note;
                 font-size: 18px * Ui.k;
@@ -1135,18 +1145,18 @@ component Lyrics inherits Rectangle {
                     line := Text {
                         width: parent.width;
                         text: l.text;
-                        font-size: App.lyrics-size * (l.state == 1 ? 1.14 : 1.0) * 1px * Ui.k;
+                        font-size: App.lyrics-size * root.grow * (l.state == 1 ? 1.14 : 1.0) * 1px * Ui.k;
                         animate font-size { duration: 320ms; easing: ease-out; }
                         font-weight: 700;
                         wrap: word-wrap;
                         horizontal-alignment: l.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                         // To come: see-through; sung now: white; sung: a little white left.
-                        color: lbox.by-word ? transparent : Theme.text.with-alpha(l.state == 1 ? 1 : (l.state == 2 ? 0.55 : 0.3));
+                        color: lbox.by-word ? transparent : root.ink.with-alpha(l.state == 1 ? 1 : (l.state == 2 ? 0.55 : 0.3));
                         animate color { duration: 350ms; easing: ease-out; }
                     }
                     if lbox.by-word: StyledText {
                         width: parent.width;
-                        text: @markdown("<font color='\{Theme.text}'>\{l.sung}</font><font color='\{Theme.text.with-alpha(0.32)}'>\{l.left}</font>");
+                        text: @markdown("<font color='\{root.ink}'>\{l.sung}</font><font color='\{root.ink.with-alpha(0.32)}'>\{l.left}</font>");
                         default-font-size: line.font-size;
                         horizontal-alignment: line.horizontal-alignment;
                     }
@@ -1157,22 +1167,110 @@ component Lyrics inherits Rectangle {
                 }
                 if l.ro != "": Text {
                     text: l.ro;
-                    font-size: App.lyrics-size * 0.55px * Ui.k;
+                    font-size: App.lyrics-size * root.grow * 0.55px * Ui.k;
                     wrap: word-wrap;
                     horizontal-alignment: Ui.start;
-                    color: Theme.text.with-alpha(l.state == 1 ? 0.9 : (l.state == 2 ? 0.45 : 0.25));
+                    color: root.ink.with-alpha(l.state == 1 ? 0.9 : (l.state == 2 ? 0.45 : 0.25));
                     animate color { duration: 350ms; easing: ease-out; }
                 }
                 if l.tr != "": Text {
                     text: l.tr;
-                    font-size: App.lyrics-size * 0.55px * Ui.k;
+                    font-size: App.lyrics-size * root.grow * 0.55px * Ui.k;
                     wrap: word-wrap;
                     horizontal-alignment: Ui.start;
-                    color: Theme.text.with-alpha(l.state == 1 ? 0.9 : (l.state == 2 ? 0.45 : 0.25));
+                    color: root.ink.with-alpha(l.state == 1 ? 0.9 : (l.state == 2 ? 0.45 : 0.25));
                     animate color { duration: 350ms; easing: ease-out; }
                 }
             }
         }
+    }
+}
+
+// The lyrics stage: the playing song's lyrics big over its own colors (its blurred cover), with
+// the cover, the song, the progress and the controls beside them. F or the button opens it,
+// full screen; Esc or the button closes it.
+component Stage inherits Rectangle {
+    background: Theme.cover-color.darker(0.7);
+    Image {
+        width: 100%;
+        height: 100%;
+        source: App.backdrop;
+        image-fit: cover;
+        opacity: 0.95;
+    }
+    // Darker toward the edges, so white reads on any cover.
+    Rectangle { background: @linear-gradient(90deg, #00000070 0%, #00000030 50%, #00000060 100%); }
+    TouchArea { }
+    property <length> gap: 56px * Ui.k;
+    property <length> side: min(root.width * 0.34, root.height * 0.55);
+    left := VerticalLayout {
+        x: Ui.rtl ? root.width - self.width - root.gap : root.gap;
+        y: (root.height - self.preferred-height) / 2;
+        width: root.side;
+        height: self.preferred-height;
+        alignment: start;
+        spacing: 12px * Ui.k;
+        Rectangle {
+            height: root.side;
+            drop-shadow-blur: 40px * Ui.k;
+            drop-shadow-color: #00000080;
+            border-radius: 14px * Ui.k;
+            Cover { width: 100%; height: 100%; source: App.cover; radius: 14px * Ui.k; }
+        }
+        Rectangle { height: 6px * Ui.k; }
+        Text { text: App.title; font-size: 24px * Ui.k; font-weight: 700; color: #ffffff; overflow: elide; horizontal-alignment: Ui.start; }
+        Text { text: App.artist; font-size: 17px * Ui.k; color: #ffffffb0; overflow: elide; horizontal-alignment: Ui.start; }
+        // The progress: click or drag to seek.
+        bar := Rectangle {
+            height: 14px * Ui.k;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                height: 4px * Ui.k;
+                border-radius: 2px * Ui.k;
+                background: #ffffff40;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * (App.duration > 0 ? App.position / App.duration : 0);
+                    border-radius: 2px * Ui.k;
+                    background: #ffffffe0;
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { App.seek(max(0, min(1, self.mouse-x / bar.width)) * App.duration); }
+                moved => { if (self.pressed) { App.seek(max(0, min(1, self.mouse-x / bar.width)) * App.duration); } }
+            }
+        }
+        HorizontalLayout {
+            Text { text: App.pos-text; font-size: 13px * Ui.k; color: #ffffffa0; }
+            Rectangle { }
+            Text { text: App.len-text; font-size: 13px * Ui.k; color: #ffffffa0; }
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 26px * Ui.k;
+            Icon { size: 44px * Ui.k; tint: #ffffff; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } }
+            Icon { size: 54px * Ui.k; tint: #ffffff; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold-duotone.svg"); clicked => { App.toggle-play(); } }
+            Icon { size: 44px * Ui.k; tint: #ffffff; source: @image-url("icons/next.svg"); clicked => { App.next(); } }
+        }
+    }
+    Lyrics {
+        bare: true;
+        grow: 1.45;
+        x: Ui.rtl ? root.gap : root.side + 2 * root.gap;
+        y: 0;
+        width: root.width - root.side - 3 * root.gap;
+        height: root.height;
+    }
+    // Leaving the stage.
+    Icon {
+        x: Ui.rtl ? 18px * Ui.k : root.width - self.width - 18px * Ui.k;
+        y: 18px * Ui.k;
+        size: 40px * Ui.k;
+        tint: #ffffffc0;
+        tip: App.tr("Leave full screen (Esc)");
+        source: @image-url("icons/full-screen-linear.svg");
+        clicked => { App.stage = false; }
     }
 }
 
@@ -1294,6 +1392,7 @@ component Account inherits Rectangle {
 component SideButtons inherits VerticalLayout {
     spacing: 10px * Ui.k;
     Icon { size: 40px * Ui.k; source: @image-url("icons/text-square-bold.svg"); tint: App.show-lyrics ? Theme.accent : Theme.icon; tip: App.tr("Lyrics"); clicked => { App.show-lyrics = !App.show-lyrics; } }
+    Icon { size: 40px * Ui.k; source: @image-url("icons/full-screen-linear.svg"); tip: App.tr("Lyrics full screen (F)"); clicked => { App.stage = true; } }
     Icon { size: 40px * Ui.k; source: @image-url("icons/square-top-down-linear.svg"); tip: App.tr("Floating lyrics"); clicked => { App.float-lyrics(); } }
     Icon { size: 40px * Ui.k; source: @image-url("icons/minimize-square-3-linear.svg"); tip: App.tr("Mini player"); clicked => { App.mini(); } }
     Icon { size: 40px * Ui.k; source: @image-url("icons/share-linear.svg"); tip: App.tr("Share as a picture"); clicked => { App.share(); } }
@@ -2199,6 +2298,7 @@ component WatchPage inherits Rectangle {
                 for b in [
                     { id: 0, icon: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"), label: App.tr("Like") },
                     { id: 1, icon: @image-url("icons/text-square-bold.svg"), label: App.tr("Lyrics") },
+                    { id: 6, icon: @image-url("icons/full-screen-linear.svg"), label: App.tr("Full screen") },
                     { id: 2, icon: @image-url("icons/square-top-down-linear.svg"), label: App.tr("Floating lyrics") },
                     { id: 3, icon: @image-url("icons/minimize-square-3-linear.svg"), label: App.tr("Mini player") },
                     { id: 4, icon: @image-url("icons/share-linear.svg"), label: App.tr("Share") },
@@ -2223,6 +2323,7 @@ component WatchPage inherits Rectangle {
                             if (b.id == 3) { App.mini(); }
                             if (b.id == 4) { App.share(); }
                             if (b.id == 5) { App.copy-link(); }
+                            if (b.id == 6) { App.stage = true; }
                         }
                     }
                 }
@@ -2362,8 +2463,19 @@ export component AppWindow inherits Window {
     changed scale => { Ui.k = self.scale; }
     init => { Ui.k = self.scale; }
     forward-focus: keys;
+    property <bool> staged: App.stage;
+    changed staged => { App.fullscreen(self.staged); }
     keys := FocusScope {
         key-pressed(e) => {
+            // The lyrics stage: F opens and closes it, Esc closes it.
+            if (e.text == Key.Escape && App.stage) {
+                App.stage = false;
+                return accept;
+            }
+            if ((e.text == "f" || e.text == "F") && App.page != 1 && !e.modifiers.control) {
+                App.stage = !App.stage;
+                return accept;
+            }
             if (e.text == " " && App.page != 1) {
                 App.toggle-play();
                 return accept;
@@ -2431,6 +2543,7 @@ export component AppWindow inherits Window {
         }
     }
     if Theme.wide: WideLayout { width: 100%; height: 100%; }
+    if App.stage && App.has-song: Stage { width: 100%; height: 100%; }
     // The X: close, or keep playing in the background (by the clock), and maybe remember it.
     if App.close-ask: Rectangle {
         background: #00000090;

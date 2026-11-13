@@ -742,6 +742,15 @@ fn wire(ui: &AppWindow, st: &Shared) {
         let st = st.clone();
         app.on_set_speed(move |id| set_speed(&st, &id));
     }
+    // The lyrics stage fills the screen (and gives it back when it closes).
+    {
+        let st = st.clone();
+        app.on_fullscreen(move |on| {
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                ui.window().set_fullscreen(on);
+            }
+        });
+    }
     app.on_next_theme(w(|st| {
         let next = (theme_slot(st.borrow().config.gui_theme) + 1) % THEMES.len();
         set_theme(st, next);
@@ -5069,6 +5078,8 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     app.set_home(ModelRc::from(Rc::new(VecModel::from(vec![Shelf { title: "For you".into(), cards: ModelRc::from(shelf_cards.clone()) }, Shelf { title: "حسيني لك".into(), cards: ModelRc::from(shelf_cards) }]))));
     app.set_show_lyrics(page == 9);
     app.set_close_ask(page == 7);
+    // Page 8: the lyrics stage.
+    app.set_stage(page == 8);
     app.set_line_progress(0.5);
     app.set_sources(ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from("LRCLIB"), SharedString::from("NetEase"), SharedString::from("YouTube Music")]))));
     app.set_source_at(1);
