@@ -3929,7 +3929,7 @@ fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
         .map(|(i, text)| LyricLine { rtl: rymplayer::i18n::is_rtl(&text), text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 }, ..Default::default() })
         .collect();
     let note = if l.synced.is_empty() { format!("{} · {} {}", tr("These lyrics aren't synced to the song"), tr("Lyrics from"), l.source) } else { format!("{} {}", tr("Lyrics from"), l.source) };
-    let wants = translate && l.translation.is_empty() && rymplayer::lyrics::is_japanese(&l);
+    let wants = translate && l.translation.is_empty() && rymplayer::lyrics::wants_translation(&l);
     {
         let mut s = st.borrow_mut();
         s.m.lyrics.set_vec(rows);

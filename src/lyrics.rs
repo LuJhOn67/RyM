@@ -335,9 +335,35 @@ pub fn by_time(lines: &[(f32, String)], tr: &[(f32, String)]) -> Vec<String> {
 
 /// English under Japanese lyrics: NetEase's own English translation when it lines up with these
 /// lines, else a machine translation of every line at once (Google Translate). Empty: none.
+/// Mostly Arabic letters (an Arabic song: nothing to translate for an Arabic reader).
+pub fn is_arabic(l: &Lyrics) -> bool {
+    let (mut arabic, mut other) = (0usize, 0usize);
+    for c in shown_lines(l).iter().flat_map(|s| s.chars()).filter(|c| c.is_alphabetic()) {
+        if ('\u{0600}'..='\u{06ff}').contains(&c) {
+            arabic += 1;
+        } else {
+            other += 1;
+        }
+    }
+    arabic > other
+}
+
+/// These lyrics get a translation under each line: with the app in Arabic, any song not in
+/// Arabic (to Arabic); in English, a Japanese song (to English).
+pub fn wants_translation(l: &Lyrics) -> bool {
+    if shown_lines(l).is_empty() {
+        return false;
+    }
+    if crate::i18n::is_arabic() { !is_arabic(l) } else { is_japanese(l) }
+}
+
 pub async fn translate(t: &Track, l: &Lyrics) -> Vec<String> {
-    if !l.translation.is_empty() || !is_japanese(l) {
+    if !l.translation.is_empty() || !wants_translation(l) {
         return l.translation.clone();
+    }
+    // In Arabic: a machine translation to Arabic from whatever language the song is in.
+    if crate::i18n::is_arabic() {
+        return machine_translation_to(&shown_lines(l), "auto", "ar").await.unwrap_or_default();
     }
     if !l.synced.is_empty()
         && let Ok(Some(n)) = crate::lyric_sources::netease(t.clone()).await
@@ -355,12 +381,17 @@ pub async fn translate(t: &Track, l: &Lyrics) -> Vec<String> {
 /// Every line translated from Japanese to English in one request (Google Translate's free
 /// endpoint); lines stay lines. None when it fails or the lines don't come back one for one.
 pub async fn machine_translation(lines: &[String]) -> Option<Vec<String>> {
+    machine_translation_to(lines, "ja", "en").await
+}
+
+/// Every line translated at once from `from` ("auto": found out) to `to`, a line for a line.
+pub async fn machine_translation_to(lines: &[String], from: &str, to: &str) -> Option<Vec<String>> {
     let text = lines.iter().map(|l| if l.trim().is_empty() || l.trim() == "♪" { "-".to_string() } else { l.replace('\n', " ") }).collect::<Vec<_>>().join("\n");
     let resp: serde_json::Value = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .ok()?
-        .post("https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t")
+        .post(format!("https://translate.googleapis.com/translate_a/single?client=gtx&sl={from}&tl={to}&dt=t"))
         .header("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
         .body({
             let mut u = reqwest::Url::parse("http://x/").ok()?;
@@ -738,5 +769,31 @@ mod translation_tests {
         println!("{out:?}");
         assert_eq!(out.len(), 3);
         assert!(out[1].is_empty() && !out[0].is_empty() && !out[2].is_empty());
+    }
+
+    #[test]
+    fn which_lyrics_get_translated() {
+        let lyrics = |lines: &[&str]| Lyrics { synced: Vec::new(), plain: lines.iter().map(|s| s.to_string()).collect(), source: String::new(), translation: Vec::new(), words: Vec::new() };
+        let arabic = lyrics(&["يا ليل يا عين", "سهرت الليل"]);
+        let english = lyrics(&["I walk alone", "through the night"]);
+        assert!(super::is_arabic(&arabic) && !super::is_arabic(&english));
+        crate::i18n::set_arabic(true);
+        assert!(super::wants_translation(&english), "in Arabic: an English song is translated");
+        assert!(!super::wants_translation(&arabic), "an Arabic song isn't");
+        crate::i18n::set_arabic(false);
+        assert!(!super::wants_translation(&english), "in English: only Japanese");
+    }
+
+}
+
+#[cfg(test)]
+mod arabic_live_tests {
+    /// Live: an English line to Arabic (`cargo test --lib arabic_live -- --ignored --nocapture`).
+    #[tokio::test]
+    #[ignore]
+    async fn arabic_live() {
+        let out = super::machine_translation_to(&["I walk alone through the night".to_string(), "♪".to_string()], "auto", "ar").await;
+        println!("{out:?}");
+        assert!(out.is_some_and(|o| o.len() == 2 && o[0].chars().any(|c| ('\u{0600}'..='\u{06ff}').contains(&c)) && o[1].is_empty()));
     }
 }

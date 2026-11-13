@@ -5114,7 +5114,7 @@ fn show_lyrics(ui: &Shared, lyrics: Option<Lyrics>) {
     src.set_margin_top(18);
     s.w.lyrics_box.append(&src);
     // Japanese without English yet: it's looked for, and added when it comes.
-    let wants = translate && lyrics.translation.is_empty() && rymplayer::lyrics::is_japanese(&lyrics);
+    let wants = translate && lyrics.translation.is_empty() && rymplayer::lyrics::wants_translation(&lyrics);
     let source = lyrics.source.clone();
     s.lyrics = Some(lyrics.clone());
     if let Some(lines) = ask_romaji {

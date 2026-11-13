@@ -684,7 +684,7 @@ impl App {
                         }
                         if self.config.lyrics_translation
                             && l.translation.is_empty()
-                            && lyrics::is_japanese(&l)
+                            && lyrics::wants_translation(&l)
                             && let Some(t) = self.now_playing().cloned()
                         {
                             let (v, l2) = (vid.clone(), l.clone());

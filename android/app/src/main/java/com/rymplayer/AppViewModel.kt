@@ -1434,7 +1434,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val l = lyrics
         val t = player.current
         lyricsTranslation = if (translateLyrics) l?.translation.orEmpty() else emptyList()
-        if (!translateLyrics || l == null || t == null || l.translation.isNotEmpty() || !com.rymplayer.data.Translate.isJapanese(l)) return
+        if (!translateLyrics || l == null || t == null || l.translation.isNotEmpty() || !com.rymplayer.data.Translate.wantsTranslation(l)) return
         translateJob = viewModelScope.launch {
             val tr = com.rymplayer.data.Translate.translate(t, l)
             if (tr.isNotEmpty() && lyrics === l) {

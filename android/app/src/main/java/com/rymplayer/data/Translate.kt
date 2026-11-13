@@ -41,8 +41,25 @@ object Translate {
         return if (out.count { it.isNotEmpty() } * 2 >= out.size) out else emptyList()
     }
 
+    /** Mostly Arabic letters (an Arabic song: nothing to translate for an Arabic reader). */
+    fun isArabic(l: Lyrics): Boolean {
+        var arabic = 0
+        var other = 0
+        for (c in shownLines(l).joinToString("")) if (c.isLetter()) { if (c in '\u0600'..'\u06ff') arabic++ else other++ }
+        return arabic > other
+    }
+
+    /**
+     * These lyrics get a translation under each line: with the app in Arabic, any song not in
+     * Arabic (to Arabic); in English, a Japanese song (to English). The same as the PC's.
+     */
+    fun wantsTranslation(l: Lyrics): Boolean =
+        shownLines(l).isNotEmpty() && if (com.rymplayer.I18n.arabic) !isArabic(l) else isJapanese(l)
+
     suspend fun translate(t: Track, l: Lyrics): List<String> {
-        if (l.translation.isNotEmpty() || !isJapanese(l)) return l.translation
+        if (l.translation.isNotEmpty() || !wantsTranslation(l)) return l.translation
+        // In Arabic: a machine translation to Arabic from whatever language the song is in.
+        if (com.rymplayer.I18n.arabic) return machine(shownLines(l), "auto", "ar").orEmpty()
         if (l.synced.isNotEmpty()) {
             val n = runCatching { LyricSources.netease(t) }.getOrNull()
             if (n != null && n.translation.isNotEmpty()) {
@@ -54,11 +71,11 @@ object Translate {
     }
 
     /** Every line from Japanese to English in one request (Google Translate's free endpoint); null unless one for one. */
-    suspend fun machine(lines: List<String>): List<String>? = withContext(Dispatchers.IO) {
+    suspend fun machine(lines: List<String>, from: String = "ja", to: String = "en"): List<String>? = withContext(Dispatchers.IO) {
         fun empty(s: String) = s.isBlank() || s.trim() == "♪"
         val text = lines.joinToString("\n") { if (empty(it)) "-" else it.replace('\n', ' ') }
         val req = Request.Builder()
-            .url("https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t")
+            .url("https://translate.googleapis.com/translate_a/single?client=gtx&sl=$from&tl=$to&dt=t")
             .post(FormBody.Builder().add("q", text).build())
             .build()
         runCatching {
