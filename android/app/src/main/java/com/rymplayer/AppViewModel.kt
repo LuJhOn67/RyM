@@ -486,6 +486,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val themeName: String get() = if (noirTheme) "RyM Noir" else if (ytmTheme) "RyM YTM" else tr("Classic")
 
+    /** The signed-in Google account (name, @handle, picture), once looked up. */
+    var account by mutableStateOf<com.rymplayer.data.MusicApi.Account?>(null)
+
     /** The sung line of the playing song's synced lyrics. */
     var lyricLine by mutableStateOf<Int?>(null)
         private set
@@ -1101,13 +1104,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         checkScheduledReset()
         // Seamless Music: opening RyM here takes the PC's music (if it's playing there).
         player.takeFromPc()
-        // RyM Link: the account's key, so a PC signed in to it can take the music over.
-        if (com.rymplayer.playback.Link.account == null && api.signedIn) {
+        // The account (name, @handle, picture) for Settings and the home page, and RyM Link's key
+        // from it, so a PC signed in to it can take the music over.
+        if ((account == null || com.rymplayer.playback.Link.account == null) && api.signedIn) {
             viewModelScope.launch {
-                runCatching { api.account() }
+                runCatching { api.accountInfo() }
                     .onFailure { android.util.Log.w("RyM", "link: no account (${it.message})") }
-                    .getOrNull()?.let { (name, handle) ->
-                        com.rymplayer.playback.Link.account = com.rymplayer.playback.Link.accountKey(name, handle)
+                    .getOrNull()?.let { a ->
+                        account = a
+                        com.rymplayer.playback.Link.account = com.rymplayer.playback.Link.accountKey(a.name, a.handle)
                         android.util.Log.w("RyM", "link: account key ${com.rymplayer.playback.Link.account}")
                     }
             }

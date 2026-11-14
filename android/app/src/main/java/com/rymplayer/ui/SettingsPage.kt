@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Search
@@ -193,8 +194,28 @@ fun SettingsPage(vm: AppViewModel) {
     Column(Modifier.fillMaxSize().background(Page).statusBarsPadding().navigationBarsPadding()) {
         TopBar(tr("Settings")) { vm.settingsOpen = false }
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 32.dp)) {
+            // The signed-in account: picture, name and @handle.
+            vm.account?.let { a ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(a, 56.dp)
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        if (a.handle.isNotBlank()) Text(a.handle, color = Dim, fontSize = 14.sp, maxLines = 1)
+                    }
+                }
+            }
             Section(tr("General")) {
                 TapRow(Icons.Default.Language, tr("Language"), tr("The words in the app"), if (I18n.arabic) "العربية" else "English") { vm.toggleArabic() }
+                // Phones that save battery hard stop music in the background unless the app is let off.
+                val power = ctx.getSystemService(android.os.PowerManager::class.java)
+                val free = power?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+                TapRow(Icons.Default.Bedtime, tr("Keep playing with the screen off"), tr("Lets RyM off battery saving, so the phone doesn't stop the music when it's locked"), tr(if (free) "On" else "Off")) {
+                    val intent = if (!free) Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
+                        // Already let off: the app's own page, for the phone's "background activity" switch.
+                        else Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))
+                    runCatching { ctx.startActivity(intent) }
+                }
             }
             Section(tr("Playback and quality")) {
                 TapRow(
@@ -225,6 +246,16 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section(tr("Devices")) {
                 SwitchRow(Icons.Default.Devices, "Seamless Music", tr("Music moves between this phone and RyM on your PC (same Wi-Fi and Google account): to the PC when it's idle, and here when this phone is idle"), vm.crossEars) { vm.toggleCrossEars() }
+                // What the link sees, to tell where it breaks: signed in here, and the PC heard last.
+                if (vm.crossEars) {
+                    val heard = vm.player.pc
+                    val status = when {
+                        com.rymplayer.playback.Link.account == null -> tr("Not sending: sign in here with the same Google account as the PC")
+                        heard == null -> tr("Sending · no PC heard yet (same Wi-Fi? no VPN on either? RyM open on the PC?)")
+                        else -> "${tr("Heard")}: ${heard.device.ifEmpty { "PC" }} (${heard.ip}) · ${(System.currentTimeMillis() - heard.at) / 1000} ${tr("s ago")}"
+                    }
+                    Text(status, color = Dim, fontSize = 13.sp, modifier = Modifier.padding(start = 64.dp, end = 20.dp, bottom = 8.dp))
+                }
             }
             Section(tr("Suggestions (RaM points)")) {
                 TapRow(Icons.Default.Tune, tr("Familiar or new"), tr("Up next: songs you like, or songs you haven't heard"), tr(com.rymplayer.data.RamPoints.DISCOVERY_NAMES[vm.discovery]), onPrev = { vm.cycleDiscovery(-1) }) { vm.cycleDiscovery() }

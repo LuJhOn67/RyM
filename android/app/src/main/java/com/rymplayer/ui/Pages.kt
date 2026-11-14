@@ -152,6 +152,21 @@ private fun HomeTitle(vm: AppViewModel) {
         IconButton(vm::toggleTheme) {
             Icon(Icons.Default.Palette, tr("Switch theme"), tint = if (vm.ytmTheme) MaterialTheme.colorScheme.primary else Dim)
         }
+        // The signed-in account's picture: opens Settings.
+        vm.account?.let { a ->
+            IconButton({ vm.settingsOpen = true }) { Avatar(a, 30.dp) }
+        }
+    }
+}
+
+/** The account's picture in a circle (its first letter while it loads or when there's none). */
+@Composable
+fun Avatar(a: com.rymplayer.data.MusicApi.Account, size: androidx.compose.ui.unit.Dp) {
+    Box(Modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+        Text(a.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.45f).sp)
+        if (a.photo != null) {
+            coil.compose.AsyncImage(a.photo, a.name, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.size(size))
+        }
     }
 }
 

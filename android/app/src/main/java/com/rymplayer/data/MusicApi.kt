@@ -299,12 +299,18 @@ class MusicApi(private val cookie: String?) {
         }
     }
 
-    /** The signed-in account's name and "@handle" (for RyM Link: devices of one account find each other). */
-    suspend fun account(): Pair<String, String>? {
+    /** The signed-in account: its name, "@handle" and picture. */
+    data class Account(val name: String, val handle: String, val photo: String?)
+
+    suspend fun accountInfo(): Account? {
         val h = post("account/account_menu", buildJsonObject {}).findAll("activeAccountHeaderRenderer").firstOrNull() ?: return null
         fun text(e: kotlinx.serialization.json.JsonElement?) = e.runsText().ifEmpty { e.at("simpleText").str.orEmpty() }
-        return text(h.at("accountName")) to text(h.at("channelHandle"))
+        val photo = h.findAll("thumbnails").firstOrNull()?.let { it as? kotlinx.serialization.json.JsonArray }?.lastOrNull()?.at("url").str
+        return Account(text(h.at("accountName")), text(h.at("channelHandle")), photo)
     }
+
+    /** The signed-in account's name and "@handle" (for RyM Link: devices of one account find each other). */
+    suspend fun account(): Pair<String, String>? = accountInfo()?.let { it.name to it.handle }
 
     /** A search suggestion; [forget] (it's from the account's search history) takes it off. */
     data class Suggestion(val text: String, val forget: String?) {
