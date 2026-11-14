@@ -113,6 +113,8 @@ enum Ev {
     /// What yt-dlp, ejs and Node are (the settings' line).
     YtDlpStatus(String),
     TookOver(String, anyhow::Result<rymplayer::link::State>),
+    /// Mix Tastes: the phone's top songs.
+    Blended(anyhow::Result<Vec<Track>>),
     /// "Clear cache" finished: the bytes freed.
     CacheCleared(u64),
     Done,
@@ -167,6 +169,8 @@ struct State {
     user_pick: bool,
     /// Liquid Aurora: the loudest bass lately (the pulse is against it).
     bass_peak: f32,
+    /// The phone of this account heard last (its address, port and the account's key): Mix Tastes.
+    last_phone: Option<(std::net::IpAddr, u16, String)>,
     /// "Reset all points" pressed once (a second press within 5 s resets).
     reset_asked: Option<Instant>,
     /// What the yes/no question is about ("ram-weekly").
@@ -558,6 +562,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         user_pick: false,
         bass_peak: 0.05,
         reset_asked: None,
+        last_phone: None,
         confirm_for: String::new(),
         reset_checked: None,
         clock_timer: slint::Timer::default(),
@@ -1670,6 +1675,7 @@ fn fill_settings(st: &Shared) {
         switch("alarm", "Alarm", "Music starts at this time (RyM has to be open)", c.alarm_on),
         field("alarm-time", "Time", "Like 07:30", &c.alarm_time),
         head("Devices"),
+        button("mix-tastes", "Mix Tastes", t("Your top songs and the phone's (RaM points), mixed into one queue · same Wi-Fi and account"), "Mix"),
         switch("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
         switch("link-auto", "Take over from the phone by itself", "Off: RyM asks first", c.link_auto),
         switch("announce", "Tell the phone what plays here", "Open RyM on your phone and it takes the music from here", c.link_announce),
@@ -2433,6 +2439,16 @@ fn press(st: &Shared, id: &str) {
             }
             toast(st, tr("Shortcuts are back to how they came"));
             fill_settings(st);
+        }
+        "mix-tastes" => {
+            let phone = st.borrow().last_phone.clone();
+            match phone {
+                Some((ip, port, key)) => {
+                    toast(st, tr("Mixing your tastes…"));
+                    post(async move { Ev::Blended(rymplayer::link::fetch_top(ip, port, &key).await) });
+                }
+                None => toast(st, tr("No phone heard yet (same Wi-Fi and account, RyM open on it)")),
+            }
         }
         "ram-reset-all" => {
             let sure = st.borrow().reset_asked.is_some_and(|at| at.elapsed() < Duration::from_secs(5));
@@ -4530,6 +4546,8 @@ fn heard_peer(st: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr
     let mine = st.borrow().account.as_ref().map(|a| rymplayer::link::account_key(&a.name, &a.handle));
     if let Some(key) = mine.filter(|k| note.kind == "phone" && *k == note.account) {
         let port = note.port;
+        // The phone heard last, for Mix Tastes.
+        st.borrow_mut().last_phone = Some((ip, port, key.clone()));
         post(async move {
             let _ = rymplayer::link::sync_points(ip, port, &key).await;
             Ev::Done
@@ -5301,6 +5319,16 @@ fn handle(st: &Shared, ev: Ev) {
             toast(st, &format!("{} {device}", tr("Playing here, moved from")));
         }
         Ev::TookOver(_, Err(e)) => log(&format!("seamless music: {e}")),
+        Ev::Blended(Ok(theirs)) => {
+            let mixed = rymplayer::link::blend(rymplayer::ram_points::top_tracks(25), theirs);
+            if mixed.is_empty() {
+                toast(st, tr("No top songs yet on either device"));
+            } else {
+                toast(st, &format!("{}: {}", tr("Mix Tastes"), mixed.len()));
+                play_list(st, mixed, 0);
+            }
+        }
+        Ev::Blended(Err(e)) => toast(st, &format!("{}: {e}", tr("Mix Tastes"))),
         Ev::CacheCleared(freed) => {
             log(&format!("cache cleared: {} freed", stream::size_text(freed)));
             toast(st, &format!("{}: {}", tr("Cache cleared"), stream::size_text(freed)));

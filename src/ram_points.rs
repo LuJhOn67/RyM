@@ -494,6 +494,16 @@ pub fn rewind(known: &[Track]) -> Rewind {
     r
 }
 
+/// The top songs by RaM points (played on this device), for "Mix Tastes".
+pub fn top_tracks(n: usize) -> Vec<Track> {
+    favorites(&crate::recent::tracks(), n).0.into_iter().map(|(t, _)| t).collect()
+}
+
+/// [`top_tracks`] as JSON (the link's `/top`).
+pub fn top_json(n: usize) -> String {
+    serde_json::to_string(&top_tracks(n)).unwrap_or_else(|_| "[]".into())
+}
+
 /// The Rewind as one line in the app's language ("RyM Rewind · Top artist: … · …").
 pub fn rewind_text(r: &Rewind) -> String {
     use crate::i18n::tr;

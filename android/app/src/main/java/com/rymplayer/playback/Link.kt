@@ -154,6 +154,8 @@ object Link {
                             method == "GET" && target.startsWith("/state") -> (state()?.let { 200 to it.toString() } ?: (404 to "{}"))
                             // RaM points sync: this phone's song points.
                             method == "GET" && target.startsWith("/points") -> appContext?.let { 200 to com.rymplayer.data.RamPoints.exportScores(it) } ?: (404 to "{}")
+                            // Mix Tastes: this phone's top songs by RaM points.
+                            method == "GET" && target.startsWith("/top") -> appContext?.let { 200 to topJson(it) } ?: (404 to "{}")
                             method == "POST" && target.startsWith("/pause") -> {
                                 main.post { pause?.invoke() }
                                 200 to "{}"
@@ -253,6 +255,36 @@ object Link {
             }
             c.inputStream.bufferedReader().use { it.readText() }.also { c.disconnect() }
         }.getOrNull()
+    }
+
+    /** This phone's top songs by RaM points (played here), for Mix Tastes. */
+    fun topSongs(ctx: android.content.Context, n: Int = 25): List<Track> =
+        com.rymplayer.data.RamPoints.favorites(ctx, com.rymplayer.data.Recent.tracks(ctx), n).first.map { it.first }
+
+    private fun topJson(ctx: android.content.Context): String = buildJsonArray { topSongs(ctx).forEach { add(trackJson(it)) } }.toString()
+
+    /** Mix Tastes: the PC's top songs by RaM points (its `/top`). Blocking. */
+    fun top(ip: String, port: Int): List<Track>? {
+        val text = call(ip, port, "GET", "/top") ?: return null
+        return runCatching { Json.parseToJsonElement(text).jsonArray }.getOrNull()?.mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = o["video_id"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            fun str(k: String) = o[k]?.jsonPrimitive?.takeIf { it.isString }?.content.orEmpty()
+            Track(id, str("title"), str("artist"), str("album"), str("duration"), str("thumb").ifEmpty { null })
+        }
+    }
+
+    /** Mix Tastes: two devices' top songs in turn (one of mine, one of theirs), each song once (another upload counts as the same). */
+    fun blend(mine: List<Track>, theirs: List<Track>): List<Track> {
+        val seen = HashSet<String>()
+        val out = ArrayList<Track>()
+        for (i in 0 until maxOf(mine.size, theirs.size)) {
+            for (t in listOfNotNull(mine.getOrNull(i), theirs.getOrNull(i))) {
+                val fresh = seen.add(t.videoId)
+                if (seen.add(com.rymplayer.data.Radio.sameSongKey(t)) && fresh) out += t
+            }
+        }
+        return out
     }
 
     /** The remote: play, pause, toggle, next, prev, seek (seconds) or volume (0 to 1). Blocking. */

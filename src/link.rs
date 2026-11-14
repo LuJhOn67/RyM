@@ -262,6 +262,8 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
                     (true, "GET") if target.starts_with("/state") => p.state().map_or((404, "{}".to_string()), |s| (200, s)),
                     // RaM points sync: this computer's song points.
                     (true, "GET") if target.starts_with("/points") => (200, crate::ram_points::export_scores()),
+                    // Mix Tastes: this computer's top songs by RaM points.
+                    (true, "GET") if target.starts_with("/top") => (200, crate::ram_points::top_json(25)),
                     (true, "POST") if target.starts_with("/pause") => {
                         pause();
                         (200, "{}".to_string())
@@ -386,6 +388,33 @@ pub fn register_rym_links() {
 /// Elsewhere the `.desktop` file says it (`MimeType=x-scheme-handler/rym;`).
 #[cfg(not(windows))]
 pub fn register_rym_links() {}
+
+
+/// Mix Tastes: the other device's top songs by RaM points (its `/top`).
+pub async fn fetch_top(ip: std::net::IpAddr, port: u16, account: &str) -> anyhow::Result<Vec<crate::api::Track>> {
+    let text = http().get(format!("http://{ip}:{port}/top")).query(&[("account", account)]).send().await?.error_for_status()?.text().await?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+/// Mix Tastes: two devices' top songs taken in turn (one of mine, one of theirs), each song once
+/// (another upload of the same song counts as the same).
+pub fn blend(mine: Vec<crate::api::Track>, theirs: Vec<crate::api::Track>) -> Vec<crate::api::Track> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let (mut a, mut b) = (mine.into_iter(), theirs.into_iter());
+    loop {
+        let (x, y) = (a.next(), b.next());
+        if x.is_none() && y.is_none() {
+            break;
+        }
+        for t in [x, y].into_iter().flatten() {
+            if seen.insert(t.video_id.clone()) & seen.insert(crate::radio::same_song_key(&t)) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
 
 #[cfg(test)]
 mod pc_tests {
@@ -520,5 +549,13 @@ mod network_tests {
         let cookie = crate::secret::read_cookie_io().expect("signed in");
         let a = crate::api::Api::with_cookie(cookie).await.unwrap().account().await.unwrap();
         println!("key {}", account_key(&a.name, &a.handle));
+    }
+
+    #[test]
+    fn blend_takes_turns_and_skips_repeats() {
+        let t = |id: &str, title: &str| crate::api::Track { video_id: id.into(), title: title.into(), artist: "A".into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None };
+        let mixed = super::blend(vec![t("a1", "One"), t("a2", "Two"), t("a3", "Three")], vec![t("b1", "Four"), t("a2", "Two"), t("b9", "One")]);
+        let ids: Vec<&str> = mixed.iter().map(|t| t.video_id.as_str()).collect();
+        assert_eq!(ids, ["a1", "b1", "a2", "a3"], "in turns; the same id and another upload of One are left out");
     }
 }

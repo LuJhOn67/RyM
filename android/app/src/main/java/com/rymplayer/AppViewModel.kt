@@ -560,6 +560,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         com.rymplayer.playback.QueueBridge.duckChanged?.invoke()
     }
 
+    /** Mix Tastes: this phone's top songs and the nearby PC's (RaM points), in turn, as the queue. */
+    fun mixTastes() {
+        val pc = player.pc ?: run {
+            player.message = tr("No PC heard yet (same Wi-Fi and account, RyM open on it)")
+            return
+        }
+        player.message = tr("Mixing your tastes…")
+        viewModelScope.launch {
+            val mixed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val theirs = com.rymplayer.playback.Link.top(pc.ip, pc.port)
+                theirs?.let { com.rymplayer.playback.Link.blend(com.rymplayer.playback.Link.topSongs(getApplication()), it) }
+            }
+            when {
+                mixed == null -> player.message = "${tr("Mix Tastes")}: ${tr("the PC didn't answer")}"
+                mixed.isEmpty() -> player.message = tr("No top songs yet on either device")
+                else -> {
+                    player.message = "${tr("Mix Tastes")}: ${mixed.size}"
+                    player.setQueue(mixed, 0)
+                }
+            }
+        }
+    }
+
     /** The signed-in Google account (name, @handle, picture), once looked up. */
     var account by mutableStateOf<com.rymplayer.data.MusicApi.Account?>(null)
 

@@ -147,6 +147,10 @@ private fun HomeTitle(vm: AppViewModel) {
         Title(tr("For you"), Modifier.weight(1f))
         // The computer playing RyM nearby: its remote.
         if (vm.pcNearby() != null) {
+            // Mix Tastes: this phone's top songs and the PC's, in one queue.
+            IconButton({ vm.mixTastes() }) {
+                Icon(androidx.compose.material.icons.Icons.Default.Shuffle, contentDescription = tr("Mix Tastes"), tint = MaterialTheme.colorScheme.primary)
+            }
             IconButton({ vm.remoteOpen = true }) {
                 Icon(androidx.compose.material.icons.Icons.Default.Computer, contentDescription = tr("Remote"), tint = MaterialTheme.colorScheme.primary)
             }
