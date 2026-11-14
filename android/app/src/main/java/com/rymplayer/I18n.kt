@@ -95,6 +95,7 @@ object I18n {
         "No lyrics for this song" to "لا توجد كلمات لهذه الأغنية",
         "These lyrics aren't synced to the song" to "هذه الكلمات غير متزامنة مع الأغنية",
         "Lyrics from" to "الكلمات من",
+        "By lyrics" to "بالكلمات",
         "Headphones" to "السماعات",
         "Headphones connected" to "السماعات اتصلت",
         "Go on with your last songs, or a Road Radio mix?" to "تكمل آخر أغانيك، لو راديو الطريق؟",

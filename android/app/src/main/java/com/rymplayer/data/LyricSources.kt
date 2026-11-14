@@ -152,6 +152,15 @@ object LyricSources {
         usable(clean(Lyrics(synced, synced.map { it.second }, KUGOU), t))
     }
 
+    /** Search by lyrics: Genius's lyric search (it looks in the songs' words), as (title, artist). */
+    suspend fun geniusByWords(words: String, n: Int = 8): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val search = "https://genius.com/api/search/lyric".toHttpUrl().newBuilder().addQueryParameter("q", words).addQueryParameter("per_page", n.toString()).build()
+        runCatching { get(search.toString()) }.getOrNull()?.at("response/sections")?.arr.orEmpty().flatMap { it.at("hits").arr }.mapNotNull { h ->
+            val r = h.at("result")
+            r.at("title").str?.let { it to r.at("primary_artist/name").str.orEmpty() }
+        }
+    }
+
     /** Genius's lyrics (plain: Genius has no timing), from the song's page. */
     suspend fun genius(t: Track): Lyrics? = withContext(Dispatchers.IO) {
         val search = "https://genius.com/api/search/song".toHttpUrl().newBuilder().addQueryParameter("q", query(t)).addQueryParameter("per_page", "5").build()

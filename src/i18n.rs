@@ -111,6 +111,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "By lyrics" => "بالكلمات",
         "Mix Tastes" => "خلط الأذواق",
         "Your top songs and the phone's (RaM points), mixed into one queue · same Wi-Fi and account" => "أعلى أغانيك وأغاني الموبايل (نقاط RaM) بقائمة وحدة · نفس الواي فاي والحساب",
         "Mixing your tastes…" => "دا أخلط أذواقكم…",

@@ -329,6 +329,10 @@ fun SearchPage(vm: AppViewModel) {
             keyboardActions = KeyboardActions(onSearch = { vm.search() }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         )
+        // Search by lyrics: a line of the song instead of its name.
+        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.material3.FilterChip(vm.searchLyrics, { vm.searchLyrics = !vm.searchLyrics }, { Text(tr("By lyrics")) })
+        }
         // With the SoundCloud plugin: where the search looks.
         if (vm.hasPlugin(com.rymplayer.data.Plugins.SOUNDCLOUD)) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

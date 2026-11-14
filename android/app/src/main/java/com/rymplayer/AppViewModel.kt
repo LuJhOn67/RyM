@@ -44,7 +44,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device, Lyrics }
 }
 
 /** The focus timer's parts: 25 minutes of work, 5 of break. */
@@ -723,6 +723,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The search box looks on SoundCloud (its plugin installed and picked on the search page). */
     var searchSoundCloud by mutableStateOf(false)
 
+    /** Search by lyrics: the words typed are a line of the song (LRCLIB finds the song, YouTube Music plays it). */
+    var searchLyrics by mutableStateOf(false)
+
+    /** The songs whose words hold [words]: LRCLIB's matches, each found on YouTube Music (at once). */
+    private suspend fun searchByLyrics(words: String): List<Track> = kotlinx.coroutines.coroutineScope {
+        // Genius looks in the words; LRCLIB (names only) when Genius has nothing.
+        (com.rymplayer.data.LyricSources.geniusByWords(words).distinctBy { (t, a) -> (t + "|" + a).lowercase() }.take(8).ifEmpty { com.rymplayer.data.Lrclib.byWords(words) }).map { (title, artist) ->
+            async { runCatching { api.search("$title $artist") }.getOrNull()?.firstOrNull { it.link == null } }
+        }.mapNotNull { it.await() }.distinctBy { it.videoId }
+    }
+
     fun loadStore() = viewModelScope.launch {
         runCatching { com.rymplayer.data.Plugins.store(getApplication()) }.onSuccess { list ->
             store = list
@@ -952,6 +963,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             scLink -> open(Screen.Songs(Screen.Kind.SoundCloudLink, q, "SoundCloud"))
             searchSoundCloud && hasPlugin(plugins.SOUNDCLOUD) -> open(Screen.Songs(Screen.Kind.SoundCloud, q, "SoundCloud: \"$q\""))
+            searchLyrics -> open(Screen.Songs(Screen.Kind.Lyrics, q, "${tr("By lyrics")}: \"$q\""))
             else -> open(Screen.Songs(Screen.Kind.Results, q, "${tr("Results for")} \"$q\""))
         }
     }
@@ -1279,6 +1291,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.SoundCloud -> com.rymplayer.data.SoundCloud.search(getApplication(), page.id)
                     Screen.Kind.SoundCloudLink -> com.rymplayer.data.SoundCloud.openLink(getApplication(), page.id)
                     Screen.Kind.Spotify -> com.rymplayer.data.Spotify.import(api, page.id)
+                    Screen.Kind.Lyrics -> searchByLyrics(page.id)
                 }
             }
             r.onFailure {

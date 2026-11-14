@@ -108,6 +108,26 @@ impl Api {
 
     /// Songs for a search: ytmusicapi, with the built-in engine as the fallback (see
     /// [`crate::ytmusicapi`]).
+    /// Search by lyrics: LRCLIB's songs whose words hold `words`, each found on YouTube Music (at once).
+    pub async fn search_by_lyrics(self, words: String) -> Result<Vec<Track>> {
+        let matches = crate::lyrics::by_words(&words, 8).await?;
+        let mut jobs = tokio::task::JoinSet::new();
+        for (i, (title, artist)) in matches.into_iter().enumerate() {
+            let api = self.clone();
+            jobs.spawn(async move { (i, api.search(format!("{title} {artist}")).await.ok().and_then(|r| r.into_iter().find(|t| t.link.is_none()))) });
+        }
+        let mut found: Vec<(usize, Track)> = Vec::new();
+        while let Some(done) = jobs.join_next().await {
+            if let Ok((i, Some(t))) = done {
+                found.push((i, t));
+            }
+        }
+        // In LRCLIB's order, each song once.
+        found.sort_by_key(|(i, _)| *i);
+        let mut seen = std::collections::HashSet::new();
+        Ok(found.into_iter().map(|(_, t)| t).filter(|t| seen.insert(t.video_id.clone())).collect())
+    }
+
     pub async fn search(self, query: String) -> Result<Vec<Track>> {
         let cookie = self.cookie();
         crate::ytmusicapi::hybrid("search", crate::ytmusicapi::search(query.clone(), "songs", cookie), || self.builtin_search(query)).await

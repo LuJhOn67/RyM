@@ -24,6 +24,21 @@ object Lrclib {
     private val http = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * Search by lyrics: the songs whose words hold [words] (LRCLIB's full-text search), as (title,
+     * artist), each song once, the first [n].
+     */
+    suspend fun byWords(words: String, n: Int = 8): List<Pair<String, String>> {
+        val url = "https://lrclib.net/api/search".toHttpUrl().newBuilder().addQueryParameter("q", words).build()
+        val list = get(url.toString()) as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        return list.mapNotNull { e ->
+            val o = e as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            val title = (o["trackName"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+            val artist = (o["artistName"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+            (title to artist).takeIf { title.isNotBlank() }
+        }.distinctBy { (t, a) -> t.lowercase().trim() + "|" + a.lowercase().trim() }.take(n)
+    }
+
     /** GET with one retry: LRCLIB answers 503 when busy. Null when there's no usable answer. */
     private suspend fun get(url: String): JsonElement? = withContext(Dispatchers.IO) {
         repeat(2) { attempt ->

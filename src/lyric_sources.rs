@@ -232,6 +232,20 @@ pub async fn kugou(t: Track) -> Result<Option<Lyrics>> {
 }
 
 /// Genius's lyrics (plain: Genius has no timing), from the song's page.
+/// Search by lyrics: Genius's lyric search (it looks in the songs' words), as (title, artist).
+pub async fn genius_by_words(words: &str, n: usize) -> Result<Vec<(String, String)>> {
+    let mut url = reqwest::Url::parse("https://genius.com/api/search/lyric")?;
+    url.query_pairs_mut().append_pair("q", words).append_pair("per_page", &n.to_string());
+    let found = json(url, None).await?;
+    Ok(found["response"]["sections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|s| s["hits"].as_array().into_iter().flatten())
+        .filter_map(|h| Some((h["result"]["title"].as_str()?.to_string(), h["result"]["primary_artist"]["name"].as_str().unwrap_or_default().to_string())))
+        .collect())
+}
+
 pub async fn genius(t: Track) -> Result<Option<Lyrics>> {
     let mut url = reqwest::Url::parse("https://genius.com/api/search/song")?;
     url.query_pairs_mut().append_pair("q", &query(&t)).append_pair("per_page", "5");

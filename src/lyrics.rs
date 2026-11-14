@@ -214,6 +214,43 @@ fn keep(video_id: &str, found: &Option<Lyrics>) {
 
 /// LRCLIB: the exact match and three looser searches, all asked at once. Answers are taken in
 /// that order of preference, and the first synced one wins as soon as the better queries are in.
+/// Search by lyrics in the search box: "lyrics: a line of the song" (or "كلمات: ..."); the line.
+pub fn lyrics_query(q: &str) -> Option<&str> {
+    let q = q.trim();
+    ["lyrics:", "Lyrics:", "LYRICS:", "كلمات:"].iter().find_map(|p| q.strip_prefix(p)).map(str::trim).filter(|w| !w.is_empty())
+}
+
+/// Search by lyrics: the songs whose words hold `words`, as (title, artist), each song once, the
+/// first `n`: Genius's lyric search (it looks in the words), else LRCLIB's search (names only).
+pub async fn by_words(words: &str, n: usize) -> Result<Vec<(String, String)>> {
+    if let Ok(found) = crate::lyric_sources::genius_by_words(words, n).await
+        && !found.is_empty()
+    {
+        let mut seen = std::collections::HashSet::new();
+        return Ok(found.into_iter().filter(|(t, a)| seen.insert(format!("{}|{}", t.to_lowercase(), a.to_lowercase()))).take(n).collect());
+    }
+    lrclib_by_words(words, n).await
+}
+
+async fn lrclib_by_words(words: &str, n: usize) -> Result<Vec<(String, String)>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Hit {
+        track_name: Option<String>,
+        artist_name: Option<String>,
+    }
+    let mut url = reqwest::Url::parse("https://lrclib.net/api/search")?;
+    url.query_pairs_mut().append_pair("q", words);
+    let hits = get_json::<Vec<Hit>>(client(), url).await?.unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    Ok(hits
+        .into_iter()
+        .filter_map(|h| Some((h.track_name.filter(|t| !t.trim().is_empty())?, h.artist_name.unwrap_or_default())))
+        .filter(|(t, a)| seen.insert(format!("{}|{}", t.trim().to_lowercase(), a.trim().to_lowercase())))
+        .take(n)
+        .collect())
+}
+
 pub async fn lrclib(title: String, artist: String, album: String, duration: Option<f32>) -> Result<Option<Lyrics>> {
     let client = client();
     let mut url = reqwest::Url::parse("https://lrclib.net/api/get")?;
@@ -795,5 +832,25 @@ mod arabic_live_tests {
         let out = super::machine_translation_to(&["I walk alone through the night".to_string(), "♪".to_string()], "auto", "ar").await;
         println!("{out:?}");
         assert!(out.is_some_and(|o| o.len() == 2 && o[0].chars().any(|c| ('\u{0600}'..='\u{06ff}').contains(&c)) && o[1].is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod by_lyrics_tests {
+    #[test]
+    fn the_lyrics_prefix() {
+        assert_eq!(super::lyrics_query("lyrics: never gonna give you up"), Some("never gonna give you up"));
+        assert_eq!(super::lyrics_query("  كلمات: يا ليل "), Some("يا ليل"));
+        assert_eq!(super::lyrics_query("lyrics:   "), None);
+        assert_eq!(super::lyrics_query("never gonna"), None);
+    }
+
+    /// LRCLIB finds a song from a line of it: `cargo test --lib by_words -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn by_words_live() {
+        let hits = super::by_words("never gonna give you up never gonna let you down", 5).await.unwrap();
+        println!("{hits:?}");
+        assert!(hits.iter().any(|(t, a)| t.to_lowercase().contains("never gonna") && a.to_lowercase().contains("astley")));
     }
 }

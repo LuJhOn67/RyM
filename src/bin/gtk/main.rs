@@ -3063,6 +3063,12 @@ fn search_songs(ui: &Shared, q: String) {
         open_songs(ui, "Spotify".into(), spotify::import(api, q));
         return;
     }
+    // Search by lyrics: "lyrics: a line of the song".
+    if let Some(words) = rymplayer::lyrics::lyrics_query(&q).map(str::to_string) {
+        open_songs(ui, format!("{}: \"{words}\"", tr("By lyrics")), api.search_by_lyrics(words));
+        ui.borrow_mut().from_search = true;
+        return;
+    }
     open_paged(ui, format!("{} \"{q}\"", tr("Results for")), api.search_paged(q));
     ui.borrow_mut().from_search = true;
 }

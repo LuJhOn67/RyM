@@ -1123,6 +1123,11 @@ impl App {
                         (true, _, _, Some(api)) => spotify::import(api, text).await,
                         (_, true, ..) => soundcloud::open_link(text).await,
                         (_, _, true, _) => soundcloud::search(text).await,
+                        // Search by lyrics: "lyrics: a line of the song".
+                        (_, _, _, Some(api)) if rymplayer::lyrics::lyrics_query(&text).is_some() => {
+                            let words = rymplayer::lyrics::lyrics_query(&text).unwrap_or_default().to_string();
+                            api.search_by_lyrics(words).await
+                        }
                         (_, _, _, Some(api)) => api.search_paged(text).await.map(|p| {
                             let _ = tx.send(Event::Goes(Page::Search, p.more));
                             p.tracks

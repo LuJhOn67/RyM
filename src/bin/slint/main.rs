@@ -2783,6 +2783,12 @@ fn search(st: &Shared, q: String) {
         s.m.suggestions.set_vec(Vec::new());
         s.search_id
     };
+    // Search by lyrics: "lyrics: a line of the song".
+    if let Some(words) = rymplayer::lyrics::lyrics_query(&q).map(str::to_string) {
+        let Some(api) = api else { return };
+        open_list(st, format!("{}: \"{words}\"", tr("By lyrics")), api.search_by_lyrics(words));
+        return;
+    }
     // A Spotify or SoundCloud link (their plugins) opens as a list; SoundCloud searches there.
     if spotify::is_link(&q) {
         let Some(api) = api else { return };
