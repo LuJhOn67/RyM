@@ -126,6 +126,9 @@ class MainActivity : ComponentActivity() {
         when {
             intent == null -> {}
             intent.getBooleanExtra(OPEN_PLAYER, false) -> vm.playerOpen = vm.player.current != null
+            // The headphones prompt's buttons.
+            intent.getStringExtra(ACTION) == "resume" -> vm.player.toggle()
+            intent.getStringExtra(ACTION) == "road_radio" -> vm.roadRadio()
             intent.action == android.content.Intent.ACTION_VIEW -> intent.dataString?.let(vm::openLink)
             intent.action == android.content.Intent.ACTION_SEND -> intent.getStringExtra(android.content.Intent.EXTRA_TEXT)?.let(vm::openShared)
             // "Ok Google, play X on RyM".
@@ -135,6 +138,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val OPEN_PLAYER = "open_player"
+        const val ACTION = "rym_action"
     }
 
     /** Opened from the "new update" notification: look again and show the patch notes. */

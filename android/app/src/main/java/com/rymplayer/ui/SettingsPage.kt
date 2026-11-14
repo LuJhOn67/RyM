@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Sync
@@ -210,6 +211,7 @@ fun SettingsPage(vm: AppViewModel) {
                 // Phones that save battery hard stop music in the background unless the app is let off.
                 val power = ctx.getSystemService(android.os.PowerManager::class.java)
                 val free = power?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+                SwitchRow(Icons.Default.Headphones, tr("Ask when headphones connect"), tr("Headphones or Bluetooth with nothing playing: go on with your last songs, or a Road Radio mix"), vm.headphonesPrompt) { vm.toggleHeadphonesPrompt() }
                 TapRow(Icons.Default.Bedtime, tr("Keep playing with the screen off"), tr("Lets RyM off battery saving, so the phone doesn't stop the music when it's locked"), tr(if (free) "On" else "Off")) {
                     val intent = if (!free) Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
                         // Already let off: the app's own page, for the phone's "background activity" switch.

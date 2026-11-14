@@ -94,13 +94,46 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
                 android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
                 android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
             )
-            val at = pausedByUnplug
-            if (at == 0L || SystemClock.elapsedRealtime() - at > 30 * 60 * 1000L) return
             if (added.none { it.isSink && it.type in listening }) return
+            val at = pausedByUnplug
+            if (at == 0L || SystemClock.elapsedRealtime() - at > 30 * 60 * 1000L) {
+                askWhatToPlay()
+                return
+            }
             pausedByUnplug = 0L
             // A moment for the sound to switch to them first.
             handler.postDelayed({ players[active]?.play() }, 800)
         }
+    }
+
+    /** When the headphones prompt last showed (at most every 10 minutes). */
+    private var askedAt = 0L
+
+    /**
+     * Headphones or Bluetooth (a car) connected with nothing playing: a notification asks what to
+     * play: the last session, or a Road Radio mix (Settings: "Ask when headphones connect").
+     */
+    private fun askWhatToPlay() {
+        if (!getSharedPreferences("rym", MODE_PRIVATE).getBoolean("headphones_prompt", true)) return
+        if (players.any { it?.isPlaying == true } || SystemClock.elapsedRealtime() - askedAt < 10 * 60 * 1000L) return
+        askedAt = SystemClock.elapsedRealtime()
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(android.app.NotificationChannel("devices", com.rymplayer.tr("Headphones"), android.app.NotificationManager.IMPORTANCE_HIGH))
+        fun action(what: String, code: Int) = android.app.PendingIntent.getActivity(
+            this, code,
+            android.content.Intent(this, com.rymplayer.MainActivity::class.java).putExtra(com.rymplayer.MainActivity.ACTION, what).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = androidx.core.app.NotificationCompat.Builder(this, "devices")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(com.rymplayer.tr("Headphones connected"))
+            .setContentText(com.rymplayer.tr("Go on with your last songs, or a Road Radio mix?"))
+            .setAutoCancel(true)
+            .setTimeoutAfter(60_000)
+            .addAction(0, com.rymplayer.tr("Resume"), action("resume", 41))
+            .addAction(0, com.rymplayer.tr("Road Radio"), action("road_radio", 42))
+            .build()
+        runCatching { nm.notify(41, n) }
     }
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     /** Sound settings changed in the app: applied at once. */

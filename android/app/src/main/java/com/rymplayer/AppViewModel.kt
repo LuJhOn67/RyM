@@ -560,6 +560,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         com.rymplayer.playback.QueueBridge.duckChanged?.invoke()
     }
 
+    /** Road Radio: a radio from one of your top songs (RaM points), for the car; a road-trip mix without any. */
+    fun roadRadio() {
+        val top = com.rymplayer.playback.Link.topSongs(getApplication(), 10)
+        top.randomOrNull()?.let {
+            playRadio(it)
+            return
+        }
+        viewModelScope.launch {
+            runCatching { api.search("road trip songs") }.getOrNull()?.firstOrNull { it.link == null }?.let { playRadio(it) }
+        }
+    }
+
+    /** Ask what to play when headphones or Bluetooth connect with nothing playing. */
+    var headphonesPrompt by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("headphones_prompt", true))
+        private set
+
+    fun toggleHeadphonesPrompt() {
+        headphonesPrompt = !headphonesPrompt
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("headphones_prompt", headphonesPrompt).apply()
+    }
+
     /** Mix Tastes: this phone's top songs and the nearby PC's (RaM points), in turn, as the queue. */
     fun mixTastes() {
         val pc = player.pc ?: run {
