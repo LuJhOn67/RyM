@@ -95,6 +95,8 @@ object I18n {
         "No lyrics for this song" to "لا توجد كلمات لهذه الأغنية",
         "These lyrics aren't synced to the song" to "هذه الكلمات غير متزامنة مع الأغنية",
         "Lyrics from" to "الكلمات من",
+        "Lyrics when the screen is off (AOD)" to "الكلمات والشاشة مطفية (AOD)",
+        "Turning the screen off while music plays shows a dim black screen with the clock and the sung line; turn it off again to sleep · needs \"Display over other apps\"" to "إطفاء الشاشة والموسيقى شغالة يطلّع شاشة سودة خافتة بيها الساعة والسطر المغنّى؛ اطفيها مرة ثانية حتى تنام · يحتاج \"العرض فوق التطبيقات\"",
         "Not sending: sign in here with the same Google account as the PC" to "ما يرسل: سجّل دخول هنا بنفس حساب Google اللي بالحاسبة",
         "Sending · no PC heard yet (same Wi-Fi? no VPN on either? RyM open on the PC?)" to "يرسل · ما سمع أي حاسبة بعد (نفس الواي فاي؟ بدون VPN؟ RyM مفتوح بالحاسبة؟)",
         "Heard" to "سمع",

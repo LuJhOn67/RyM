@@ -486,6 +486,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val themeName: String get() = if (noirTheme) "RyM Noir" else if (ytmTheme) "RyM YTM" else tr("Classic")
 
+    /**
+     * Lyrics when the screen is off: turning the screen off while music plays shows RyM's own
+     * always-on screen (see [AodActivity]). It needs "Display over other apps" to open from the
+     * background: asked for when it's turned on.
+     */
+    var aodLyrics by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("aod_lyrics", false))
+        private set
+
+    fun toggleAodLyrics() {
+        aodLyrics = !aodLyrics
+        val app = getApplication<Application>()
+        app.getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("aod_lyrics", aodLyrics).apply()
+        if (aodLyrics && !android.provider.Settings.canDrawOverlays(app)) {
+            runCatching {
+                app.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${app.packageName}"))
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+    }
+
     /** The signed-in Google account (name, @handle, picture), once looked up. */
     var account by mutableStateOf<com.rymplayer.data.MusicApi.Account?>(null)
 
@@ -1074,12 +1096,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * the main thread): started at once from init, it set [lyricLine] before that existed.
      */
     private fun followLyrics() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-        androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId, lockLyrics) }
+        androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId, lockLyrics, aodLyrics) }
             .collectLatest {
+                // The always-on screen's song.
+                player.current.let { t ->
+                    com.rymplayer.Aod.title = t?.title.orEmpty()
+                    com.rymplayer.Aod.artist = t?.artist.orEmpty()
+                    com.rymplayer.Aod.thumb = t?.thumb
+                }
+                com.rymplayer.Aod.playing = player.playing
                 val synced = lyrics?.synced.orEmpty()
                 if (synced.isEmpty()) {
                     lyricLine = null
                     showOnLockScreen(null)
+                    com.rymplayer.Aod.line = null
+                    com.rymplayer.Aod.next = null
                     return@collectLatest
                 }
                 while (true) {
@@ -1087,8 +1118,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val i = Lrclib.currentLine(synced, pos)
                     lyricLine = i
                     showOnLockScreen(i?.let { synced[it].second })
-                    // Off screen it goes on only for the lock screen's line.
-                    if (!player.playing || (!player.visible && !lockLyrics)) break
+                    com.rymplayer.Aod.line = i?.let { synced[it].second }
+                    com.rymplayer.Aod.next = synced.getOrNull((i ?: -1) + 1)?.second
+                    // Off screen it goes on only for the lock screen's line and the always-on screen.
+                    if (!player.playing || (!player.visible && !lockLyrics && !aodLyrics)) break
                     val next = synced.getOrNull((i ?: -1) + 1)?.first ?: break
                     delay(((next - pos) / player.speed.coerceAtLeast(0.1f) * 1000).toLong().coerceIn(30L, 10_000L) + 15)
                 }

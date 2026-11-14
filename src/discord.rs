@@ -2,8 +2,9 @@
 //! Discord profile, through the Discord app running on this computer (its local IPC socket).
 //! Needs an application id from Discord's developer portal (Settings: Discord). A thread of its
 //! own talks to Discord, so a missing or closed Discord never holds up the app.
-//! Two buttons go with it (others see them on the profile): the song on YouTube Music (it opens
-//! in RyM on a phone that has it), and where to get RyM.
+//! Two buttons go with it (others see them on the profile): "Play this song", which opens it in
+//! RyM (RyM's play page on GitHub Pages opens `rym://`, with YouTube Music and "Get RyM" for
+//! those without it; Discord takes only web links on buttons), and where to get RyM.
 
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Mutex, OnceLock};
@@ -12,6 +13,15 @@ use discord_rich_presence::activity::{Activity, ActivityType, Assets, Button, St
 
 /// Where the "Get RyM" button goes.
 const GET_RYM: &str = "https://github.com/LuJhOn67/RyM/releases/latest";
+/// RyM's play page: it opens the song in RyM (see docs/play/index.html).
+const PLAY_PAGE: &str = "https://lujhon67.github.io/RyM/play/";
+
+/// "Play this song": RyM's play page for the song, with its name (kept short: Discord allows 512
+/// characters a button link).
+fn play_link(video_id: &str, title: &str, artist: &str) -> String {
+    let name: String = format!("{title} - {artist}").chars().take(120).collect();
+    url::Url::parse_with_params(PLAY_PAGE, &[("v", video_id), ("t", name.as_str())]).map(String::from).unwrap_or_else(|_| format!("{PLAY_PAGE}?v={video_id}"))
+}
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
 /// What Discord should show.
@@ -90,7 +100,7 @@ fn run(app_id: String, rx: std::sync::mpsc::Receiver<Show>) {
                     .details(title.as_str())
                     .state(artist.as_str())
                     .assets(assets);
-                let song_link = crate::is_youtube(video_id).then(|| format!("https://music.youtube.com/watch?v={video_id}"));
+                let song_link = crate::is_youtube(video_id).then(|| play_link(video_id, title, artist));
                 let mut buttons = Vec::new();
                 if let Some(link) = &song_link {
                     buttons.push(Button::new("Play this song", link.as_str()));
@@ -113,5 +123,16 @@ fn run(app_id: String, rx: std::sync::mpsc::Receiver<Show>) {
         if sent.is_err() {
             client = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod play_link_tests {
+    #[test]
+    fn opens_rym_through_the_play_page() {
+        let l = super::play_link("dQw4w9WgXcQ", "Never Gonna Give You Up", "Rick Astley & Co");
+        assert!(l.starts_with("https://lujhon67.github.io/RyM/play/?v=dQw4w9WgXcQ&t="), "{l}");
+        assert!(l.contains("Rick+Astley+%26+Co") || l.contains("Rick%20Astley%20%26%20Co"), "{l}");
+        assert!(super::play_link("aaaaaaaaaaa", &"x".repeat(900), "y").len() < 512);
     }
 }

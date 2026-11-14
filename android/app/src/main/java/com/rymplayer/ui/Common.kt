@@ -433,8 +433,11 @@ val CardGap = Arrangement.spacedBy(12.dp)
  */
 fun androidx.compose.ui.Modifier.takesAllTouches(): androidx.compose.ui.Modifier = this.then(
     androidx.compose.ui.Modifier.pointerInput(Unit) {
+        // Being here is enough: only the top layer that's hit gets a touch, so it never reaches
+        // the screen behind. Nothing is consumed (consuming every move stopped scrolling and the
+        // sliders inside: Settings, the player's lyrics and seek bar).
         awaitPointerEventScope {
-            while (true) awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final).changes.forEach { it.consume() }
+            while (true) awaitPointerEvent()
         }
     },
 )

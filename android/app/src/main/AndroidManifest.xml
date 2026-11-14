@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- "Keep playing with the screen off": asks to be let off battery saving. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Lyrics when the screen is off: RyM's always-on screen opens from the background. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Songs on this phone (Library > Songs on this phone), asked the first time it opens. -->
@@ -23,6 +25,14 @@
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.RymPlayer">
         <!-- One copy of the app: links and the notification come back to it. -->
+        <activity
+            android:name=".AodActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity="com.rymplayer.aod"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

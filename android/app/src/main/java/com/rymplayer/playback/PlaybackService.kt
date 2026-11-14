@@ -129,6 +129,7 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        watchScreenOff()
         Streams.loadSource(this)
         for (i in 0..1) players[i] = build(i)
         Sound.listen(this, soundChanged)
@@ -546,7 +547,37 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
         if (player == null || !player.playWhenReady || player.mediaItemCount == 0) pauseAllPlayersAndStopSelf()
     }
 
+    /**
+     * The screen was turned off: with music playing (and "Lyrics when the screen is off" on), RyM's
+     * own always-on screen comes up over the lock screen; turned off again while it shows, the
+     * phone sleeps.
+     */
+    private val screenOff = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+            if (com.rymplayer.Aod.open) {
+                com.rymplayer.Aod.close?.invoke()
+                return
+            }
+            val on = getSharedPreferences("rym", MODE_PRIVATE).getBoolean("aod_lyrics", false)
+            if (!on || players.none { it?.isPlaying == true } || !android.provider.Settings.canDrawOverlays(this@PlaybackService)) return
+            runCatching {
+                startActivity(
+                    android.content.Intent(this@PlaybackService, com.rymplayer.AodActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION),
+                )
+            }.onFailure { android.util.Log.w("RyM", "always-on screen: ${it.message}") }
+        }
+    }
+    private var screenOffWatched = false
+
+    private fun watchScreenOff() {
+        if (screenOffWatched) return
+        screenOffWatched = true
+        androidx.core.content.ContextCompat.registerReceiver(this, screenOff, android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
     override fun onDestroy() {
+        if (screenOffWatched) runCatching { unregisterReceiver(screenOff) }
         QueueBridge.lyricChanged = null
         QueueBridge.lyric = null
         libraryScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
