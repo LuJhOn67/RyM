@@ -12,8 +12,8 @@ android {
         applicationId = "com.rymplayer"
         minSdk = 29 // Android 10
         targetSdk = 35
-        versionCode = 106
-        versionName = "7.5 Rev 1"
+        versionCode = 107
+        versionName = "7.5 Rev 2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // yt-dlp brings Python for each processor type: one APK per type keeps each small.
