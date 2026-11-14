@@ -253,7 +253,34 @@ pub struct Score {
     pub plays: u32,
     #[serde(default)]
     pub week: u64,
+    /// Plays by time of day (see [`bucket`]): morning, afternoon, evening, late night.
+    #[serde(default)]
+    pub buckets: [u16; 4],
 }
+
+/// The times of day songs are played in: morning (06-12), afternoon (12-18), evening (18-24) and
+/// late night (00-06).
+pub const BUCKETS: [&str; 4] = ["Morning", "Afternoon", "Evening", "Late night"];
+
+/// The time of day an hour (0-23, local) falls in (an index into [`BUCKETS`]).
+pub fn bucket(hour: usize) -> usize {
+    match hour % 24 {
+        6..=11 => 0,
+        12..=17 => 1,
+        18..=23 => 2,
+        _ => 3,
+    }
+}
+
+/// The local hour at `unix_secs`.
+fn local_hour(unix_secs: u64) -> usize {
+    use chrono::Timelike;
+    chrono::DateTime::from_timestamp(unix_secs as i64, 0).map(|d| d.with_timezone(&chrono::Local).hour() as usize).unwrap_or(0)
+}
+
+/// How much more a song counts at the time of day it's usually played: up to 30% more, by its
+/// share of plays in this time (after 3 plays).
+const BUCKET_BOOST: f32 = 0.3;
 
 /// What shows a song is loved, beyond playing it: points for each (see [`loved`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -436,6 +463,84 @@ pub fn merge_scores(text: &str) -> usize {
 
 /// The favorite songs (with their points) and artists (by name, with theirs).
 pub type Favorites = (Vec<(Track, f32)>, Vec<(String, f32)>);
+
+/// A song's boost at time of day `now`: 1 plus up to 30% by its share of plays in it (none before
+/// 3 plays).
+pub fn bucket_boost(buckets: &[u16; 4], now: usize) -> f32 {
+    let total: u32 = buckets.iter().map(|b| *b as u32).sum();
+    if total < 3 {
+        return 1.0;
+    }
+    1.0 + BUCKET_BOOST * buckets[now % 4] as f32 / total as f32
+}
+
+/// "RyM Rewind", this month in one card: the top artist by RaM points, the song played most late
+/// at night, the listening time, and the time of day most listened in (the "mood").
+#[derive(Debug, Clone, Default)]
+pub struct Rewind {
+    pub top_artist: Option<String>,
+    pub late_night: Option<Track>,
+    pub hours: f32,
+    /// An index into [`BUCKETS`] (None before any plays this month).
+    pub mood: Option<usize>,
+}
+
+/// This month's [`Rewind`]; songs are named from `known` (songs played on this device).
+pub fn rewind(known: &[Track]) -> Rewind {
+    let notes = Notes::load();
+    let now = crate::updates::now();
+    let mut r = notes.rewind(known, now);
+    r.hours = crate::stats::recap().hours_month;
+    r
+}
+
+/// The Rewind as one line in the app's language ("RyM Rewind · Top artist: … · …").
+pub fn rewind_text(r: &Rewind) -> String {
+    use crate::i18n::tr;
+    let dash = "—".to_string();
+    format!(
+        "RyM Rewind · {}: {} · {}: {} · {}: {:.1} {} · {}: {}",
+        tr("Top artist"),
+        r.top_artist.clone().unwrap_or_else(|| dash.clone()),
+        tr("Late-night song"),
+        r.late_night.as_ref().map_or_else(|| dash.clone(), |t| format!("{} - {}", t.title, t.artist)),
+        tr("Listening time"),
+        r.hours,
+        tr("hours"),
+        tr("Your mood"),
+        r.mood.map_or(dash, |m| tr(BUCKETS[m]).to_string()),
+    )
+}
+
+impl Notes {
+    fn rewind(&self, known: &[Track], now: u64) -> Rewind {
+        // This month: songs played in the last 30 days.
+        let month = now.saturating_sub(30 * 24 * 60 * 60);
+        let recent: Vec<(&String, &Score)> = self.tracks.iter().filter(|(_, s)| s.last >= month).collect();
+        let mut by_time = [0u32; 4];
+        for (_, s) in &recent {
+            for (i, b) in s.buckets.iter().enumerate() {
+                by_time[i] += *b as u32;
+            }
+        }
+        let mood = (by_time.iter().sum::<u32>() > 0).then(|| (0..4).max_by_key(|i| by_time[*i]).unwrap_or(0));
+        let by_id: HashMap<&str, &Track> = known.iter().map(|t| (t.video_id.as_str(), t)).collect();
+        let late_night = recent
+            .iter()
+            .filter(|(_, s)| s.buckets[3] > 0)
+            .filter_map(|(id, s)| by_id.get(id.as_str()).map(|t| ((*t).clone(), s.buckets[3])))
+            .max_by_key(|(_, n)| *n)
+            .map(|(t, _)| t);
+        let top_artist = self
+            .affinity
+            .iter()
+            .map(|(a, p)| (a, p + self.bias.get(a).copied().unwrap_or(0) as f32))
+            .filter(|(_, p)| *p > 0.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(a, _)| self.names.get(a).cloned().unwrap_or_else(|| a.clone()));
+        Rewind { top_artist, late_night, hours: 0.0, mood }
+    }
+}
 
 /// The favorites by RaM points, for the stats page: the songs with the most points now
 /// (named from `known`, songs played on this device; others are left out) and the artists.
@@ -714,11 +819,13 @@ impl Notes {
             s.plays = 0;
         }
         s.plays += 1;
+        // The time of day it was played in.
+        let hour = local_hour(now);
+        let b = &mut s.buckets[bucket(hour)];
+        *b = b.saturating_add(1);
         self.heard_with(t, now);
         // What kind plays at this hour (local time).
         if let Some(k) = self.kind_of(t) {
-            use chrono::Timelike;
-            let hour = chrono::DateTime::from_timestamp(now as i64, 0).map(|d| d.with_timezone(&chrono::Local).hour() as usize).unwrap_or(0);
             self.hours[k as usize][hour % 24] += 1;
         }
     }
@@ -732,7 +839,9 @@ impl Notes {
                 continue;
             }
             let (Ok(points), Ok(last)) = (f[1].parse::<f32>(), f[2].parse::<u64>()) else { continue };
-            let theirs = Score { points: points.clamp(-100.0, 100.0), last, plays: f.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), week: f.get(4).and_then(|w| w.parse().ok()).unwrap_or(0) };
+            // Times of day aren't sent: this device's own stay.
+            let buckets = self.tracks.get(f[0]).map(|s| s.buckets).unwrap_or_default();
+            let theirs = Score { points: points.clamp(-100.0, 100.0), last, plays: f.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), week: f.get(4).and_then(|w| w.parse().ok()).unwrap_or(0), buckets };
             match self.tracks.get(f[0]) {
                 Some(mine) if mine.last >= theirs.last => {}
                 _ => {
@@ -800,7 +909,7 @@ impl Notes {
         if p > 0.0 && s.plays >= FATIGUE_PLAYS && now.saturating_sub(s.week) < WEEK {
             p *= FATIGUE;
         }
-        p
+        p * bucket_boost(&s.buckets, bucket(local_hour(now)))
     }
 
     /// The artist's points: from their songs, and "Recommend more" / "Don't recommend".
@@ -1526,8 +1635,8 @@ mod tests {
     #[test]
     fn points_merge_by_the_newer_play() {
         let mut n = Notes::default();
-        n.tracks.insert("a".into(), super::Score { points: 10.0, last: 100, plays: 1, week: 0 });
-        n.tracks.insert("b".into(), super::Score { points: 10.0, last: 500, plays: 1, week: 0 });
+        n.tracks.insert("a".into(), super::Score { points: 10.0, last: 100, plays: 1, week: 0, buckets: [0; 4] });
+        n.tracks.insert("b".into(), super::Score { points: 10.0, last: 500, plays: 1, week: 0, buckets: [0; 4] });
         // a: theirs is newer (wins); b: mine is newer (stays); c: only theirs (comes); junk is skipped.
         let changed = n.merge_scores("a\t-20\t200\t2\t0\nb\t50\t300\nc\t5\t50\nnot a line");
         assert_eq!(changed, 2);
@@ -1556,5 +1665,38 @@ mod plays_whole_tests {
         assert!(!super::blends(Some(&song), Some(&quran)), "no blend into the Quran");
         assert!(!super::blends(Some(&quran), Some(&song)), "nor out of it");
         assert!(super::blends(Some(&song), None));
+    }
+}
+
+#[cfg(test)]
+mod bucket_tests {
+    use super::*;
+
+    #[test]
+    fn times_of_day_and_their_boost() {
+        assert_eq!([bucket(5), bucket(6), bucket(11), bucket(12), bucket(17), bucket(18), bucket(23), bucket(0)], [3, 0, 0, 1, 1, 2, 2, 3]);
+        assert_eq!(bucket_boost(&[2, 0, 0, 0], 0), 1.0, "under 3 plays: no boost");
+        assert!((bucket_boost(&[4, 0, 0, 0], 0) - 1.3).abs() < 1e-6, "all in this time: +30%");
+        assert!((bucket_boost(&[2, 0, 0, 2], 3) - 1.15).abs() < 1e-6);
+        assert_eq!(bucket_boost(&[0, 5, 0, 0], 3), 1.0, "never at this time: no boost");
+        // Old saves without buckets still load.
+        let s: Score = serde_json::from_str(r#"{"points":3.0,"last":10}"#).unwrap();
+        assert_eq!(s.buckets, [0; 4]);
+    }
+
+    #[test]
+    fn rewind_picks_the_late_night_song_and_the_mood() {
+        let now = 2_000_000_000;
+        let mut notes = Notes::default();
+        let t = |id: &str| Track { video_id: id.into(), title: id.into(), artist: "A".into(), album: String::new(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None };
+        notes.tracks.insert("late".into(), Score { points: 5.0, last: now, plays: 3, week: now, buckets: [0, 0, 1, 3] });
+        notes.tracks.insert("day".into(), Score { points: 9.0, last: now, plays: 6, week: now, buckets: [6, 0, 0, 0] });
+        notes.tracks.insert("old".into(), Score { points: 9.0, last: now - 90 * 86_400, plays: 9, week: 0, buckets: [0, 0, 0, 9] });
+        notes.affinity.insert("adele".into(), 12.0);
+        notes.affinity.insert("x".into(), 3.0);
+        let r = notes.rewind(&[t("late"), t("day"), t("old")], now);
+        assert_eq!(r.late_night.map(|t| t.video_id), Some("late".into()), "the old song is outside this month");
+        assert_eq!(r.mood, Some(0), "morning: 6 plays against 3 late at night");
+        assert_eq!(r.top_artist.as_deref(), Some("adele"));
     }
 }

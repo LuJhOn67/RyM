@@ -151,14 +151,20 @@ pub fn presets() -> Vec<Theme> {
             muted: true,
             vignette: true,
             heartbeat: true,
-            ..theme("Remorse", true, ["#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"], Ash, 0.6)
+            ..theme("Ashen Remorse", true, ["#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"], Ash, 0.6)
         },
     ]
 }
 
 /// A built-in theme by its name.
 pub fn preset(name: &str) -> Option<Theme> {
+    let name = current_name(name);
     presets().into_iter().find(|t| t.name == name)
+}
+
+/// A theme's name as it is now ("Remorse" became "Ashen Remorse"; a saved choice keeps working).
+pub fn current_name(name: &str) -> &str {
+    if name == "Remorse" { "Ashen Remorse" } else { name }
 }
 
 /// `#rgb`, `#rrggbb` or `#rrggbbaa` as (r, g, b, a).

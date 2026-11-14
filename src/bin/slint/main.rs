@@ -4107,7 +4107,9 @@ fn fill_stats(st: &Shared) {
     let artists: Vec<Bar> = recap.top_artists.iter().map(|(a, h)| Bar { label: a.clone().into(), value: h / top_hours, text: format!("{:.1} h", h).into() }).collect();
     let top_plays = recap.top_songs.first().map_or(1, |s| s.1).max(1) as f32;
     let songs: Vec<Bar> = recap.top_songs.iter().map(|(t, n)| Bar { label: format!("{} — {}", t.title, t.artist).into(), value: *n as f32 / top_plays, text: format!("{n}\u{00d7}").into() }).collect();
-    let text = format!("{:.1} {} · {:.1} {}", recap.hours_month, tr("hours this month"), recap.hours_total, tr("hours in all"));
+    let rewind = rymplayer::ram_points::rewind_text(&rymplayer::ram_points::rewind(&rymplayer::recent::tracks()));
+    let text = format!("{:.1} {} · {:.1} {}
+{rewind}", recap.hours_month, tr("hours this month"), recap.hours_total, tr("hours in all"));
     // RaM points' own favorites.
     let (fav_songs, fav_artists) = rymplayer::ram_points::favorites(&rymplayer::recent::tracks(), 8);
     let bars = |rows: Vec<(String, f32)>| -> Vec<Bar> {

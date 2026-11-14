@@ -2758,6 +2758,10 @@ fn recap_page(ui: &Shared, wants: &mut Wants) -> gtk::Widget {
         numbers.append(&col);
     }
     page.append(&numbers);
+    // RyM Rewind: this month in a line.
+    let rewind = label(&rymplayer::ram_points::rewind_text(&rymplayer::ram_points::rewind(&rymplayer::recent::tracks())), &["dim"]);
+    rewind.set_wrap(true);
+    page.append(&rewind);
     page.append(&label(tr("Top songs"), &["shelf"]));
     if r.top_songs.is_empty() {
         page.append(&note(tr("Play some songs and they'll show here")));

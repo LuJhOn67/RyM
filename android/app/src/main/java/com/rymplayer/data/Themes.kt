@@ -63,11 +63,14 @@ object Themes {
         t("Manga Ink", false, listOf("#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"), "halftone", 0f),
         t("Tactical Olive", true, listOf("#1d2117", "#2a2f22", "#d9dcc6", "#9aa08a", "#c8cdb0", "#8fbf3f", "#c3e86a", "#3b4230", "#5b6448"), "scanlines", 0.3f),
         // Sadness and guilt: an abyssal slate night, cold mist, dried crimson, ash, darkened edges, a slow heartbeat, colorless covers.
-        t("Remorse", true, listOf("#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"), "ash", 0.6f)
+        t("Ashen Remorse", true, listOf("#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"), "ash", 0.6f)
             .copy(muted = true, vignette = true, heartbeat = true),
     )
 
-    fun preset(name: String): Theme? = presets.firstOrNull { it.name == name }
+    fun preset(name: String): Theme? = currentName(name).let { n -> presets.firstOrNull { it.name == n } }
+
+    /** A theme's name as it is now ("Remorse" became "Ashen Remorse"; a saved choice keeps working). */
+    fun currentName(name: String): String = if (name == "Remorse") "Ashen Remorse" else name
 
     /** `#rgb`, `#rrggbb` or `#rrggbbaa` as an ARGB int; null when it isn't a color. */
     fun argb(hex: String): Int? {

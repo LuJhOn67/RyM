@@ -1,5 +1,6 @@
 package com.rymplayer.ui
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.text.withStyle
 import com.rymplayer.tr
 import androidx.compose.animation.AnimatedContent
@@ -118,6 +119,58 @@ import com.rymplayer.AppViewModel
 import com.rymplayer.data.Lrclib
 import com.rymplayer.data.fmtTime
 
+/**
+ * The mini player's gestures: a tap or a swipe up opens the player, a swipe left or right skips
+ * (next or previous, mirrored in Arabic), a long press likes or unlikes the song with a pulse.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun Modifier.miniGestures(vm: AppViewModel, t: com.rymplayer.data.Track): Modifier {
+    val pulse = remember { androidx.compose.animation.core.Animatable(1f) }
+    val slide = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val skipAt = with(density) { 72.dp.toPx() }
+    val upAt = with(density) { 48.dp.toPx() }
+    return this
+        .graphicsLayer { translationX = slide.value; scaleX = pulse.value; scaleY = pulse.value }
+        .pointerInput(t.videoId) {
+            var dx = 0f
+            var dy = 0f
+            detectDragGestures(
+                onDragStart = { dx = 0f; dy = 0f },
+                onDragEnd = {
+                    val sideways = kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                    when {
+                        sideways && kotlin.math.abs(dx) > skipAt -> if ((dx < 0f) != rtl) vm.player.next() else vm.player.prev()
+                        !sideways && dy < -upAt -> vm.playerOpen = true
+                    }
+                    scope.launch { slide.animateTo(0f) }
+                },
+                onDragCancel = { scope.launch { slide.animateTo(0f) } },
+            ) { change, amount ->
+                change.consume()
+                dx += amount.x
+                dy += amount.y
+                // The bar follows the finger a little sideways, then springs back.
+                scope.launch { slide.snapTo(dx * 0.35f) }
+            }
+        }
+        .combinedClickable(
+            onClick = { vm.playerOpen = true },
+            onLongClick = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                vm.toggleLike(t)
+                scope.launch {
+                    pulse.animateTo(1.06f, androidx.compose.animation.core.tween(110))
+                    pulse.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.35f))
+                }
+            },
+        )
+}
+
 @Composable
 fun MiniPlayer(vm: AppViewModel, tint: Color) {
     val p = vm.player
@@ -125,7 +178,7 @@ fun MiniPlayer(vm: AppViewModel, tint: Color) {
     if (vm.noirTheme && vm.colors == null) {
         // RyM Noir: a rounded bar floating over the page, lighter while playing, a thin line under it.
         val bg by androidx.compose.animation.animateColorAsState(if (p.playing) Color(0xFF333842) else Color(0xFF202020), label = "bar")
-        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(10.dp)).background(bg).clickable { vm.playerOpen = true }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(10.dp)).background(bg).miniGestures(vm, t)) {
             Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Cover(t.thumb, 44.dp, 120, 3.dp)
                 Spacer(Modifier.width(12.dp))
@@ -148,7 +201,7 @@ fun MiniPlayer(vm: AppViewModel, tint: Color) {
     }
     if (vm.ytmTheme) {
         // RyM YTM: a flat bar across the screen, the progress as a thin line under it.
-        Column(Modifier.fillMaxWidth().background(Color(0xFF212121)).clickable { vm.playerOpen = true }) {
+        Column(Modifier.fillMaxWidth().background(Color(0xFF212121)).miniGestures(vm, t)) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Cover(t.thumb, 44.dp, 120, 4.dp)
                 Spacer(Modifier.width(12.dp))
@@ -171,7 +224,7 @@ fun MiniPlayer(vm: AppViewModel, tint: Color) {
     }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(14.dp))
-            .background(lerp(Color(0xFF1C1C21), tint, 0.35f)).clickable { vm.playerOpen = true },
+            .background(lerp(Color(0xFF1C1C21), tint, 0.35f)).miniGestures(vm, t),
     ) {
         Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Cover(t.thumb, 46.dp, 120, 8.dp)

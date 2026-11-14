@@ -276,6 +276,12 @@ fun FallingParticles(style: String, color: Color, playing: Boolean, bass: Float)
             if (life == 0f) continue
             val x = pool[o]
             val y = pool[o + 1]
+            // A particle gone wrong (not a number, or off in the distance) is dropped, not drawn as
+            // a line across the screen (the white streaks after unlocking).
+            if (!x.isFinite() || !y.isFinite() || !pool[o + 2].isFinite() || x < -size.width || x > size.width * 2 || y < -size.height || y > size.height * 2) {
+                pool[o + 4] = 0f
+                continue
+            }
             if (life < 0f && !ash) {
                 // A raindrop: a short streak along its fall.
                 lines[n++] = x; lines[n++] = y; lines[n++] = x - pool[o + 2] * 0.015f; lines[n++] = y - 14f * density

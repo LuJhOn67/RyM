@@ -321,7 +321,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     /** Settings > Colors: a built-in theme's name, "Custom" (imported), or "" (the app's own). */
-    var palette by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("palette", "").orEmpty())
+    var palette by mutableStateOf(com.rymplayer.data.Themes.currentName(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("palette", "").orEmpty()))
         private set
     private var customTheme by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("custom_theme", null)
         ?.let { runCatching { com.rymplayer.data.Themes.fromJson(it) }.getOrNull() })

@@ -204,4 +204,28 @@ class RamPointsTest {
         assertEquals(10f, n.tracks.getValue("b").points)
         assertEquals(50_000L, n.tracks.getValue("c").last)
     }
+
+    @Test
+    fun timesOfDayAndTheirBoost() {
+        assertEquals(listOf(3, 0, 0, 1, 1, 2, 2, 3), listOf(5, 6, 11, 12, 17, 18, 23, 0).map { RamPoints.bucket(it) })
+        assertEquals(1f, RamPoints.bucketBoost(intArrayOf(2, 0, 0, 0), 0), 0f)
+        assertEquals(1.3f, RamPoints.bucketBoost(intArrayOf(4, 0, 0, 0), 0), 1e-5f)
+        assertEquals(1.15f, RamPoints.bucketBoost(intArrayOf(2, 0, 0, 2), 3), 1e-5f)
+        assertEquals(1f, RamPoints.bucketBoost(intArrayOf(0, 5, 0, 0), 3), 0f)
+    }
+
+    @Test
+    fun rewindPicksTheLateNightSongAndTheMood() {
+        val now = 2_000_000_000_000L
+        val notes = RamPoints.Notes()
+        notes.tracks["late"] = RamPoints.Score(5f, now, 3, now, intArrayOf(0, 0, 1, 3))
+        notes.tracks["day"] = RamPoints.Score(9f, now, 6, now, intArrayOf(6, 0, 0, 0))
+        notes.tracks["old"] = RamPoints.Score(9f, now - 90L * 86_400_000, 9, 0, intArrayOf(0, 0, 0, 9))
+        notes.affinity["adele"] = 12f
+        notes.affinity["x"] = 3f
+        val r = notes.rewind(listOf(t("late", "Late", "A"), t("day", "Day", "A"), t("old", "Old", "A")), now)
+        assertEquals("late", r.lateNight?.videoId)
+        assertEquals(0, r.mood)
+        assertEquals("adele", r.topArtist)
+    }
 }

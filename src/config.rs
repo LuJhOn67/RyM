@@ -622,6 +622,7 @@ impl Config {
         if c.discord_app_id.trim().is_empty() {
             c.discord_app_id = DISCORD_APP_ID.into();
         }
+        c.palette = crate::themes::current_name(&c.palette).to_string();
         c
     }
 
@@ -782,7 +783,8 @@ mod tests {
         assert_eq!(c.lyrics, LyricsPlace::Hidden);
         // Back from the first: the last one (the window apps' color themes come after "Mono").
         c.change(Setting::Theme, -1);
-        assert_eq!(c.theme().name, "Remorse");
+        assert_eq!(c.theme().name, "Ashen Remorse");
+        assert_eq!(crate::themes::preset("Remorse").map(|t| t.name), Some("Ashen Remorse".into()), "the old name still finds it");
         assert_eq!(all_themes()[THEMES.len() - 1].name, "Mono");
         assert_eq!(all_themes().len(), THEMES.len() + crate::themes::presets().len());
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();

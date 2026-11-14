@@ -526,6 +526,42 @@ fun SectionLabel(text: String) = Text(text.uppercase(), color = MaterialTheme.co
 /** "Your recap": hours listened (this month and in all), the most played songs, the top artists this month. */
 @Composable
 fun RecapPage(vm: AppViewModel) {
+    RecapPageBody(vm)
+}
+
+/**
+ * "RyM Rewind": this month in one card: the top artist by RaM points, the song played most late
+ * at night, the listening time, and the time of day most listened in.
+ */
+@Composable
+private fun RewindCard(vm: AppViewModel) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val known = remember { com.rymplayer.data.Recent.tracks(ctx) }
+    val r = remember { com.rymplayer.data.RamPoints.rewind(ctx, known) }
+    val accent = MaterialTheme.colorScheme.primary
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.55f), Color(0xFF16161C), Color(0xFF0B0B0F))))
+            .padding(20.dp),
+    ) {
+        Text("RyM Rewind", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.7f))
+        Text(java.text.SimpleDateFormat("MMMM yyyy", java.util.Locale.getDefault()).format(java.util.Date()), fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Spacer(Modifier.height(14.dp))
+        @Composable
+        fun fact(label: String, value: String) {
+            Text(label, fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+            Text(value, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(10.dp))
+        }
+        fact(tr("Top artist"), r.topArtist ?: "—")
+        fact(tr("Late-night song"), r.lateNight?.let { "${it.title} · ${it.artist}" } ?: "—")
+        fact(tr("Listening time"), "%.1f %s".format(r.hours, tr("hours")))
+        fact(tr("Your mood"), r.mood?.let { tr(com.rymplayer.data.RamPoints.BUCKETS[it]) } ?: "—")
+    }
+}
+
+@Composable
+private fun RecapPageBody(vm: AppViewModel) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val r = remember { com.rymplayer.data.Recent.recap(ctx) }
     LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding(), contentPadding = PaddingValues(bottom = 32.dp)) {
@@ -535,6 +571,7 @@ fun RecapPage(vm: AppViewModel) {
                 Text(tr("Your recap"), fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
         }
+        item { RewindCard(vm) }
         item {
             Row(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
                 for ((n, what) in listOf(r.hoursMonth to tr("hours this month"), r.hoursTotal to tr("hours in all"))) {

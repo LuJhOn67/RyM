@@ -2212,7 +2212,8 @@ impl App {
         let r = rymplayer::stats::recap();
         let artists: Vec<&str> = r.top_artists.iter().take(3).map(|(a, _)| a.as_str()).collect();
         self.page = Page::Recap;
-        self.page_title = format!("{}: {:.1} h {} · {:.1} h {} · {}", tr("Your recap"), r.hours_month, tr("this month"), r.hours_total, tr("in all"), artists.join(", "));
+        let rewind = rymplayer::ram_points::rewind_text(&rymplayer::ram_points::rewind(&rymplayer::recent::tracks()));
+        self.page_title = format!("{}: {:.1} h {} · {:.1} h {} · {} · {rewind}", tr("Your recap"), r.hours_month, tr("this month"), r.hours_total, tr("in all"), artists.join(", "));
         self.busy = false;
         self.focus = Focus::Tracks;
         self.tracks = r.top_songs.into_iter().map(|(t, plays)| Track { album: format!("{plays} {}", tr("plays")), ..t }).collect();
