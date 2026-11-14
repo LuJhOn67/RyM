@@ -36,6 +36,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
@@ -237,7 +239,7 @@ private val CoverColors = android.util.LruCache<String, Int>(128)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null, menuOnHold: Boolean = true, why: String = "") {
+fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, queueIndex: Int? = null, menuOnHold: Boolean = true, why: String = "", preview: Boolean = false) {
     Row(
         Modifier.fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = if (menuOnHold) ({ vm.menu = MenuFor(t, queueIndex) }) else null)
@@ -266,6 +268,13 @@ fun SongRow(vm: AppViewModel, t: Track, current: Boolean, onClick: () -> Unit, q
             }
         }
         if (t.videoId in vm.liked) Icon(Icons.Default.Favorite, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+        // "Preview Drop": 15 seconds from the song's best part, before adding it.
+        if (preview && t.link == null && com.rymplayer.data.isYouTube(t.videoId)) {
+            val on = vm.player.previewing == t.videoId
+            IconButton(onClick = { vm.player.preview(t) }) {
+                Icon(if (on) Icons.Default.Stop else Icons.Default.Headphones, tr("Preview"), tint = if (on) MaterialTheme.colorScheme.primary else Dim)
+            }
+        }
         IconButton(onClick = { vm.menu = MenuFor(t, queueIndex) }) { Icon(Icons.Default.MoreVert, tr("More"), tint = Dim) }
     }
 }

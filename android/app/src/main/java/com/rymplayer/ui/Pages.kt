@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import kotlinx.coroutines.delay
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.NorthWest
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Close
@@ -371,6 +373,18 @@ fun LibraryPage(vm: AppViewModel) {
             }
         }
         item {
+            // The focus timer: what part it's in and the minutes left (looked at once a minute).
+            var minute by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(vm.focus) { while (vm.focus != com.rymplayer.AppViewModel.Focus.Off) { minute = System.currentTimeMillis(); delay(30_000) } }
+            val left = ((vm.focusEnds - minute) / 60_000).coerceAtLeast(0) + 1
+            val focusText = when (vm.focus) {
+                com.rymplayer.AppViewModel.Focus.Off -> tr("25 minutes of calm Lo-Fi, then a 5-minute break with the music softer")
+                com.rymplayer.AppViewModel.Focus.Work -> "${tr("Focus")} · $left ${tr("min left")} · ${tr("tap to stop")}"
+                com.rymplayer.AppViewModel.Focus.Break -> "${tr("Break")} · $left ${tr("min left")} · ${tr("tap to stop")}"
+            }
+            LibraryRow(tr("Focus timer"), focusText, Brush.linearGradient(listOf(Color(0xFF3A2F63), Color(0xFFFFB347))), Icons.Default.Timer) { vm.toggleFocus() }
+        }
+        item {
             LibraryRow(tr("Your recap"), tr("Hours listened, top songs and artists"), Brush.linearGradient(listOf(Color(0xFFFF8A00), Color(0xFFE52E71))), Icons.Default.Insights) {
                 vm.recapOpen = true
             }
@@ -481,7 +495,7 @@ fun SongsPage(vm: AppViewModel, page: Screen.Songs) {
                     else -> vm.playFrom(tracks, i)
                 }
             }
-            SongRow(vm, t, current == t.videoId && t.videoId.isNotEmpty(), onClick)
+            SongRow(vm, t, current == t.videoId && t.videoId.isNotEmpty(), onClick, preview = page.kind == Screen.Kind.Results)
         }
         if (vm.loadingMore) item { MoreSpinner() }
     }

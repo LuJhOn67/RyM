@@ -35,6 +35,20 @@ object SponsorBlock {
         return found
     }
 
+    /** The video's highlight (SponsorBlock's "poi_highlight": where the best part starts, in seconds), or null. Blocking. */
+    fun highlight(videoId: String): Float? {
+        if (videoId.isEmpty() || !isYouTube(videoId)) return null
+        return runCatching {
+            val url = "https://sponsor.ajay.app/api/skipSegments/${prefix(videoId)}?categories=%5B%22poi_highlight%22%5D&actionTypes=%5B%22poi%22%5D"
+            http.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                val list = JSONArray(r.body?.string().orEmpty())
+                (0 until list.length()).mapNotNull { list.optJSONObject(it) }.firstOrNull { it.optString("videoID") == videoId }
+                    ?.optJSONArray("segments")?.optJSONObject(0)?.optJSONArray("segment")?.optDouble(0)?.toFloat()
+            }
+        }.getOrNull()
+    }
+
     fun parse(json: String, videoId: String): List<Pair<Float, Float>> {
         val list = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
         val out = mutableListOf<Pair<Float, Float>>()

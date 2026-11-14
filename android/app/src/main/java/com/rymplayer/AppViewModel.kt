@@ -47,6 +47,10 @@ sealed interface Screen {
     enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device }
 }
 
+/** The focus timer's parts: 25 minutes of work, 5 of break. */
+private const val FOCUS_WORK_MS = 25 * 60 * 1000L
+private const val FOCUS_BREAK_MS = 5 * 60 * 1000L
+
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("rym", Context.MODE_PRIVATE)
 
@@ -506,6 +510,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+    }
+
+    /** The focus timer (Pomodoro): working, on a break, or off; and when this part ends. */
+    enum class Focus { Off, Work, Break }
+    var focus by mutableStateOf(Focus.Off)
+        private set
+    var focusEnds by mutableStateOf(0L)
+        private set
+    private var focusJob: Job? = null
+    private var paletteBeforeFocus: String? = null
+
+    /**
+     * Starts or stops the focus timer: 25 minutes of calm Lo-Fi with the rain look, then a
+     * 5-minute break with the music softer (30%), over and over until stopped.
+     */
+    fun toggleFocus() {
+        if (focus != Focus.Off) {
+            focusJob?.cancel()
+            focus = Focus.Off
+            setDuck(1f)
+            paletteBeforeFocus?.let { choosePalette(it) }
+            paletteBeforeFocus = null
+            player.message = tr("Focus timer off")
+            return
+        }
+        paletteBeforeFocus = palette
+        choosePalette("Lo-Fi Rain")
+        focusJob = viewModelScope.launch {
+            // Calm music to work to: a Lo-Fi song and its radio.
+            runCatching { api.search("lofi hip hop chill beats") }.getOrNull()?.firstOrNull { it.link == null }?.let { playRadio(it) }
+            while (true) {
+                focus = Focus.Work
+                setDuck(1f)
+                focusEnds = System.currentTimeMillis() + FOCUS_WORK_MS
+                player.message = tr("Focus: 25 minutes")
+                delay(FOCUS_WORK_MS)
+                focus = Focus.Break
+                setDuck(0.3f)
+                focusEnds = System.currentTimeMillis() + FOCUS_BREAK_MS
+                player.message = tr("Break: 5 minutes")
+                delay(FOCUS_BREAK_MS)
+            }
+        }
+    }
+
+    private fun setDuck(level: Float) {
+        com.rymplayer.playback.QueueBridge.duck = level
+        com.rymplayer.playback.QueueBridge.duckChanged?.invoke()
     }
 
     /** The signed-in Google account (name, @handle, picture), once looked up. */

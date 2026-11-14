@@ -1,5 +1,7 @@
 package com.rymplayer.ui
 
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.text.withStyle
 import com.rymplayer.tr
@@ -458,6 +460,7 @@ private fun LyricsView(vm: AppViewModel, tint: Color) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
     val l = vm.lyrics
@@ -481,6 +484,11 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
         return
     }
     val cur = vm.lyricLine
+    // Lyric cards: lines picked with a long press (up to 3), shared as a picture.
+    var picked by remember(l) { mutableStateOf(listOf<Int>()) }
+    fun pick(i: Int) {
+        picked = if (i in picked) picked - i else if (picked.size < 3) (picked + i).sorted() else picked
+    }
     var viewport by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(cur) {
         if (cur != null) state.animateScrollToItem(cur, -(viewport / 3).toInt())
@@ -498,7 +506,11 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
                 else -> next
             }
             val color by animateColorAsState(target, tween(350), label = "line")
-            Column(Modifier.fillMaxWidth().clickable { vm.player.seekTo(time) }) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(if (i in picked) Color.White.copy(alpha = 0.16f) else Color.Transparent)
+                    .combinedClickable(onClick = { if (picked.isNotEmpty()) pick(i) else vm.player.seekTo(time) }, onLongClick = { pick(i) }),
+            ) {
                 // Word by word (sources with word times): the sung line fills as it's sung.
                 val words = l.words.getOrNull(i)?.takeIf { it.isNotEmpty() && i == cur }
                 if (words != null) {
@@ -530,6 +542,23 @@ private fun BoxScope.LyricsLines(vm: AppViewModel, sung: Color, next: Color) {
             }
         }
         item { Text("${tr("Lyrics from")} ${l.source}", color = sung, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+    }
+    if (picked.isNotEmpty()) {
+        val ctx = LocalContext.current
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        val accent = MaterialTheme.colorScheme.primary.toArgb()
+        Row(
+            Modifier.align(Alignment.BottomCenter).padding(12.dp).clip(RoundedCornerShape(24.dp)).background(Color.Black.copy(alpha = 0.75f)).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton({
+                val t = vm.player.current ?: return@TextButton
+                val lines = picked.mapNotNull { l.synced.getOrNull(it)?.second }.filter { it.isNotBlank() }
+                picked = emptyList()
+                scope.launch { runCatching { LyricCard.share(ctx, t, lines, accent) }.onFailure { vm.player.message = "${tr("Lyric card")}: ${it.message}" } }
+            }) { Text("${tr("Share as a card")} (${picked.size})", color = Color.White, fontWeight = FontWeight.SemiBold) }
+            TextButton({ picked = emptyList() }) { Text(tr("Cancel"), color = Color.White.copy(alpha = 0.7f)) }
+        }
     }
 }
 

@@ -27,6 +27,10 @@ import androidx.media3.session.MediaSessionService
 object QueueBridge {
     @Volatile var next: (() -> Unit)? = null
     @Volatile var prev: (() -> Unit)? = null
+    /** The focus timer's break: the music softer (1 = as set). */
+    @Volatile var duck = 1f
+    /** The duck changed: the service applies it (set by the service). */
+    @Volatile var duckChanged: (() -> Unit)? = null
     /** A song comes after the playing one (the automix needs one to mix into). */
     @Volatile var hasNext: (() -> Boolean)? = null
     /**
@@ -129,6 +133,8 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        // The focus timer's break: the volume eases down at once (the fades loop keeps it there).
+        QueueBridge.duckChanged = { handler.post { players.forEach { p -> p?.volume = QueueBridge.duck }; handler.removeCallbacks(fades); handler.post(fades) } }
         watchScreenOff()
         Streams.loadSource(this)
         for (i in 0..1) players[i] = build(i)
@@ -508,7 +514,7 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
                     wait = if (fromStart < fadeMs || fromEnd < fadeMs) 100L else minOf(wait, fromEnd - fadeMs)
                 }
             }
-            p.volume = (volume * sleep).coerceIn(0f, 1f)
+            p.volume = (volume * sleep * QueueBridge.duck).coerceIn(0f, 1f)
             handler.postDelayed(this, wait.coerceIn(50L, 5_000L))
         }
     }
@@ -518,14 +524,14 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
         val now = SystemClock.elapsedRealtime()
         if (m.began == 0L) {
             // Waiting for the next song to load: the old one plays on (up to 20 s, or to its end).
-            m.old.volume = sleep
+            m.old.volume = sleep * QueueBridge.duck
             if (now - m.asked > 20_000 || m.old.playbackState == Player.STATE_ENDED) endMix("the next song didn't come")
             return
         }
         val t = ((now - m.began).toFloat() / m.ms).coerceIn(0f, 1f)
         val (out, inc) = Automix.gains(t)
-        m.old.volume = out * sleep
-        m.new.volume = inc * sleep
+        m.old.volume = out * sleep * QueueBridge.duck
+        m.new.volume = inc * sleep * QueueBridge.duck
         m.oldMeter.highpass = Automix.bassCut(t)
         if (m.nudge == null && now - m.began > 3_000) {
             val inBeat = Automix.beat(m.newMeter.last(3f).first)

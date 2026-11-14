@@ -324,7 +324,66 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
     /** When a song was asked for, for the timing log. */
     private var tapped = 0L
 
+    /** "Preview Drop": the song whose 15-second audition (from its best part) plays now, or null. */
+    var previewing by mutableStateOf<String?>(null)
+        private set
+    private var previewPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var previewJob: Job? = null
+    private var resumeAfterPreview = false
+
+    /**
+     * Plays 15 seconds of [t] from its best part (SponsorBlock's highlight, else a minute in, or a
+     * third in for short songs) on a player of its own; the playing song pauses and goes on after.
+     * Pressed again, it stops.
+     */
+    fun preview(t: Track) {
+        val again = previewing == t.videoId
+        stopPreview()
+        if (again) return
+        previewing = t.videoId
+        previewJob = scope.launch {
+            val url = Downloads.uriFor(context, t.videoId)?.toString()
+                ?: runCatching { Streams.playable(context, t.videoId) }.getOrNull()
+            if (url == null || ".m3u8" in url) {
+                previewing = null
+                return@launch
+            }
+            val peak = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.SponsorBlock.highlight(t.videoId) }
+                ?: (parseDuration(t.duration) ?: 0f).let { len -> if (len > 0f) minOf(60f, len * 0.35f) else 60f }
+            if (previewing != t.videoId) return@launch
+            resumeAfterPreview = controller?.isPlaying == true
+            controller?.pause()
+            val p = previewPlayer ?: androidx.media3.exoplayer.ExoPlayer.Builder(context)
+                .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(context, WebDataSource.Factory())))
+                .setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
+                .build().also { previewPlayer = it }
+            p.setMediaItem(MediaItem.fromUri(url), (peak * 1000).toLong())
+            p.prepare()
+            p.play()
+            delay(15_000)
+            stopPreview()
+        }
+    }
+
+    /** Stops the preview; the song that was playing goes on. */
+    fun stopPreview() {
+        val was = previewing != null
+        previewing = null
+        previewJob?.cancel()
+        previewJob = null
+        previewPlayer?.run {
+            stop()
+            clearMediaItems()
+        }
+        if (was && resumeAfterPreview) controller?.play()
+        resumeAfterPreview = false
+    }
+
     fun play(i: Int) {
+        if (previewing != null) {
+            resumeAfterPreview = false
+            stopPreview()
+        }
         val t = queue.getOrNull(i) ?: return
         // A mix still loading its song gives way to the one picked here.
         QueueBridge.cancelMix?.invoke()
@@ -766,6 +825,8 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
 
     /** Lets go of the service; music keeps playing if it was. */
     fun release() {
+        previewPlayer?.release()
+        previewPlayer = null
         saveSession()
         QueueBridge.next = null
         QueueBridge.prev = null

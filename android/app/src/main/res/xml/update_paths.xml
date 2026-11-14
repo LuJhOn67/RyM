@@ -2,4 +2,6 @@
 <!-- The downloaded update, handed to Android's installer. -->
 <paths>
     <cache-path name="updates" path="updates/" />
+    <!-- Lyric cards, handed to the share sheet. -->
+    <cache-path name="cards" path="cards/" />
 </paths>
