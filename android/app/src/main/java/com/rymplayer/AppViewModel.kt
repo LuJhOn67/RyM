@@ -502,13 +502,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         aodLyrics = !aodLyrics
         val app = getApplication<Application>()
         app.getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("aod_lyrics", aodLyrics).apply()
-        if (aodLyrics && !android.provider.Settings.canDrawOverlays(app)) {
-            runCatching {
-                app.startActivity(
-                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${app.packageName}"))
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }
+        if (aodLyrics && !android.provider.Settings.canDrawOverlays(app)) askOverlay()
+    }
+
+    /** Android's "Display over other apps" page for RyM (the AOD lyrics open from the background). */
+    fun askOverlay() {
+        val app = getApplication<Application>()
+        runCatching {
+            app.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${app.packageName}"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
         }
     }
 

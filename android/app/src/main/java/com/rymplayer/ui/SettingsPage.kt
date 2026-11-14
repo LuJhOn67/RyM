@@ -184,6 +184,25 @@ private fun TapRow(icon: ImageVector, title: String, about: String, value: Strin
     )
 }
 
+/** Resetting RaM points: ‹ what › (all, or the negative only) and the Reset button. */
+@Composable
+private fun ResetRow(about: String, what: String, onSwitch: () -> Unit, onReset: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(tr("Reset points"), fontWeight = FontWeight.SemiBold) },
+        supportingContent = { Text(about, fontSize = 13.sp) },
+        leadingContent = { Icon(Icons.Default.AutoAwesome, null) },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onSwitch, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(32.dp)) { Text("‹", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                Text(what, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                TextButton(onSwitch, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(32.dp)) { Text("›", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                androidx.compose.material3.FilledTonalButton(onReset, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(tr("Reset")) }
+            }
+        },
+        colors = itemColors,
+    )
+}
+
 @Composable
 private fun Divider() = HorizontalDivider(Modifier.padding(start = 56.dp), color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
 
@@ -194,6 +213,19 @@ fun SettingsPage(vm: AppViewModel) {
     fun open(url: String) = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     Column(Modifier.fillMaxSize().background(Page).statusBarsPadding().navigationBarsPadding()) {
         TopBar(tr("Settings")) { vm.settingsOpen = false }
+        var overlayOk by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(android.provider.Settings.canDrawOverlays(ctx)) }
+        fun notesAllowed() = android.os.Build.VERSION.SDK_INT < 33 ||
+            androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        var notesOk by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(notesAllowed()) }
+        androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+            overlayOk = android.provider.Settings.canDrawOverlays(ctx)
+            notesOk = notesAllowed()
+            onPauseOrDispose { }
+        }
+        val askNotes = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { notesOk = it }
+        fun notificationSettings() = runCatching {
+            ctx.startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+        }
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 32.dp)) {
             // The signed-in account: picture, name and @handle.
             vm.account?.let { a ->
@@ -211,7 +243,21 @@ fun SettingsPage(vm: AppViewModel) {
                 // Phones that save battery hard stop music in the background unless the app is let off.
                 val power = ctx.getSystemService(android.os.PowerManager::class.java)
                 val free = power?.isIgnoringBatteryOptimizations(ctx.packageName) == true
-                SwitchRow(Icons.Default.Headphones, tr("Ask when headphones connect"), tr("Headphones or Bluetooth with nothing playing: go on with your last songs, or a Road Radio mix"), vm.headphonesPrompt) { vm.toggleHeadphonesPrompt() }
+                SwitchRow(
+                    Icons.Default.Headphones, tr("Ask when headphones connect"),
+                    if (vm.headphonesPrompt && !notesOk) tr("Needs notifications, which are off for RyM · tap to allow")
+                    else tr("Headphones or Bluetooth with nothing playing: go on with your last songs, or a Road Radio mix"),
+                    vm.headphonesPrompt && notesOk,
+                ) {
+                    when {
+                        !vm.headphonesPrompt -> {
+                            vm.toggleHeadphonesPrompt()
+                            if (!notesOk) askNotes.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        !notesOk -> notificationSettings()
+                        else -> vm.toggleHeadphonesPrompt()
+                    }
+                }
                 TapRow(Icons.Default.Bedtime, tr("Keep playing with the screen off"), tr("Lets RyM off battery saving, so the phone doesn't stop the music when it's locked"), tr(if (free) "On" else "Off")) {
                     val intent = if (!free) Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
                         // Already let off: the app's own page, for the phone's "background activity" switch.
@@ -267,8 +313,13 @@ fun SettingsPage(vm: AppViewModel) {
                 val about = if (sum.tracked == 0) tr("Nothing learned yet") else
                     "${sum.tracked} ${tr("songs with points")}" + if (sum.topArtists.isEmpty()) "" else " · ${tr("Top artists")}: ${sum.topArtists.joinToString(", ")}"
                 var askReset by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-                TapRow(Icons.Default.AutoAwesome, tr("Reset all points"), about, tr("Reset all")) { askReset = true }
-                TapRow(Icons.Default.Tune, tr("Reset negative points only"), tr("Skipped songs come back; your favorites stay"), tr("Reset")) { vm.resetNegativePoints() }
+                // What to reset, ‹ all · negative only ›, then the button.
+                var resetNegative by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                ResetRow(
+                    if (resetNegative) tr("Skipped songs come back; your favorites stay") else about,
+                    if (resetNegative) tr("Negative only") else tr("All"),
+                    { resetNegative = !resetNegative },
+                ) { if (resetNegative) vm.resetNegativePoints() else askReset = true }
                 var pickDate by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
                 TapRow(Icons.Default.Tune, tr("Reset on a date"), tr("On that day all points go back to 0 · tap to pick"), vm.ramResetDate.ifEmpty { tr("None") }) { pickDate = true }
                 if (pickDate) ResetDatePicker(vm.ramResetDate, { pickDate = false }) { vm.chooseResetDate(it); pickDate = false }
@@ -346,7 +397,12 @@ fun SettingsPage(vm: AppViewModel) {
                 Divider()
                 SwitchRow(Icons.Default.AutoAwesome, tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), snd.automix) { vm.changeSound(snd.copy(automix = !snd.automix)) }
                 SwitchRow(Icons.Default.MicOff, tr("Lyrics on the lock screen"), tr("The sung line under the song's name on the lock screen and in the notification"), vm.lockLyrics) { vm.toggleLockLyrics() }
-                SwitchRow(Icons.Default.Bedtime, tr("Lyrics when the screen is off (AOD)"), tr("Turning the screen off while music plays shows a dim black screen with the clock and the sung line; turn it off again to sleep · needs \"Display over other apps\""), vm.aodLyrics) { vm.toggleAodLyrics() }
+                SwitchRow(
+                    Icons.Default.Bedtime, tr("Lyrics when the screen is off (AOD)"),
+                    if (vm.aodLyrics && !overlayOk) tr("Off until RyM may \"Display over other apps\" · tap to allow")
+                    else tr("Turning the screen off while music plays shows a dim black screen with the clock and the sung line; turn it off again to sleep · needs \"Display over other apps\""),
+                    vm.aodLyrics && overlayOk,
+                ) { if (vm.aodLyrics && !overlayOk) vm.askOverlay() else vm.toggleAodLyrics() }
                 SwitchRow(Icons.Default.MicOff, tr("Remove vocals (karaoke)"), tr("The voice taken out (it sits in the middle of the stereo); the music stays"), snd.vocalsOff) { vm.changeSound(snd.copy(vocalsOff = !snd.vocalsOff)) }
                 Divider()
                 SwitchRow(Icons.Default.ContentCut, tr("Skip silence"), tr("Silent parts at the start and end of songs are skipped"), snd.skipSilence) { vm.changeSound(snd.copy(skipSilence = !snd.skipSilence)) }

@@ -115,6 +115,12 @@ enum Ev {
     TookOver(String, anyhow::Result<rymplayer::link::State>),
     /// Mix Tastes: the phone's top songs.
     Blended(anyhow::Result<Vec<Track>>),
+    /// Preview Drop: the song's sound and where its best part starts.
+    Preview(u64, String, anyhow::Result<stream::Playable>, f32),
+    /// The focus timer's music (calm Lo-Fi).
+    FocusSongs(anyhow::Result<Vec<Track>>),
+    /// Road Radio with nothing learned yet: a road-trip song to start from.
+    RoadSongs(anyhow::Result<Vec<Track>>),
     /// "Clear cache" finished: the bytes freed.
     CacheCleared(u64),
     Done,
@@ -160,6 +166,16 @@ struct State {
     peers: core::PeerWatch,
     streak: core::SkipStreak,
     device_eq: core::DeviceEq,
+    /// Headphones or Bluetooth connected with nothing playing (asks what to play).
+    output_watch: core::OutputWatch,
+    /// The focus timer (Pomodoro).
+    focus: core::Focus,
+    /// Preview Drop: the song (its key), its own player, since when; the main music paused for it.
+    preview: Option<(String, Audio, Instant)>,
+    preview_req: u64,
+    preview_paused: bool,
+    /// Lyric cards: the lines picked (up to 3).
+    picked: Vec<usize>,
     /// yt-dlp, ejs and Node as found (the settings).
     ytdlp_status: String,
     crossfade_for: u64,
@@ -555,6 +571,12 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         peers: Default::default(),
         streak: Default::default(),
         device_eq: Default::default(),
+        output_watch: Default::default(),
+        focus: Default::default(),
+        preview: None,
+        preview_req: 0,
+        preview_paused: false,
+        picked: Vec::new(),
         ytdlp_status: String::new(),
         crossfade_for: 0,
         resume_at: None,
@@ -721,6 +743,33 @@ fn wire(ui: &AppWindow, st: &Shared) {
         set_toggle(st, "float", on);
     }));
     app.on_share(w(open_share));
+    app.on_preview({
+        let st = st.clone();
+        move |key| preview(&st, &key)
+    });
+    app.on_lyric_pick({
+        let st = st.clone();
+        move |i| lyric_pick(&st, i as usize)
+    });
+    app.on_lyric_unpick({
+        let st = st.clone();
+        move || lyric_unpick(&st)
+    });
+    app.on_lyric_card({
+        let st = st.clone();
+        move || lyric_card(&st)
+    });
+    app.on_phones_choice({
+        let st = st.clone();
+        move |what| {
+            with_app(&st, |a| a.set_phones_ask(false));
+            match what {
+                1 => toggle_playback(&st),
+                2 => road_radio(&st),
+                _ => {}
+            }
+        }
+    });
     app.on_copy_link(w(copy_link));
     {
         let st = st.clone();
@@ -963,6 +1012,12 @@ fn with_app(st: &Shared, f: impl FnOnce(App<'_>)) {
     if let Some(ui) = ui {
         f(ui.global::<App>());
     }
+}
+
+/// A value read from the window (None when it's gone).
+fn with_app_get<T>(st: &Shared, f: impl FnOnce(App<'_>) -> T) -> Option<T> {
+    let ui = st.borrow().ui.upgrade();
+    ui.map(|ui| f(ui.global::<App>()))
 }
 
 fn toast(st: &Shared, text: &str) {
@@ -1674,7 +1729,13 @@ fn fill_settings(st: &Shared) {
         head("Alarm"),
         switch("alarm", "Alarm", "Music starts at this time (RyM has to be open)", c.alarm_on),
         field("alarm-time", "Time", "Like 07:30", &c.alarm_time),
+        head("Focus timer"),
+        button("focus", "Focus timer", match s.focus.left(Instant::now()) {
+            Some((p, left)) => format!("{} · {} {}", t(if p == core::FocusPart::Work { "Focus" } else { "Break" }), core::mm_ss(left), t("left")),
+            None => t("25 minutes of calm music with the rain look, then a 5-minute break with the music softer"),
+        }, if s.focus.on() { "Stop" } else { "Start" }),
         head("Devices"),
+        switch("headphones", "Ask when headphones connect", "Headphones or Bluetooth with nothing playing: go on with your last songs, or a Road Radio mix", c.headphones_prompt),
         button("mix-tastes", "Mix Tastes", t("Your top songs and the phone's (RaM points), mixed into one queue · same Wi-Fi and account"), "Mix"),
         switch("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
         switch("link-auto", "Take over from the phone by itself", "Off: RyM asks first", c.link_auto),
@@ -1788,6 +1849,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "seamless" => c.cross_ears = on,
             "announce" => c.link_announce = on,
             "link-auto" => c.link_auto = on,
+            "headphones" => c.headphones_prompt = on,
             "remote" => c.remote_control = on,
             "gapless" => c.gapless = on,
             "sponsorblock" => c.sponsorblock = on,
@@ -2440,6 +2502,7 @@ fn press(st: &Shared, id: &str) {
             toast(st, tr("Shortcuts are back to how they came"));
             fill_settings(st);
         }
+        "focus" => toggle_focus(st),
         "mix-tastes" => {
             let phone = st.borrow().last_phone.clone();
             match phone {
@@ -3292,6 +3355,10 @@ fn play_with_radio(st: &Shared, t: Track) {
 }
 
 fn play_at(st: &Shared, i: usize) {
+    if st.borrow().preview.is_some() {
+        st.borrow_mut().preview_paused = false;
+        stop_preview(st);
+    }
     let unplayable = st.borrow().q.songs.get(i).is_some_and(|t| t.video_id.is_empty());
     if unplayable {
         let t = {
@@ -3344,6 +3411,7 @@ fn play_at(st: &Shared, i: usize) {
             a.stop();
         }
         s.m.lyrics.set_vec(Vec::new());
+        s.picked.clear();
         s.alt_lyrics = None;
         s.sources_for.clear();
         (track, s.request_id, s.api.clone())
@@ -3355,6 +3423,7 @@ fn play_at(st: &Shared, i: usize) {
         a.set_pos_text("0:00".into());
         a.set_lyrics_note(tr("Looking for lyrics…").into());
         a.set_lyric_line(-1);
+        a.set_lyrics_picked(0);
         a.set_sources(ModelRc::default());
         a.set_source_at(-1);
     });
@@ -3541,6 +3610,9 @@ fn tick(st: &Shared) {
     if moved {
         fill_settings(st);
     }
+    watch_output(st);
+    focus_tick(st);
+    preview_tick(st);
     media_sync(st);
     mini_sync(st);
     extras(st);
@@ -3995,6 +4067,254 @@ fn show_float(st: &Shared, on: bool) {
     s.float = Some(w);
 }
 
+// ---------------------------------------------------------------- Preview Drop, focus, headphones
+
+/// Preview Drop: 15 seconds of a search result from its best part, on a player of its own (the
+/// music playing pauses meanwhile and comes back after). The same button again stops it.
+fn preview(st: &Shared, key: &str) {
+    let same = st.borrow().preview.as_ref().is_some_and(|p| p.0 == key);
+    let waiting = with_app_get(st, |a| a.get_preview_key().to_string()).is_some_and(|k| k == key);
+    stop_preview(st);
+    if same || waiting {
+        return;
+    }
+    let Some(t) = track_of(st, key) else { return };
+    if t.video_id.is_empty() || rymplayer::local::is_local(&t.video_id) {
+        return;
+    }
+    let id = {
+        let mut s = st.borrow_mut();
+        s.preview_req += 1;
+        s.preview_req
+    };
+    with_app(st, |a| a.set_preview_key(key.into()));
+    toast(st, tr("Preview: 15 seconds from the best part"));
+    let (vid, length, key) = (t.video_id.clone(), parse_duration(&t.duration), key.to_string());
+    post(async move {
+        let (song, highlight) = tokio::join!(stream::open(vid.clone()), rymplayer::sponsorblock::highlight(&vid));
+        Ev::Preview(id, key, song, core::preview_start(highlight, length))
+    });
+}
+
+fn preview_ready(st: &Shared, id: u64, key: String, song: anyhow::Result<stream::Playable>, at: f32) {
+    if id != st.borrow().preview_req {
+        return;
+    }
+    let volume = with_app_get(st, |a| a.get_volume()).unwrap_or(0.8);
+    let started = song.and_then(|p| {
+        let mut a = Audio::new()?;
+        a.play(&p, None)?;
+        a.seek(at);
+        a.set_volume(volume);
+        Ok(a)
+    });
+    match started {
+        Ok(a) => {
+            let mut s = st.borrow_mut();
+            let playing = s.audio.as_ref().is_some_and(Audio::is_playing);
+            if playing && let Some(main) = &s.audio {
+                main.pause();
+            }
+            s.preview_paused = playing;
+            s.preview = Some((key, a, Instant::now()));
+        }
+        Err(e) => {
+            with_app(st, |a| a.set_preview_key(SharedString::new()));
+            toast(st, &format!("{}: {e}", tr("Couldn't play the preview")));
+        }
+    }
+}
+
+/// The preview stops; the music it paused plays on.
+fn stop_preview(st: &Shared) {
+    {
+        let mut s = st.borrow_mut();
+        s.preview_req += 1;
+        if s.preview.take().is_some() && std::mem::take(&mut s.preview_paused)
+            && let Some(a) = &s.audio
+            && !a.is_playing()
+        {
+            a.toggle();
+        }
+        s.preview_paused = false;
+    }
+    with_app(st, |a| a.set_preview_key(SharedString::new()));
+}
+
+fn preview_tick(st: &Shared) {
+    let over = st.borrow().preview.as_ref().is_some_and(|(_, a, since)| since.elapsed().as_secs_f32() >= core::PREVIEW_SECS || a.finished());
+    if over {
+        stop_preview(st);
+    }
+}
+
+/// The focus timer on or off: on, calm Lo-Fi plays with the rain look; off, the colors come back.
+fn toggle_focus(st: &Shared) {
+    let part = st.borrow_mut().focus.toggle(Instant::now());
+    // The rain look while focusing; the colors before it are kept (in the settings, should RyM
+    // close meanwhile).
+    let look = {
+        let mut s = st.borrow_mut();
+        if part.is_some() {
+            if s.config.focus_palette.is_empty() {
+                s.config.focus_palette = if s.config.palette.is_empty() { "-".into() } else { s.config.palette.clone() };
+            }
+            Some("Lo-Fi Rain".to_string())
+        } else {
+            match std::mem::take(&mut s.config.focus_palette).as_str() {
+                "" => None,
+                "-" => Some(String::new()),
+                name => Some(name.to_string()),
+            }
+        }
+    };
+    if let Some(name) = look {
+        set_colors(st, &name);
+    }
+    focus_level(st);
+    if part.is_some() {
+        toast(st, tr("Focus: 25 minutes of calm music, then a 5-minute break"));
+        focus_music(st);
+    } else {
+        with_app(st, |a| a.set_focus_text(SharedString::new()));
+        toast(st, tr("Focus timer stopped"));
+    }
+    fill_settings(st);
+}
+
+/// The focus music: calm Lo-Fi in place of the queue.
+fn focus_music(st: &Shared) {
+    let Some(api) = st.borrow().api.clone() else { return };
+    post(async move { Ev::FocusSongs(api.search(core::FOCUS_SEARCH.to_string()).await) });
+}
+
+/// The music's volume for the focus part (softer on a break).
+fn focus_level(st: &Shared) {
+    let s = st.borrow();
+    if s.sleep.is_none()
+        && let Some(a) = &s.audio
+    {
+        a.set_fade(s.focus.level());
+    }
+}
+
+fn focus_tick(st: &Shared) {
+    if !st.borrow().focus.on() {
+        return;
+    }
+    let now = Instant::now();
+    let moved = st.borrow_mut().focus.tick(now);
+    if let Some(part) = moved {
+        focus_level(st);
+        let idle = !st.borrow().audio.as_ref().is_some_and(Audio::is_playing);
+        match part {
+            core::FocusPart::Break => toast(st, tr("Break: 5 minutes, the music softer")),
+            core::FocusPart::Work => {
+                toast(st, tr("Back to focus: 25 minutes"));
+                if idle {
+                    focus_music(st);
+                }
+            }
+        }
+        fill_settings(st);
+    }
+    let text = st.borrow().focus.left(now).map(|(p, left)| format!("{} · {}", tr(if p == core::FocusPart::Work { "Focus" } else { "Break" }), core::mm_ss(left)));
+    let text: SharedString = text.unwrap_or_default().into();
+    with_app(st, |a| {
+        if a.get_focus_text() != text {
+            a.set_focus_text(text);
+        }
+    });
+}
+
+/// Headphones or Bluetooth just connected with nothing playing: ask what to play.
+fn watch_output(st: &Shared) {
+    let ask = {
+        let mut s = st.borrow_mut();
+        let s = &mut *s;
+        let playing = s.audio.as_ref().is_some_and(Audio::is_playing) || s.preview.is_some();
+        let device = s.device_eq.device().map(str::to_string);
+        s.output_watch.moved(device.as_deref(), playing, Instant::now()) && s.config.headphones_prompt
+    };
+    if !ask {
+        return;
+    }
+    let last = st.borrow().q.now().map(|t| format!("{} · {}", t.title, t.artist));
+    let text = match last {
+        Some(song) => format!("{} ({song}), {}", tr("Go on with your last songs"), tr("or a Road Radio mix?")),
+        None => tr("Go on with your last songs, or a Road Radio mix?").to_string(),
+    };
+    with_app(st, |a| {
+        a.set_phones_text(text.into());
+        a.set_phones_ask(true);
+    });
+}
+
+/// Road Radio: a radio from one of your top songs (RaM points); a road-trip song without any.
+fn road_radio(st: &Shared) {
+    let top = rymplayer::ram_points::top_tracks(10);
+    if !top.is_empty() {
+        let t = top[rymplayer::updates::now() as usize % top.len()].clone();
+        toast(st, &format!("{}: {}", tr("Road Radio"), t.title));
+        play_with_radio(st, t);
+        return;
+    }
+    let Some(api) = st.borrow().api.clone() else { return };
+    post(async move { Ev::RoadSongs(api.search("road trip songs".to_string()).await) });
+}
+
+// ---------------------------------------------------------------- lyric cards
+
+/// A lyric line picked or unpicked for a card (up to 3).
+fn lyric_pick(st: &Shared, i: usize) {
+    let count = {
+        let mut s = st.borrow_mut();
+        let Some(mut row) = s.m.lyrics.row_data(i) else { return };
+        if let Some(at) = s.picked.iter().position(|p| *p == i) {
+            s.picked.remove(at);
+            row.picked = false;
+        } else if s.picked.len() >= 3 {
+            drop(s);
+            toast(st, tr("Up to 3 lines on a card"));
+            return;
+        } else {
+            s.picked.push(i);
+            row.picked = true;
+        }
+        s.m.lyrics.set_row_data(i, row);
+        s.picked.len()
+    };
+    with_app(st, |a| a.set_lyrics_picked(count as i32));
+}
+
+fn lyric_unpick(st: &Shared) {
+    {
+        let mut s = st.borrow_mut();
+        for i in std::mem::take(&mut s.picked) {
+            if let Some(mut row) = s.m.lyrics.row_data(i) {
+                row.picked = false;
+                s.m.lyrics.set_row_data(i, row);
+            }
+        }
+    }
+    with_app(st, |a| a.set_lyrics_picked(0));
+}
+
+/// The picked lines (in the song's order) on a card to save or copy.
+fn lyric_card(st: &Shared) {
+    let lines = {
+        let s = st.borrow();
+        let mut at = s.picked.clone();
+        at.sort_unstable();
+        at.iter().filter_map(|i| s.m.lyrics.row_data(*i)).map(|r| r.text.to_string()).collect::<Vec<_>>().join("\n")
+    };
+    if lines.trim().is_empty() {
+        return;
+    }
+    lyric_unpick(st);
+    open_share_with(st, Some(lines));
+}
+
 /// The song as a picture to save or copy.
 /// The playing song's link (YouTube Music, or SoundCloud) on the clipboard.
 fn copy_link(st: &Shared) {
@@ -4011,6 +4331,11 @@ fn copy_link(st: &Shared) {
 }
 
 fn open_share(st: &Shared) {
+    open_share_with(st, None);
+}
+
+/// The share window; `lines`: a lyric card's picked lines in place of the sung one.
+fn open_share_with(st: &Shared, lines: Option<String>) {
     let Some(ui) = st.borrow().ui.upgrade() else { return };
     let app = ui.global::<App>();
     if !app.get_has_song() {
@@ -4031,7 +4356,8 @@ fn open_share(st: &Shared) {
             l.synced.get(at).map(|x| x.1.clone())
         })
     };
-    w.set_line(line.unwrap_or_default().into());
+    w.set_card(lines.is_some());
+    w.set_line(lines.or(line).unwrap_or_default().into());
     let title = app.get_title().to_string();
     for copy in [false, true] {
         let weak = w.as_weak();
@@ -4218,14 +4544,19 @@ fn show_lyrics(st: &Shared, lyrics: Option<Lyrics>) {
         .map(|(i, text)| LyricLine { rtl: rymplayer::i18n::is_rtl(&text), text: text.into(), tr: l.translation.get(i).cloned().unwrap_or_default().into(), ro: ro.get(i).cloned().unwrap_or_default().into(), state: if l.synced.is_empty() { 1 } else { 0 }, ..Default::default() })
         .collect();
     let note = if l.synced.is_empty() { format!("{} · {} {}", tr("These lyrics aren't synced to the song"), tr("Lyrics from"), l.source) } else { format!("{} {}", tr("Lyrics from"), l.source) };
+    let note = format!("{note} · {}", tr("right-click up to 3 lines for a card"));
     let wants = translate && l.translation.is_empty() && rymplayer::lyrics::wants_translation(&l);
     {
         let mut s = st.borrow_mut();
         s.m.lyrics.set_vec(rows);
+        s.picked.clear();
         s.lyrics = Some(l.clone());
         s.shown.3 = -2;
     }
-    with_app(st, |a| a.set_lyrics_note(note.into()));
+    with_app(st, |a| {
+        a.set_lyrics_note(note.into());
+        a.set_lyrics_picked(0);
+    });
     show_sources(st, &l, &vid);
     let now = st.borrow().q.now().cloned();
     if wants && let Some(t) = now {
@@ -5335,6 +5666,17 @@ fn handle(st: &Shared, ev: Ev) {
             }
         }
         Ev::Blended(Err(e)) => toast(st, &format!("{}: {e}", tr("Mix Tastes"))),
+        Ev::Preview(id, key, song, at) => preview_ready(st, id, key, song, at),
+        Ev::FocusSongs(found) => {
+            let songs: Vec<Track> = found.unwrap_or_default().into_iter().filter(|t| t.link.is_none() && !t.video_id.is_empty()).collect();
+            if st.borrow().focus.on() && !songs.is_empty() {
+                play_list(st, songs, 0);
+            }
+        }
+        Ev::RoadSongs(found) => match found.ok().and_then(|r| r.into_iter().find(|t| t.link.is_none() && !t.video_id.is_empty())) {
+            Some(t) => play_with_radio(st, t),
+            None => toast(st, tr("Couldn't start Road Radio")),
+        },
         Ev::CacheCleared(freed) => {
             log(&format!("cache cleared: {} freed", stream::size_text(freed)));
             toast(st, &format!("{}: {}", tr("Cache cleared"), stream::size_text(freed)));
@@ -5480,7 +5822,7 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     app.set_source_at(1);
     app.set_lyrics(ModelRc::from(Rc::new(VecModel::from(vec![
         LyricLine { rtl: false, text: "夜に駆ける".into(), tr: "Racing into the night".into(), ro: "Yoru ni kakeru".into(), state: 2, ..Default::default() },
-        LyricLine { rtl: false, text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1, sung: "沈むように".into(), left: "溶けてゆくように".into() },
+        LyricLine { rtl: false, text: "沈むように溶けてゆくように".into(), tr: "As if sinking, as if melting".into(), ro: "Shizumu yō ni tokete yuku yō ni".into(), state: 1, sung: "沈むように".into(), left: "溶けてゆくように".into(), picked: true },
         LyricLine { rtl: false, text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0, ..Default::default() },
         LyricLine { rtl: true, text: "يا حسين يا مظلوم".into(), tr: "".into(), ro: "".into(), state: 0, ..Default::default() },
     ]))));

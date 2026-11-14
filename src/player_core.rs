@@ -7,6 +7,9 @@
 //! - [`alarm_rings`] and [`shuffled`]: the alarm, once a day at its time.
 //! - [`PeerWatch`]: Seamless Music, when a phone's music should move here.
 //! - [`song_with_radio`] and [`found_song`]: "Play in RyM", a song from a link.
+//! - [`preview_start`]: Preview Drop, 15 seconds from a song's best part.
+//! - [`Focus`]: the focus timer (25 minutes of music, a 5-minute break softer).
+//! - [`OutputWatch`]: headphones or Bluetooth connected with nothing playing (ask what to play).
 //!
 //! Network work comes back as a future for the app to run on its own runtime.
 
@@ -200,6 +203,11 @@ impl DeviceEq {
         true
     }
 
+    /// The device the sound goes to (at the last look).
+    pub fn device(&self) -> Option<&str> {
+        self.device.as_deref()
+    }
+
     /// The EQ was changed by hand: it's this device's from now on.
     pub fn changed(&mut self, cfg: &mut Config) {
         let device = self.device.clone().or_else(crate::audio::output_name);
@@ -326,5 +334,191 @@ mod tests {
         assert!(sc.heard(Some(&t), 50.0, 200.0, &cfg).is_none(), "sent once");
         let mut off = Scrobbler::default();
         assert!(off.start(&t, 200.0, &Config::default()).is_none(), "not signed in to Last.fm");
+    }
+}
+
+// ---------------------------------------------------------------- Preview Drop
+
+/// How long Preview Drop plays.
+pub const PREVIEW_SECS: f32 = 15.0;
+
+/// Where Preview Drop starts: the song's SponsorBlock highlight, else about a minute in (where the
+/// chorus usually is; a third of the way in for a short song). `length` in seconds.
+pub fn preview_start(highlight: Option<f32>, length: Option<f32>) -> f32 {
+    let length = length.filter(|l| *l > 0.0);
+    if let Some(h) = highlight.filter(|h| *h >= 0.0 && length.is_none_or(|l| *h < l - 3.0)) {
+        return h;
+    }
+    match length {
+        Some(l) => (l / 3.0).min(60.0).min((l - PREVIEW_SECS).max(0.0)),
+        None => 60.0,
+    }
+}
+
+// ---------------------------------------------------------------- the focus timer
+
+/// The focus timer's parts: music to work to, then a break with the music softer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusPart {
+    Work,
+    Break,
+}
+
+impl FocusPart {
+    pub fn length(self) -> Duration {
+        match self {
+            FocusPart::Work => Duration::from_secs(25 * 60),
+            FocusPart::Break => Duration::from_secs(5 * 60),
+        }
+    }
+
+    /// The music's volume in this part (1: as set).
+    pub fn level(self) -> f32 {
+        match self {
+            FocusPart::Work => 1.0,
+            FocusPart::Break => 0.4,
+        }
+    }
+}
+
+/// The focus timer (Pomodoro): 25 minutes of calm music (Lo-Fi, the rain look), then a 5-minute
+/// break with the music softer, again and again until it's stopped.
+#[derive(Default)]
+pub struct Focus {
+    part: Option<(FocusPart, Instant)>,
+}
+
+/// What a focus session plays while working.
+pub const FOCUS_SEARCH: &str = "lofi hip hop beats to study";
+
+impl Focus {
+    /// Starts it (working) or stops it; the part it's in now (None: stopped).
+    pub fn toggle(&mut self, now: Instant) -> Option<FocusPart> {
+        self.part = match self.part {
+            Some(_) => None,
+            None => Some((FocusPart::Work, now)),
+        };
+        self.part.map(|p| p.0)
+    }
+
+    pub fn on(&self) -> bool {
+        self.part.is_some()
+    }
+
+    /// The part it's in and the time left of it.
+    pub fn left(&self, now: Instant) -> Option<(FocusPart, Duration)> {
+        self.part.map(|(p, began)| (p, p.length().saturating_sub(now.saturating_duration_since(began))))
+    }
+
+    /// Each tick: the part it moved into, when the last one ran out.
+    pub fn tick(&mut self, now: Instant) -> Option<FocusPart> {
+        let (p, began) = self.part?;
+        if now.saturating_duration_since(began) < p.length() {
+            return None;
+        }
+        let next = match p {
+            FocusPart::Work => FocusPart::Break,
+            FocusPart::Break => FocusPart::Work,
+        };
+        self.part = Some((next, began + p.length()));
+        Some(next)
+    }
+
+    /// The music's volume now (1 when off or working).
+    pub fn level(&self) -> f32 {
+        self.part.map_or(1.0, |p| p.0.level())
+    }
+}
+
+/// "24:10": the time left, as minutes and seconds.
+pub fn mm_ss(d: Duration) -> String {
+    let s = d.as_secs();
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+// ---------------------------------------------------------------- headphones connected
+
+/// Headphones or a Bluetooth set by its name (Windows, Linux and macOS name them so).
+pub fn is_personal_output(name: &str) -> bool {
+    let n = name.to_lowercase();
+    ["headphone", "headset", "earphone", "earbud", "airpods", "buds", "bluetooth", "hands-free", "handsfree", "a2dp", "سماع"].iter().any(|w| n.contains(w))
+}
+
+/// Headphones or Bluetooth connected with nothing playing: RyM asks what to play (the last
+/// songs, or a Road Radio mix), at most every 10 minutes.
+#[derive(Default)]
+pub struct OutputWatch {
+    /// The device at the last look (None before the first).
+    device: Option<String>,
+    asked: Option<Instant>,
+}
+
+impl OutputWatch {
+    /// The sound goes to `now` (from [`DeviceEq::device`]): true when it just moved to headphones
+    /// or Bluetooth, nothing plays and RyM didn't ask in the last 10 minutes.
+    pub fn moved(&mut self, now: Option<&str>, playing: bool, at: Instant) -> bool {
+        let Some(now) = now else { return false };
+        let Some(before) = self.device.replace(now.to_string()) else { return false };
+        if before == now || playing || !is_personal_output(now) {
+            return false;
+        }
+        if self.asked.is_some_and(|t| at.saturating_duration_since(t) < Duration::from_secs(600)) {
+            return false;
+        }
+        self.asked = Some(at);
+        true
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn preview_starts_at_the_best_part() {
+        assert_eq!(preview_start(Some(72.0), Some(200.0)), 72.0);
+        // No highlight: a minute in, a third in for a short song, never past its last 15 s.
+        assert_eq!(preview_start(None, Some(240.0)), 60.0);
+        assert_eq!(preview_start(None, Some(90.0)), 30.0);
+        assert_eq!(preview_start(None, Some(20.0)), 5.0);
+        assert_eq!(preview_start(None, None), 60.0);
+        // A highlight past the end is ignored.
+        assert_eq!(preview_start(Some(300.0), Some(200.0)), 60.0);
+    }
+
+    #[test]
+    fn focus_works_then_breaks() {
+        let t0 = Instant::now();
+        let mut f = Focus::default();
+        assert_eq!(f.level(), 1.0);
+        assert_eq!(f.toggle(t0), Some(FocusPart::Work));
+        assert_eq!(f.tick(t0 + Duration::from_secs(60)), None);
+        assert_eq!(f.left(t0 + Duration::from_secs(60)).map(|l| l.1), Some(Duration::from_secs(24 * 60)));
+        assert_eq!(f.tick(t0 + Duration::from_secs(25 * 60)), Some(FocusPart::Break));
+        assert_eq!(f.level(), 0.4);
+        assert_eq!(f.tick(t0 + Duration::from_secs(30 * 60)), Some(FocusPart::Work));
+        assert_eq!(f.level(), 1.0);
+        assert_eq!(f.toggle(t0), None);
+        assert!(!f.on());
+        assert_eq!(mm_ss(Duration::from_secs(24 * 60 + 5)), "24:05");
+    }
+
+    #[test]
+    fn headphones_connecting_asks_once() {
+        let t0 = Instant::now();
+        let mut w = OutputWatch::default();
+        // The first look only learns the device.
+        assert!(!w.moved(Some("Speakers (Realtek(R) Audio)"), false, t0));
+        assert!(w.moved(Some("Headphones (WH-1000XM4)"), false, t0));
+        assert!(!w.moved(Some("Headphones (WH-1000XM4)"), false, t0));
+        // Back and again within 10 minutes: not again.
+        assert!(!w.moved(Some("Speakers (Realtek(R) Audio)"), false, t0));
+        assert!(!w.moved(Some("Headphones (WH-1000XM4)"), false, t0 + Duration::from_secs(60)));
+        // Playing already, or speakers: nothing to ask.
+        let mut w = OutputWatch::default();
+        w.moved(Some("Speakers"), false, t0);
+        assert!(!w.moved(Some("Galaxy Buds2 Pro"), true, t0));
+        assert!(!w.moved(Some("Monitor (HDMI)"), false, t0));
+        assert!(is_personal_output("سماعات الرأس"));
     }
 }

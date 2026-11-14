@@ -75,6 +75,24 @@ fn parse(list: &Value, video_id: &str) -> Segments {
     out
 }
 
+/// The video's highlight (SponsorBlock's `poi_highlight`, its best moment, as marked by its users),
+/// in seconds: Preview Drop starts there.
+pub async fn highlight(video_id: &str) -> Option<f32> {
+    if !crate::is_youtube(video_id) || video_id.is_empty() {
+        return None;
+    }
+    let url = format!("https://sponsor.ajay.app/api/skipSegments/{}?categories=[\"poi_highlight\"]&actionTypes=[\"poi\"]", prefix(video_id));
+    let resp = http().get(url).send().await.ok()?;
+    let list: Value = resp.error_for_status().ok()?.json().await.ok()?;
+    list.as_array()?
+        .iter()
+        .filter(|v| v["videoID"].as_str() == Some(video_id))
+        .flat_map(|v| v["segments"].as_array().cloned().unwrap_or_default())
+        .find(|s| s["category"].as_str() == Some("poi_highlight"))
+        .and_then(|s| s["segment"][0].as_f64())
+        .map(|x| x as f32)
+}
+
 /// The end of the part `pos` is in (where to jump), unless it's within its last half second.
 pub fn skip_to(segments: &Segments, pos: f32) -> Option<f32> {
     segments.iter().find(|(a, b)| pos >= *a && pos < *b - 0.5).map(|(_, b)| *b)

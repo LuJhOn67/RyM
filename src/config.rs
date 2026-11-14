@@ -119,6 +119,12 @@ pub struct Config {
     /// The colors: a built-in theme's name, "Custom" (`custom_theme`), or empty (the layout's own).
     #[serde(default)]
     pub palette: String,
+    /// The focus timer shows the rain look; the colors to come back to (RyM closed during a
+    /// focus session: they come back at the next start).
+    #[serde(default)]
+    pub focus_palette: String,
+    /// Headphones or Bluetooth connect with nothing playing: ask what to play.
+    pub headphones_prompt: bool,
     /// The user's own theme (imported from a `.json` file).
     #[serde(default)]
     pub custom_theme: Option<crate::themes::Theme>,
@@ -340,6 +346,8 @@ impl Default for Config {
             lyrics_translation: true,
             lyrics_font: 25,
             link_auto: true,
+            headphones_prompt: true,
+            focus_palette: String::new(),
             skip_silence: true,
             eq_preset: 0,
             eq_custom: [0.0; 5],
@@ -623,6 +631,12 @@ impl Config {
             c.discord_app_id = DISCORD_APP_ID.into();
         }
         c.palette = crate::themes::current_name(&c.palette).to_string();
+        if !c.focus_palette.is_empty() {
+            c.palette = std::mem::take(&mut c.focus_palette);
+            if c.palette == "-" {
+                c.palette.clear();
+            }
+        }
         c
     }
 

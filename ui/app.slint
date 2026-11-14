@@ -49,6 +49,8 @@ export struct LyricLine {
     // Word by word (sources with word times): what's been sung of this line, and what's left.
     sung: string,
     left: string,
+    // Picked (right-click) for a lyric card.
+    picked: bool,
 }
 
 export struct Suggest {
@@ -279,6 +281,20 @@ export global App {
     // Seamless Music, asked first: what plays on the phone.
     in-out property <bool> peer-ask;
     in property <string> peer-text;
+    // Headphones or Bluetooth connected with nothing playing: what to play?
+    in-out property <bool> phones-ask;
+    in property <string> phones-text;
+    callback phones-choice(int);
+    // The focus timer: "Focus · 24:10" (empty: off).
+    in property <string> focus-text;
+    // Preview Drop: the song previewing now (its key), and the button on search results.
+    in property <string> preview-key;
+    callback preview(string);
+    // Lyric cards: lines picked (right-click), then shared as a picture.
+    in property <int> lyrics-picked;
+    callback lyric-pick(int);
+    callback lyric-card();
+    callback lyric-unpick();
 
     callback toggle-play();
     callback next();
@@ -608,6 +624,8 @@ component VideoBadge inherits Rectangle {
 component SongRow inherits Rectangle {
     in property <Song> song;
     in property <bool> handle: true;
+    // Preview Drop's button: 15 seconds from the song's best part.
+    in property <bool> preview;
     in property <bool> in-queue;
     in property <length> cover-size: 82px * Ui.k;
     in property <length> title-size: 24px * Ui.k;
@@ -659,6 +677,15 @@ component SongRow inherits Rectangle {
             width: 21px * Ui.k;
             for i in 3: Rectangle { height: 2px * Ui.k; background: Theme.handle; }
         }
+        if Ui.rtl && root.preview: VerticalLayout {
+            alignment: center;
+            Icon {
+                size: 36px * Ui.k;
+                source: @image-url("icons/headphones-round-linear.svg");
+                tint: App.preview-key == root.song.key ? Theme.accent : Theme.dim;
+                clicked => { App.preview(root.song.key); }
+            }
+        }
         if Ui.rtl: names-r := VerticalLayout {
             alignment: center;
             spacing: 12px * Ui.k;
@@ -686,6 +713,15 @@ component SongRow inherits Rectangle {
                 if root.song.video: VideoBadge { }
                 Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; }
                 if root.song.why != "": Text { text: "· " + root.song.why; font-size: 14px * Ui.k; color: Theme.accent.with-alpha(0.85); overflow: elide; }
+            }
+        }
+        if !Ui.rtl && root.preview: VerticalLayout {
+            alignment: center;
+            Icon {
+                size: 36px * Ui.k;
+                source: @image-url("icons/headphones-round-linear.svg");
+                tint: App.preview-key == root.song.key ? Theme.accent : Theme.dim;
+                clicked => { App.preview(root.song.key); }
             }
         }
         if !Ui.rtl && root.handle: Rectangle {
@@ -1092,6 +1128,26 @@ component FlatVolume inherits Rectangle {
     }
 }
 
+// The lines picked for a lyric card: how many, share, clear (over the bottom of the lyrics).
+component CardBar inherits Rectangle {
+    height: 56px * Ui.k;
+    width: bar.preferred-width;
+    border-radius: (28px * Ui.k) * Theme.round;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.border;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #00000050;
+    bar := HorizontalLayout {
+        padding: 6px * Ui.k;
+        padding-left: 18px * Ui.k;
+        spacing: 10px * Ui.k;
+        Text { text: App.lyrics-picked + " / 3"; font-size: 15px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+        Button { text: App.tr("Share as a card"); strong: true; clicked => { App.lyric-card(); } }
+        Button { text: App.tr("Clear"); clicked => { App.lyric-unpick(); } }
+    }
+}
+
 // The synced lyrics: the sung line bright (the karaoke fills it as it's sung), romaji and
 // English small under Japanese lines.
 component Lyrics inherits Rectangle {
@@ -1159,6 +1215,8 @@ component Lyrics inherits Rectangle {
                 }
                 lbox := Rectangle {
                     height: line.preferred-height;
+                    border-radius: (6px * Ui.k) * Theme.round;
+                    background: l.picked ? Theme.accent.with-alpha(0.22) : transparent;
                     // The sung line filling word by word, letter by letter, when its source has word times.
                     property <bool> by-word: l.state == 1 && (l.sung != "" || l.left != "");
                     line := Text {
@@ -1182,6 +1240,12 @@ component Lyrics inherits Rectangle {
                     TouchArea {
                         mouse-cursor: pointer;
                         clicked => { App.lyric-clicked(i); }
+                        // Right-click: picked for a lyric card (up to 3 lines).
+                        pointer-event(e) => {
+                            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
+                                App.lyric-pick(i);
+                            }
+                        }
                     }
                 }
                 if l.ro != "": Text {
@@ -1202,6 +1266,10 @@ component Lyrics inherits Rectangle {
                 }
             }
         }
+    }
+    if App.lyrics-picked > 0: CardBar {
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 14px * Ui.k;
     }
 }
 
@@ -1852,7 +1920,7 @@ component SearchPage inherits Page {
                 }
             }
         }
-        for s in App.results: SongRow { song: s; handle: false; }
+        for s in App.results: SongRow { song: s; handle: false; preview: true; }
     }
 }
 
@@ -2885,6 +2953,42 @@ export component AppWindow inherits Window {
             }
         }
     }
+    // Headphones or Bluetooth connected with nothing playing: go on, or Road Radio?
+    if App.phones-ask: Rectangle {
+        background: #00000070;
+        TouchArea { }
+        Rectangle {
+            width: min(root.width - 40px, 460px);
+            height: hcol.preferred-height;
+            border-radius: (18px) * Theme.round;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            hcol := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: App.tr("Headphones connected"); font-size: 20px; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+                Text { text: App.phones-text; font-size: 16px; color: Theme.dim; wrap: word-wrap; horizontal-alignment: Ui.start; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: LayoutAlignment.end;
+                    Button { text: App.tr("Not now"); clicked => { App.phones-choice(0); } }
+                    Button { text: App.tr("Road Radio"); clicked => { App.phones-choice(2); } }
+                    Button { text: App.tr("Resume"); strong: true; clicked => { App.phones-choice(1); } }
+                }
+            }
+        }
+    }
+    // The focus timer: the part and the time left, at the top.
+    if App.focus-text != "": Rectangle {
+        x: (root.width - self.width) / 2;
+        y: 10px;
+        height: 30px;
+        width: ftext.preferred-width + 28px;
+        border-radius: (15px) * Theme.round;
+        background: Theme.accent.with-alpha(0.92);
+        ftext := Text { text: App.focus-text; font-size: 14px; font-weight: 600; color: #ffffff; }
+    }
     // A short notice at the bottom.
     if App.toast != "": Rectangle {
         y: root.height - (Theme.wide ? 150px : 90px);
@@ -3039,6 +3143,8 @@ export component ShareWindow inherits Window {
     in property <string> song;
     in property <string> artist;
     in property <string> line;
+    // A lyric card: picked lines (up to 3) instead of the sung one.
+    in property <bool> card;
     in property <color> accent: #ea814a;
     in-out property <bool> capturing;
     callback save();
@@ -3048,14 +3154,14 @@ export component ShareWindow inherits Window {
         padding: 40px;
         spacing: 18px;
         Rectangle {
-            height: 480px;
+            height: root.card ? 380px : 480px;
             border-radius: (16px) * Theme.round;
             clip: true;
             Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; }
         }
         Text { text: root.song; font-size: 30px; font-weight: 700; color: #ffffff; overflow: elide; }
         Text { text: root.artist; font-size: 20px; color: #ffffffb0; overflow: elide; }
-        if root.line != "": Text { text: "“" + root.line + "”"; font-size: 18px; color: root.accent; wrap: word-wrap; }
+        if root.line != "": Text { text: root.card ? root.line : "“" + root.line + "”"; font-size: root.card ? 24px : 18px; font-weight: root.card ? 700 : 400; color: root.accent; wrap: word-wrap; }
     }
     Text {
         x: parent.width - self.width - 22px;
