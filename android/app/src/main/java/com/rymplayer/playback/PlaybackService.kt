@@ -324,6 +324,7 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
         val playing = p.isPlaying || (mix?.new?.isPlaying == true)
         val art = m.artworkUri
         com.rymplayer.playback.PlayerWidget.show(this, m.title?.toString(), m.artist?.toString(), playing, widgetCover.takeIf { art != null && art == widgetCoverFor })
+        RymTile.show(this, m.title?.toString(), m.artist?.toString(), playing)
         if (art != null && art != widgetCoverFor) {
             widgetCoverFor = art
             libraryScope.launch {

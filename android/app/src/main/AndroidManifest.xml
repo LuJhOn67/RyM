@@ -92,6 +92,18 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/update_paths" />
         </provider>
+        <!-- RyM in Quick Settings: the song, and play / pause with a tap. -->
+        <service
+            android:name=".playback.RymTile"
+            android:exported="true"
+            android:icon="@android:drawable/ic_media_play"
+            android:label="RyM"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"
