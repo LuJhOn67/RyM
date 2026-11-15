@@ -2514,6 +2514,7 @@ fn press(st: &Shared, id: &str) {
             fill_settings(st);
         }
         "focus" => toggle_focus(st),
+        "home-play-all" => home_play_all(st),
         "join-discord" => {
             let _ = rymplayer::updates::open_link(rymplayer::updates::DISCORD);
         }
@@ -4367,6 +4368,26 @@ fn lyric_card(st: &Shared) {
     }
     lyric_unpick(st);
     open_share_with(st, Some(lines));
+}
+
+/// Play all (the home page): every song on it, each once, listed and playing.
+fn home_play_all(st: &Shared) {
+    let songs: Vec<Track> = {
+        let s = st.borrow();
+        let mut seen = HashSet::new();
+        s.home
+            .iter()
+            .filter(|t| t.link.is_none() && !t.video_id.is_empty() && seen.insert(t.video_id.clone()))
+            // The shelf's name is kept in `album` on the home page: not the song's album.
+            .map(|t| Track { album: String::new(), ..t.clone() })
+            .collect()
+    };
+    if songs.is_empty() {
+        toast(st, tr("Home isn't loaded yet"));
+        return;
+    }
+    play_list(st, songs.clone(), 0);
+    open_list(st, tr("Home mix").into(), async move { Ok(songs) });
 }
 
 /// The song as a picture to save or copy.

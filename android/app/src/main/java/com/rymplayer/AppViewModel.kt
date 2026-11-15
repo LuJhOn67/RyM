@@ -44,7 +44,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device, Lyrics }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device, Lyrics, HomeMix }
 }
 
 /** The focus timer's parts: 25 minutes of work, 5 of break. */
@@ -1319,6 +1319,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.Radio -> api.radio(page.id)
                     Screen.Kind.Artist -> api.artist(page.id)
                     Screen.Kind.History -> api.history()
+                    Screen.Kind.HomeMix -> homeMix()
                     Screen.Kind.Results -> api.searchPaged(page.id).also { p -> p.more?.let { pageMore[page] = it } }.tracks
                     Screen.Kind.Downloads -> Downloads.list(getApplication())
                     Screen.Kind.Device -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.LocalSongs.list(getApplication()) }
@@ -1345,6 +1346,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** "Ok Google, play X on RyM": the first song found for the words plays, with its list after
      *  it; no words: the music goes on. */
+    /** Every song on the home page, each once (the shelf's name, kept in `album`, taken off). */
+    private fun homeMix(): List<Track> =
+        home.filter { it.link == null && it.videoId.isNotEmpty() }.distinctBy { it.videoId }.map { it.copy(album = "") }
+
+    /** Play all (the home page): its songs listed and playing. */
+    fun playHomeMix() {
+        val songs = homeMix()
+        if (songs.isEmpty()) {
+            status = tr("Home isn't loaded yet")
+            return
+        }
+        val page = Screen.Songs(Screen.Kind.HomeMix, "home-mix", tr("Home mix"))
+        pages[page] = songs
+        playFrom(songs, 0)
+        open(page)
+    }
+
     fun playFromSearch(q: String) {
         if (q.isBlank()) {
             if (player.current != null) player.toggle() else Recent.tracks(getApplication()).takeIf { it.isNotEmpty() }?.let { playFrom(it, 0) }

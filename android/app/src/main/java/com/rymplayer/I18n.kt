@@ -95,6 +95,8 @@ object I18n {
         "No lyrics for this song" to "لا توجد كلمات لهذه الأغنية",
         "These lyrics aren't synced to the song" to "هذه الكلمات غير متزامنة مع الأغنية",
         "Lyrics from" to "الكلمات من",
+        "Home mix" to "خلطة الرئيسية",
+        "Home isn't loaded yet" to "الرئيسية بعدها ما تحمّلت",
         "Community" to "المجتمع",
         "Join the Discord" to "انضم للدسكورد",
         "RyM huB: news, help, and songs to share, in Arabic and English" to "RyM huB: الأخبار والمساعدة ومشاركة الأغاني، بالعربي والإنكليزي",

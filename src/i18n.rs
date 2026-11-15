@@ -111,6 +111,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "Home mix" => "خلطة الرئيسية",
+        "Home isn't loaded yet" => "الرئيسية بعدها ما تحمّلت",
         "Community" => "المجتمع",
         "Join the Discord" => "انضم للدسكورد",
         "RyM huB: news, help, and songs to share, in Arabic and English" => "RyM huB: الأخبار والمساعدة ومشاركة الأغاني، بالعربي والإنكليزي",

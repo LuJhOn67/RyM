@@ -119,6 +119,18 @@ fun HomePage(vm: AppViewModel) {
     androidx.compose.material3.pulltorefresh.PullToRefreshBox(isRefreshing = vm.homeLoading, onRefresh = vm::loadHome) {
     LazyColumn(state = state, contentPadding = pagePadding) {
         item { HomeTitle(vm) }
+        // Play all: every song on the home page, listed and playing.
+        item {
+            androidx.compose.material3.Button(
+                { vm.playHomeMix() },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp).height(44.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp),
+            ) {
+                Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(tr("Play all"), fontWeight = FontWeight.SemiBold)
+            }
+        }
         if (vm.ytmTheme) {
             itemsIndexed(ytmSections(vm.home), key = { i, _ -> "ytm$i" }) { i, sec -> YtmSection(vm, sec, current, Modifier.appear(sec.name, 60 * i.coerceAtMost(6))) }
             if (vm.loadingMore) item { MoreSpinner() }

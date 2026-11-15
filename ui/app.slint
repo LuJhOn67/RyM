@@ -1983,6 +1983,13 @@ component HomePage inherits Page {
             action: App.home-loading ? App.tr("Refreshing…") : App.tr("Refresh");
             acted => { App.refresh-home(); }
         }
+        // Play all: every song on the home page, listed and playing.
+        if App.home.length > 0: HorizontalLayout {
+            alignment: Ui.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+            padding-left: Ui.rtl ? 0 : 12px * Ui.k;
+            padding-right: Ui.rtl ? 12px * Ui.k : 0;
+            Button { text: "▶  " + App.tr("Play all"); strong: true; clicked => { App.press("home-play-all"); } }
+        }
         if App.home.length == 0: Text {
             text: App.home-loading ? App.tr("Loading your feed…") : App.tr("Nothing here yet");
             font-size: 20px * Ui.k;
