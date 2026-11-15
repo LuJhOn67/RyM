@@ -11,8 +11,56 @@ pub const SYNC_EVERY: Duration = Duration::from_secs(120);
 /// long at most (YouTube Music's liked list can take minutes to show a new like).
 const LOCAL_WINS_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How many liked songs are read (the whole list, page after page).
-pub const READ_UP_TO: usize = 5000;
+/// The whole liked list is read again this often (and at the start); between, only its first page.
+const FULL_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Reading the liked songs: the whole list (every page, however many) at the start and once a
+/// day; between, only the first page (new likes come at the top), merged into the list read
+/// before. One request every sync instead of one per hundred likes.
+#[derive(Debug, Default)]
+pub struct Reading {
+    full_at: Option<Instant>,
+}
+
+impl Reading {
+    /// The read to do now (hand it the list read before): the whole list when it's due or nothing
+    /// was read yet.
+    pub fn read(&mut self, api: crate::api::Api, before: Vec<crate::api::Track>) -> impl std::future::Future<Output = anyhow::Result<Vec<crate::api::Track>>> + Send + use<> {
+        let full = before.is_empty() || self.full_at.is_none_or(|t| t.elapsed() >= FULL_EVERY);
+        if full {
+            self.full_at = Some(Instant::now());
+        }
+        async move {
+            if full {
+                return api.playlist_all(crate::api::LIKED_ID.into(), usize::MAX).await;
+            }
+            let top = api.playlist_tracks(crate::api::LIKED_ID.into()).await?;
+            Ok(merge_top(top, &before, |t| t.video_id.as_str()))
+        }
+    }
+
+    /// The next read is the whole list (a full read failed).
+    pub fn again(&mut self) {
+        self.full_at = None;
+    }
+}
+
+/// The liked list's first page (newest first) over the list read before: the songs above the
+/// page's last known song that aren't on it any more were unliked; the rest of the old list
+/// follows. Unlikes further down show at the next whole read.
+pub fn merge_top<T: Clone>(top: Vec<T>, before: &[T], id: impl Fn(&T) -> &str) -> Vec<T> {
+    let on_top: HashSet<&str> = top.iter().map(&id).collect();
+    // The page's last song the old list has: everything above it in the old list is on the page,
+    // or was unliked.
+    let anchor = top.iter().rev().find_map(|t| before.iter().position(|b| id(b) == id(t)));
+    let rest = match anchor {
+        Some(k) => &before[k + 1..],
+        None => before,
+    };
+    let mut out = top.clone();
+    out.extend(rest.iter().filter(|b| !on_top.contains(id(b))).cloned());
+    out
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Likes {
@@ -79,6 +127,22 @@ mod tests {
         l.sync(["a".to_string(), "d".to_string()]);
         assert!(!l.contains("a") && !l.contains("b") && l.contains("c") && l.contains("d"));
         assert_eq!(l.len(), 2);
+    }
+
+    fn merged(top: &[&str], before: &[&str]) -> Vec<String> {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        merge_top(v(top), &v(before), |s: &String| s.as_str())
+    }
+
+    #[test]
+    fn the_first_page_merges_into_the_list() {
+        let before = ["e", "d", "c", "b", "a"];
+        // Two new likes on top, "d" unliked; the page ends at "c".
+        assert_eq!(merged(&["g", "f", "e", "c"], &before), ["g", "f", "e", "c", "b", "a"]);
+        // Only new songs on the page: the old list follows whole.
+        assert_eq!(merged(&["x", "y"], &before), ["x", "y", "e", "d", "c", "b", "a"]);
+        // Nothing read before.
+        assert_eq!(merged(&["x"], &[]), ["x"]);
     }
 
     #[test]

@@ -176,6 +176,8 @@ struct State {
     preview_paused: bool,
     /// Lyric cards: the lines picked (up to 3).
     picked: Vec<usize>,
+    /// The liked songs: the whole list at the start and once a day, else the first page.
+    likes_reading: rymplayer::likes::Reading,
     /// yt-dlp, ejs and Node as found (the settings).
     ytdlp_status: String,
     crossfade_for: u64,
@@ -577,6 +579,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         preview_req: 0,
         preview_paused: false,
         picked: Vec::new(),
+        likes_reading: Default::default(),
         ytdlp_status: String::new(),
         crossfade_for: 0,
         resume_at: None,
@@ -2986,7 +2989,7 @@ fn open_card(st: &Shared, key: &str) {
         match rest {
             "liked" => {
                 let liked = st.borrow().liked_tracks.clone();
-                open_list(st, tr("Liked songs").into(), async move { if liked.is_empty() { api.playlist_all(LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await } else { Ok(liked) } });
+                open_list(st, tr("Liked songs").into(), async move { if liked.is_empty() { api.playlist_all(LIKED_ID.into(), usize::MAX).await } else { Ok(liked) } });
             }
             "history" => open_list(st, tr("History").into(), api.history()),
             _ => {
@@ -3252,8 +3255,12 @@ fn prompt_done(st: &Shared, ok: bool) {
 fn sync_with_account(st: &Shared) {
     let api = st.borrow().api.clone().filter(Api::logged_in);
     if let Some(api) = api {
-        let a2 = api.clone();
-        post(async move { Ev::Liked(a2.playlist_all(LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await) });
+        let read = {
+            let mut s = st.borrow_mut();
+            let before = s.liked_tracks.clone();
+            s.likes_reading.read(api.clone(), before)
+        };
+        post(async move { Ev::Liked(read.await) });
         post(async move { Ev::History(api.history().await) });
     }
 }
@@ -5065,7 +5072,7 @@ fn handle(st: &Shared, ev: Ev) {
             }
             refresh_hearts(st);
         }
-        Ev::Liked(Err(_)) => {}
+        Ev::Liked(Err(_)) => st.borrow_mut().likes_reading.again(),
         Ev::FolderPicked(Some(dir)) => {
             {
                 let mut s = st.borrow_mut();

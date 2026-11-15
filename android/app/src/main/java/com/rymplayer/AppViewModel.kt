@@ -812,7 +812,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // Both at once instead of one after the other.
                     val (lists, likedSongs) = coroutineScope {
                         val lists = async { api.libraryPlaylists() }
-                        val likedSongs = async { api.playlistAll(LIKED_ID, 5000) }
+                        val likedSongs = async { readLiked() }
                         lists.await() to likedSongs.await()
                     }
                     playlists = lists
@@ -1013,7 +1013,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val user = api.signedIn
                     val recent = Recent.tracks(ctx)
                     val page = async { api.homePaged(3) }
-                    val likedSongs = async { if (user) runCatching { api.playlistAll(LIKED_ID, 5000) }.getOrNull() else null }
+                    val likedSongs = async { if (user) runCatching { readLiked() }.getOrNull() else null }
                     val played = async { if (user) runCatching { api.history() }.getOrDefault(emptyList()) else emptyList() }
                     val home = page.await()
                     val arranged = FeedMemory.arrange(ctx, home.tracks)
@@ -1193,6 +1193,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The liked songs as last read (mixed into Up next). */
     private var likedTracks: List<Track> = emptyList()
 
+    /** When the whole liked list was last read (0: not yet). */
+    private var likesFullAt = 0L
+
+    /** The liked songs: the whole list at the start and once a day, else the first page merged in (see [com.rymplayer.data.LikedList]). */
+    private suspend fun readLiked(): List<Track> {
+        // After the view model is fully made (this may start from init).
+        kotlinx.coroutines.yield()
+        val now = System.currentTimeMillis()
+        if (likedTracks.isNotEmpty() && now - likesFullAt < com.rymplayer.data.LikedList.FULL_EVERY_MS) {
+            return com.rymplayer.data.LikedList.mergeTop(api.playlist(LIKED_ID), likedTracks) { it.videoId }
+        }
+        return api.playlistAll(LIKED_ID, Int.MAX_VALUE).also { likesFullAt = now }
+    }
+
     private fun syncLiked(songs: List<Track>) {
         likedTracks = songs
         val now = System.currentTimeMillis()
@@ -1214,7 +1228,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun syncLikesNow() {
         if (!api.signedIn || syncJob?.isActive == true) return
-        syncJob = viewModelScope.launch { runCatching { api.playlistAll(LIKED_ID, 5000) }.onSuccess(::syncLiked) }
+        syncJob = viewModelScope.launch { runCatching { readLiked() }.onSuccess(::syncLiked) }
     }
 
     /**

@@ -686,6 +686,8 @@ struct Ui {
     liked: Likes,
     liked_tracks: Vec<Track>,
     likes_synced: Instant,
+    /// The liked songs: the whole list at the start and once a day, else the first page.
+    likes_reading: rymplayer::likes::Reading,
 
     /// What plays: the songs, the playing one, and the ones added to play after it.
     q: rymplayer::queue::Queue,
@@ -1555,6 +1557,7 @@ fn build(app: &Application) {
         liked: Likes::default(),
         liked_tracks: Vec::new(),
         likes_synced: Instant::now(),
+        likes_reading: Default::default(),
         q: Default::default(),
         played: HashSet::new(),
         ended_for: 0,
@@ -4458,8 +4461,13 @@ fn toggle_like(ui: &Shared, t: &Track) {
 
 fn sync_likes(ui: &Shared) {
     let Some(api) = api_of(ui).filter(Api::logged_in) else { return };
-    ui.borrow_mut().likes_synced = Instant::now();
-    post(ui, async move { Ev::Liked(api.playlist_all(LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await) });
+    let read = {
+        let mut s = ui.borrow_mut();
+        s.likes_synced = Instant::now();
+        let before = s.liked_tracks.clone();
+        s.likes_reading.read(api, before)
+    };
+    post(ui, async move { Ev::Liked(read.await) });
 }
 
 // ---------------------------------------------------------------- playback
@@ -6179,7 +6187,7 @@ fn poll_events(ui: &Shared) {
             }
             Ev::Playlists(Err(e)) => toast(ui, &format!("Playlists: {e}")),
             Ev::Liked(Ok(t)) => sync_liked(ui, t),
-            Ev::Liked(Err(_)) => {}
+            Ev::Liked(Err(_)) => ui.borrow_mut().likes_reading.again(),
             Ev::Cover(url, pixels) => {
                 let texture = pixels.map(|(w, h, data)| -> gdk::Texture {
                     gdk::MemoryTexture::new(w as i32, h as i32, gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(data), w as usize * 4)

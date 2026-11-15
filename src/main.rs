@@ -253,6 +253,8 @@ struct App {
     liked: Likes,
     /// When the liked songs were last read from the account.
     likes_synced: Instant,
+    /// The liked songs: the whole list at the start and once a day, else the first page.
+    likes_reading: rymplayer::likes::Reading,
     /// Start playing this page as soon as it loads (radio started with `r`).
     play_when_loaded: Option<Page>,
     radio_pending: bool,
@@ -339,6 +341,7 @@ impl App {
             lyrics_bg: rymplayer::colors::PLAIN,
             liked: Likes::default(),
             likes_synced: Instant::now(),
+            likes_reading: Default::default(),
             play_when_loaded: None,
             radio_pending: false,
             areas: ui::Areas::default(),
@@ -761,7 +764,7 @@ impl App {
                     self.track_state.select((!self.tracks.is_empty()).then(|| self.track_state.selected().unwrap_or(0).min(last)));
                 }
             }
-            Event::Liked(Err(_)) => {}
+            Event::Liked(Err(_)) => self.likes_reading.again(),
             Event::Rated(_, _, Ok(())) => {}
             Event::ArtistFound(name, Ok(Some(id))) => {
                 self.status.clear();
@@ -2146,7 +2149,8 @@ impl App {
         if self.logged_in() && self.likes_synced.elapsed() > SYNC_EVERY {
             self.likes_synced = Instant::now();
             if let Some(api) = self.api.clone() {
-                self.spawn(async move { Event::Liked(s(api.playlist_all(api::LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await)) });
+                let read = self.likes_reading.read(api, self.liked_tracks.clone());
+                self.spawn(async move { Event::Liked(s(read.await)) });
             }
         }
         self.sound_tick();
