@@ -33,13 +33,26 @@ object HubShare {
         return address
     }
 
-    /** Blocking; nothing when RyM huB has no relay yet. */
-    fun share(videoId: String, name: String) {
+    /** The song played: [share] posts it in the room; [key] (linked) earns listening XP. Blocking. */
+    fun share(videoId: String, name: String, key: String, share: Boolean) {
         val to = address() ?: return
         val body = buildJsonObject {
             put("video_id", videoId)
             put("name", name.trim())
+            put("key", key)
+            put("share", share)
         }.toString()
         runCatching { http.newCall(Request.Builder().url(to).post(body.toRequestBody("application/json".toMediaType())).build()).execute().close() }
+    }
+
+    /** The code from the bot's /link, traded for the member's key (null when it didn't work). Blocking. */
+    fun link(code: String): String? {
+        val to = address()?.removeSuffix("/np")?.plus("/link") ?: return null
+        val body = buildJsonObject { put("code", code.trim()) }.toString()
+        return runCatching {
+            http.newCall(Request.Builder().url(to).post(body.toRequestBody("application/json".toMediaType())).build()).execute().use { r ->
+                Json.parseToJsonElement(r.body?.string().orEmpty()).jsonObject["key"]?.jsonPrimitive?.content
+            }
+        }.getOrNull()?.takeIf { it.length == 32 }
     }
 }

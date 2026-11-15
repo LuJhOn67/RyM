@@ -1286,6 +1286,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var hubName by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("hub_name", "").orEmpty())
         private set
 
+    /** The RyM huB member this phone is linked to (their key from /link; "" when none). */
+    var hubKey by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("hub_key", "").orEmpty())
+        private set
+
+    fun linkHub(code: String) {
+        if (code.isBlank()) return
+        viewModelScope.launch {
+            val key = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.HubShare.link(code) }
+            if (key == null) {
+                status = tr("That code didn't work (codes last 15 minutes)")
+                return@launch
+            }
+            hubKey = key
+            getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putString("hub_key", key).apply()
+            status = tr("Linked to RyM huB")
+        }
+    }
+
     fun toggleHubShare() {
         hubShare = !hubShare
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("hub_share", hubShare).apply()
@@ -1300,10 +1318,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun feedHub() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
         var shared = ""
         androidx.compose.runtime.snapshotFlow { player.current?.takeIf { player.playing } }.collect { t ->
-            if (t == null || !hubShare || t.videoId == shared || !com.rymplayer.data.isYouTube(t.videoId)) return@collect
+            // Shared, or linked (listening XP): either sends the song.
+            if (t == null || (!hubShare && hubKey.isEmpty()) || t.videoId == shared || !com.rymplayer.data.isYouTube(t.videoId)) return@collect
             shared = t.videoId
-            val name = hubName
-            launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.HubShare.share(t.videoId, name) }
+            val (name, key, share) = Triple(hubName, hubKey, hubShare)
+            launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.HubShare.share(t.videoId, name, key, share) }
         }
     }
 

@@ -119,6 +119,8 @@ enum Ev {
     Preview(u64, String, anyhow::Result<stream::Playable>, f32),
     /// The focus timer's music (calm Lo-Fi).
     FocusSongs(anyhow::Result<Vec<Track>>),
+    /// RyM huB: the member's key (linked) or why not.
+    HubLinked(anyhow::Result<String>),
     /// A search that named an artist: the search, the artist's name and channel.
     ArtistSearch(u64, String, String),
     /// AutoEq: the headphones found and their 5 band gains.
@@ -1788,6 +1790,7 @@ fn fill_settings(st: &Shared) {
         field("discord-id", "Application id", "", &c.discord_app_id),
         switch("hub-share", "Share what I play in RyM huB", "Each song you play shows in the now-playing room of RyM huB, RyM's Discord server", c.hub_share),
         field("hub-name", "Name shown there", "Empty: no name, just the song", &c.hub_name),
+        field("hub-code", "Link code", if c.hub_key.is_empty() { "From /link in RyM huB: each song you play then earns listening XP and levels" } else { "Linked" }, ""),
         head("Last.fm"),
         field("lastfm-key", "API key", "", &c.lastfm_key),
         field("lastfm-secret", "Shared secret", "", &c.lastfm_secret),
@@ -2149,6 +2152,13 @@ fn choose(st: &Shared, id: &str, step: i32) {
 
 fn set_text(st: &Shared, id: &str, text: &str) {
     let text = text.trim().to_string();
+    // RyM huB: the code from the bot's /link, traded for the member's key.
+    if id == "hub-code" {
+        if !text.is_empty() {
+            post(async move { Ev::HubLinked(rymplayer::discord::link_hub(text).await) });
+        }
+        return;
+    }
     // AutoEq: the headphones looked up, and their correction becomes the custom EQ.
     if id == "autoeq" {
         if text.is_empty() {
@@ -4985,17 +4995,19 @@ fn set_update_text(st: &Shared, text: impl Into<String>) {
 
 /// RyM huB's "now playing" (Settings > Discord, off unless turned on), once per song.
 fn hub_share(st: &Shared) {
-    let (vid, name) = {
+    let (vid, name, key, share) = {
         let mut s = st.borrow_mut();
         let Some(t) = s.q.now().cloned() else { return };
-        if !s.config.hub_share || !rymplayer::is_youtube(&t.video_id) || s.shared == t.video_id {
+        // Shared, or linked (listening XP): either sends the song.
+        let (share, key) = (s.config.hub_share, s.config.hub_key.clone());
+        if (!share && key.is_empty()) || !rymplayer::is_youtube(&t.video_id) || s.shared == t.video_id {
             return;
         }
         s.shared = t.video_id.clone();
-        (t.video_id, s.config.hub_name.clone())
+        (t.video_id, s.config.hub_name.clone(), key, share)
     };
     post(async move {
-        if let Err(e) = rymplayer::discord::share_now_playing(vid, name).await {
+        if let Err(e) = rymplayer::discord::share_now_playing(vid, name, key, share).await {
             log(&format!("RyM huB: {e}"));
         }
         Ev::Done
@@ -5933,6 +5945,16 @@ fn handle(st: &Shared, ev: Ev) {
             fill_settings(st);
         }
         Ev::AutoEq(Err(e)) => toast(st, &e.to_string()),
+        Ev::HubLinked(Ok(key)) => {
+            {
+                let mut s = st.borrow_mut();
+                s.config.hub_key = key;
+                s.config.save();
+            }
+            toast(st, tr("Linked to RyM huB"));
+            fill_settings(st);
+        }
+        Ev::HubLinked(Err(e)) => toast(st, &format!("{} ({e})", tr("That code didn't work (codes last 15 minutes)"))),
         Ev::ArtistSearch(id, name, channel) => {
             if id != st.borrow().search_id {
                 return;

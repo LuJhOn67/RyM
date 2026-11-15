@@ -529,6 +529,19 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section("RyM huB") {
                 SwitchRow(Icons.Default.Forum, tr("Share what I play in RyM huB"), tr("Each song you play shows in the now-playing room of RyM huB, RyM's Discord server"), vm.hubShare) { vm.toggleHubShare() }
+                // Linking: the code from the bot's /link; each song then earns listening XP.
+                var linkOpen by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                TapRow(Icons.Default.Forum, tr("Link code"), tr("From /link in RyM huB: each song you play then earns listening XP and levels"), if (vm.hubKey.isEmpty()) tr("None") else "✓ " + tr("Linked")) { linkOpen = true }
+                if (linkOpen) {
+                    var code by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { linkOpen = false },
+                        title = { Text(tr("Link code")) },
+                        text = { OutlinedTextField(code, { code = it.uppercase().take(6) }, singleLine = true, placeholder = { Text("ABC123") }) },
+                        confirmButton = { TextButton({ vm.linkHub(code); linkOpen = false }) { Text(tr("Save")) } },
+                        dismissButton = { TextButton({ linkOpen = false }) { Text(tr("Cancel")) } },
+                    )
+                }
                 if (vm.hubShare) {
                     var editName by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
                     TapRow(Icons.Default.Forum, tr("Name shown there"), tr("Empty: no name, just the song"), vm.hubName.ifEmpty { tr("None") }) { editName = true }

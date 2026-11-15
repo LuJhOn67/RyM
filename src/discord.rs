@@ -38,13 +38,21 @@ async fn hub_address() -> Option<String> {
     known.clone().flatten()
 }
 
-/// RyM huB's "now playing": the song's YouTube id (and the listener's name, if set) to the relay,
-/// which posts it in the Discord room (its webhook stays on the relay, never in the apps).
-pub async fn share_now_playing(video_id: String, name: String) -> anyhow::Result<()> {
+/// RyM huB: the song played to the relay. `share`: posted in the now-playing room (with `name`, if
+/// set); `key` (from linking, see [`link_hub`]): it earns the member listening XP.
+pub async fn share_now_playing(video_id: String, name: String, key: String, share: bool) -> anyhow::Result<()> {
     let Some(address) = hub_address().await else { return Ok(()) };
-    let body = serde_json::json!({ "video_id": video_id, "name": name.trim() });
+    let body = serde_json::json!({ "video_id": video_id, "name": name.trim(), "key": key, "share": share });
     http().post(address).json(&body).send().await?;
     Ok(())
+}
+
+/// Links RyM to a RyM huB member: the code from the bot's /link, traded for the member's key.
+pub async fn link_hub(code: String) -> anyhow::Result<String> {
+    let address = hub_address().await.ok_or_else(|| anyhow::anyhow!("RyM huB isn't set up yet"))?;
+    let at = address.trim_end_matches("/np").to_string() + "/link";
+    let r: serde_json::Value = http().post(at).json(&serde_json::json!({ "code": code.trim() })).send().await?.json().await?;
+    r["key"].as_str().map(str::to_string).ok_or_else(|| anyhow::anyhow!(r["text"].as_str().unwrap_or("no key").to_string()))
 }
 
 fn play_link(video_id: &str, title: &str, artist: &str) -> String {
