@@ -7,6 +7,10 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 pub const REPO: &str = "LuJhOn67/RyM";
+/// RyM's page on GitHub (the code, releases, bug reports).
+pub const GITHUB: &str = "https://github.com/LuJhOn67/RyM";
+/// RyM huB, RyM's Discord server (Arabic and English).
+pub const DISCORD: &str = "https://discord.gg/MruRQzuSrd";
 /// How often the apps look on their own (they also look at start when it's been this long).
 pub const CHECK_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
 

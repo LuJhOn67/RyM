@@ -24,6 +24,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.MicOff
@@ -472,6 +474,11 @@ fun SettingsPage(vm: AppViewModel) {
                     },
                     colors = itemColors,
                 )
+            }
+            Section(tr("Community")) {
+                TapRow(Icons.Default.Forum, tr("Join the Discord"), tr("RyM huB: news, help, and songs to share, in Arabic and English")) { open("https://discord.gg/MruRQzuSrd") }
+                Divider()
+                TapRow(Icons.Default.Code, tr("RyM on GitHub"), tr("The code, releases and bug reports")) { open("https://github.com/${Updates.REPO}") }
             }
             Section(tr("About")) {
                 TapRow(Icons.Default.Info, "RyM ${vm.versionName}", tr("Releases and patch notes on GitHub")) { open("https://github.com/${Updates.REPO}/releases") }

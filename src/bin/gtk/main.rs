@@ -3954,6 +3954,19 @@ fn settings_page(ui: &Shared) -> gtk::Widget {
     }
     page.append(&setting_row(&format!("{} {}", tr("You have"), rymplayer::VERSION), "", &check));
 
+    page.append(&label(tr("Community"), &["shelf"]));
+    for (title, about, url) in [
+        (tr("Join the Discord"), tr("RyM huB: news, help, and songs to share, in Arabic and English"), rymplayer::updates::DISCORD),
+        (tr("RyM on GitHub"), tr("The code, releases and bug reports"), rymplayer::updates::GITHUB),
+    ] {
+        let open = Button::with_label(tr("Open"));
+        open.add_css_class("ghost");
+        open.connect_clicked(move |_| {
+            let _ = rymplayer::updates::open_link(url);
+        });
+        page.append(&setting_row(title, about, &open));
+    }
+
     page.append(&label(tr("Plugins"), &["shelf"]));
     let store = Button::with_label(tr("Plugin store"));
     store.add_css_class("pill");

@@ -1792,6 +1792,9 @@ fn fill_settings(st: &Shared) {
         switch("auto-update", "Check for updates", "Every 12 hours", c.auto_update_check),
         switch("beta", "Beta updates", "Pre-releases too", c.beta_updates),
         button("check", "Check now", s.update_text.clone(), "Check"),
+        head("Community"),
+        button("join-discord", "Join the Discord", t("RyM huB: news, help, and songs to share, in Arabic and English"), "Open"),
+        button("open-github", "RyM on GitHub", t("The code, releases and bug reports"), "Open"),
     ];
     let mut rows = rows;
     if rymplayer::vlc::find().is_some() {
@@ -2511,6 +2514,12 @@ fn press(st: &Shared, id: &str) {
             fill_settings(st);
         }
         "focus" => toggle_focus(st),
+        "join-discord" => {
+            let _ = rymplayer::updates::open_link(rymplayer::updates::DISCORD);
+        }
+        "open-github" => {
+            let _ = rymplayer::updates::open_link(rymplayer::updates::GITHUB);
+        }
         "link-address" => {
             let ip = rymplayer::link::lan_ipv4().map(|ip| ip.to_string());
             match ip.map(|ip| arboard::Clipboard::new().and_then(|mut c| c.set_text(ip))) {
