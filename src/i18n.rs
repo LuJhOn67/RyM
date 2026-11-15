@@ -111,6 +111,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "views" => "مشاهدة",
         "This PC's address" => "عنوان هذي الحاسبة",
         "Phone on another Wi-Fi or router: type it on the phone, Settings > Devices > PC address" => "إذا التلفون على واي فاي أو راوتر ثاني: اكتبه بالتلفون، الإعدادات ← الأجهزة ← عنوان الحاسبة",
         "Not on a network" => "مو متصل بشبكة",

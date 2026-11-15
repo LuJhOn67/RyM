@@ -597,15 +597,28 @@ impl Api {
                 .and_then(Value::as_str)
                 .map(String::from)
         });
-        let mut out = match all_songs {
+        // The most played first ("Top songs", with how often each was played), then the rest.
+        let top: Vec<Track> = shelf
+            .map(|s| {
+                all(s, "musicResponsiveListItemRenderer")
+                    .into_iter()
+                    .filter_map(|r| {
+                        let t = song_row(r)?;
+                        if let Some(p) = plays_in(r) {
+                            remember_plays(&t.video_id, p);
+                        }
+                        Some(t)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let catalogue = match all_songs {
             Some(id) => self.clone().playlist_all(id, 3000).await.unwrap_or_default(),
             None => Vec::new(),
         };
-        if out.is_empty()
-            && let Some(s) = shelf
-        {
-            out = all(s, "musicResponsiveListItemRenderer").into_iter().filter_map(song_row).collect();
-        }
+        let mut seen: std::collections::HashSet<String> = top.iter().map(|t| t.video_id.clone()).collect();
+        let mut out = top;
+        out.extend(catalogue.into_iter().filter(|t| seen.insert(t.video_id.clone())));
         for t in &mut out {
             t.artist_id = t.artist_id.take().or_else(|| Some(channel_id.clone()));
         }
@@ -867,6 +880,44 @@ fn video_ids() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
 /// The search found this as a YouTube video, not a YouTube Music song (its badge, the filter).
 pub fn found_as_video(video_id: &str) -> bool {
     video_ids().lock().is_ok_and(|v| v.contains(video_id))
+}
+
+/// How often a song was played ("1.2B plays", "350M views"), from an artist's "Top songs" rows.
+fn plays_in(r: &Value) -> Option<String> {
+    let runs = all(r, "runs");
+    runs.iter()
+        .flat_map(|rs| rs.as_array().into_iter().flatten())
+        .filter_map(|run| run.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .find(|t| is_plays(t))
+        .map(String::from)
+}
+
+/// "1.2B plays", "350M views", "12,345 plays".
+fn is_plays(t: &str) -> bool {
+    let Some((n, word)) = t.rsplit_once(' ') else { return false };
+    matches!(word.to_lowercase().as_str(), "plays" | "play" | "views" | "view")
+        && n.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && n.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | 'K' | 'M' | 'B'))
+}
+
+fn plays_known() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+fn remember_plays(video_id: &str, plays: String) {
+    if let Ok(mut p) = plays_known().lock() {
+        if p.len() > 2000 {
+            p.clear();
+        }
+        p.insert(video_id.to_string(), plays);
+    }
+}
+
+/// How often the song was played, when an artist's page told ("1.2B plays").
+pub fn plays_of(video_id: &str) -> Option<String> {
+    plays_known().lock().ok()?.get(video_id).cloned()
 }
 
 /// A video found by search: its line has the views where a song has its album.
@@ -1274,4 +1325,29 @@ mod search_tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod plays_tests {
+    #[test]
+    fn plays_lines() {
+        assert!(super::is_plays("1.2B plays"));
+        assert!(super::is_plays("350M views"));
+        assert!(super::is_plays("12,345 plays"));
+        assert!(!super::is_plays("Album"));
+        assert!(!super::is_plays("plays"));
+        assert!(!super::is_plays("Best plays"));
+    }
+
+    /// An artist's top songs come first, with their plays: `cargo test --lib artist_plays_live -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn artist_plays_live() {
+        // Daft Punk.
+        let songs = super::Api::guest().await.unwrap().artist_page("UC_kRDKYrUlrbtrSiyu5Tflg".into()).await.unwrap();
+        for t in songs.iter().take(6) {
+            println!("{} · {:?}", t.title, super::plays_of(&t.video_id));
+        }
+        assert!(songs.iter().take(5).any(|t| super::plays_of(&t.video_id).is_some()));
+    }
 }

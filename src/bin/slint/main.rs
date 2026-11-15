@@ -1393,7 +1393,8 @@ fn song_item(s: &mut State, key: String, t: &Track) -> Song {
         liked: s.liked.contains(&t.video_id),
         playing,
         video: rymplayer::api::found_as_video(&t.video_id),
-        why: SharedString::new(),
+        // How often it was played (an artist's top songs).
+        why: rymplayer::api::plays_of(&t.video_id).map(|p| p.replace("plays", tr("plays")).replace("views", tr("views"))).unwrap_or_default().into(),
     }
 }
 

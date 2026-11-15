@@ -1306,7 +1306,7 @@ component Stage inherits Rectangle {
         }
         Rectangle { height: 6px * Ui.k; }
         Text { text: App.title; font-size: 24px * Ui.k; font-weight: 700; color: #ffffff; overflow: elide; horizontal-alignment: Ui.start; }
-        Text { text: App.artist; font-size: 17px * Ui.k; color: #ffffffb0; overflow: elide; horizontal-alignment: Ui.start; }
+        Text { text: App.artist; font-size: 17px * Ui.k; color: sa.has-hover ? #ffffff : #ffffffb0; overflow: elide; horizontal-alignment: Ui.start; sa := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
         // The progress: click or drag to seek.
         bar := Rectangle {
             height: 14px * Ui.k;
@@ -2534,7 +2534,7 @@ component BottomBar inherits Rectangle {
                     spacing: 4px * Ui.k;
                     max-width: 420px * Ui.k;
                     Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 17px * Ui.k; font-weight: 700; color: Theme.text; overflow: elide; }
-                    Text { text: App.artist; font-size: 14px * Ui.k; color: Theme.dim; overflow: elide; }
+                    Text { text: App.artist; font-size: 14px * Ui.k; color: ba.has-hover ? Theme.accent : Theme.dim; overflow: elide; ba := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
                 }
                 VerticalLayout { alignment: center; SpeedButton { size: 34px * Ui.k; } }
                 VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: Theme.accent; clicked => { App.like-now(); } } }
@@ -2588,7 +2588,7 @@ component NoirSong inherits Rectangle {
             wrap: word-wrap;
             horizontal-alignment: Ui.start;
         }
-        Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+        Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: na.has-hover ? Theme.accent : Theme.dim; overflow: elide; horizontal-alignment: Ui.start; na := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
         HorizontalLayout {
             alignment: start;
             spacing: 8px * Ui.k;
@@ -2696,7 +2696,7 @@ component NoirBar inherits Rectangle {
                     spacing: 4px * Ui.k;
                     max-width: 300px * Ui.k;
                     Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.text; overflow: elide; }
-                    Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.dim; overflow: elide; }
+                    Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: nb.has-hover ? Theme.accent : Theme.dim; overflow: elide; nb := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
                 }
             }
             TouchArea { mouse-cursor: pointer; clicked => { App.go(0); } }
