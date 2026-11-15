@@ -1290,6 +1290,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var hubKey by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("hub_key", "").orEmpty())
         private set
 
+    fun unlinkHub() {
+        val key = hubKey
+        hubKey = ""
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().remove("hub_key").apply()
+        if (key.isNotEmpty()) viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.HubShare.unlink(key) }
+        status = tr("Unlinked from RyM huB")
+    }
+
     fun linkHub(code: String) {
         if (code.isBlank()) return
         viewModelScope.launch {

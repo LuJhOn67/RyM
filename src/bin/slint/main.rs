@@ -1825,6 +1825,10 @@ fn fill_settings(st: &Shared) {
         button("open-github", "RyM on GitHub", t("The code, releases and bug reports"), "Open"),
     ];
     let mut rows = rows;
+    if !c.hub_key.is_empty() {
+        let at = rows.iter().position(|r| r.id == "hub-code").map_or(rows.len(), |i| i + 1);
+        rows.insert(at, button("hub-unlink", "Unlink", t("Songs stop earning XP here; your XP stays"), "Unlink"));
+    }
     if rymplayer::vlc::find().is_some() {
         let at = rows.iter().position(|r| r.id == "connections").map_or(rows.len(), |i| i + 1);
         rows.insert(at, switch("vlc", "Play songs in VLC", "Each song opens in VLC", c.play_in_vlc));
@@ -2576,6 +2580,18 @@ fn press(st: &Shared, id: &str) {
             fill_settings(st);
         }
         "focus" => toggle_focus(st),
+        "hub-unlink" => {
+            let key = std::mem::take(&mut st.borrow_mut().config.hub_key);
+            st.borrow().config.save();
+            if !key.is_empty() {
+                post(async move {
+                    let _ = rymplayer::discord::unlink_hub(key).await;
+                    Ev::Done
+                });
+            }
+            toast(st, tr("Unlinked from RyM huB"));
+            fill_settings(st);
+        }
         "home-play-all" => home_play_all(st),
         "join-discord" => {
             let _ = rymplayer::updates::open_link(rymplayer::updates::DISCORD);

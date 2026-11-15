@@ -539,7 +539,11 @@ fun SettingsPage(vm: AppViewModel) {
                         title = { Text(tr("Link code")) },
                         text = { OutlinedTextField(code, { code = it.uppercase().take(6) }, singleLine = true, placeholder = { Text("ABC123") }) },
                         confirmButton = { TextButton({ vm.linkHub(code); linkOpen = false }) { Text(tr("Save")) } },
-                        dismissButton = { TextButton({ linkOpen = false }) { Text(tr("Cancel")) } },
+                        dismissButton = {
+                            // Linked: the code box can unlink instead.
+                            if (vm.hubKey.isNotEmpty()) TextButton({ vm.unlinkHub(); linkOpen = false }) { Text(tr("Unlink")) }
+                            else TextButton({ linkOpen = false }) { Text(tr("Cancel")) }
+                        },
                     )
                 }
                 if (vm.hubShare) {

@@ -47,6 +47,14 @@ pub async fn share_now_playing(video_id: String, name: String, key: String, shar
     Ok(())
 }
 
+/// Unlinks RyM from its RyM huB member: the key goes on the relay too (the member's XP stays).
+pub async fn unlink_hub(key: String) -> anyhow::Result<()> {
+    let Some(address) = hub_address().await else { return Ok(()) };
+    let at = address.trim_end_matches("/np").to_string() + "/unlink";
+    http().post(at).json(&serde_json::json!({ "key": key })).send().await?;
+    Ok(())
+}
+
 /// Links RyM to a RyM huB member: the code from the bot's /link, traded for the member's key.
 pub async fn link_hub(code: String) -> anyhow::Result<String> {
     let address = hub_address().await.ok_or_else(|| anyhow::anyhow!("RyM huB isn't set up yet"))?;

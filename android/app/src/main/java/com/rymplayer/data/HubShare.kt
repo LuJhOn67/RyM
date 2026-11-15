@@ -45,6 +45,13 @@ object HubShare {
         runCatching { http.newCall(Request.Builder().url(to).post(body.toRequestBody("application/json".toMediaType())).build()).execute().close() }
     }
 
+    /** Unlinks this phone: its key goes on the relay too (the member's XP stays). Blocking. */
+    fun unlink(key: String) {
+        val to = address()?.removeSuffix("/np")?.plus("/unlink") ?: return
+        val body = buildJsonObject { put("key", key) }.toString()
+        runCatching { http.newCall(Request.Builder().url(to).post(body.toRequestBody("application/json".toMediaType())).build()).execute().close() }
+    }
+
     /** The code from the bot's /link, traded for the member's key (null when it didn't work). Blocking. */
     fun link(code: String): String? {
         val to = address()?.removeSuffix("/np")?.plus("/link") ?: return null
