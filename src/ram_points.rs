@@ -282,6 +282,14 @@ fn local_hour(unix_secs: u64) -> usize {
 /// share of plays in this time (after 3 plays).
 const BUCKET_BOOST: f32 = 0.3;
 
+/// A like's points (30% to its artist, as every change): the heart counts more than a download.
+const LIKE: f32 = 15.0;
+
+/// Up next: an artist of your liked songs, more for each liked song of theirs (up to 4).
+fn liked_artist_points(liked_songs: usize) -> i32 {
+    if liked_songs == 0 { 0 } else { 6 + 3 * (liked_songs.min(4) as i32 - 1) }
+}
+
 /// What shows a song is loved, beyond playing it: points for each (see [`loved`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Love {
@@ -291,6 +299,10 @@ pub enum Love {
     Download,
     /// Put in a playlist.
     AddToPlaylist,
+    /// Liked (the heart).
+    Like,
+    /// The like taken back: its points go again.
+    Unlike,
 }
 
 impl Love {
@@ -298,6 +310,8 @@ impl Love {
         match self {
             Love::BackToStart => 4.0,
             Love::Download | Love::AddToPlaylist => 12.0,
+            Love::Like => LIKE,
+            Love::Unlike => -LIKE,
         }
     }
 }
@@ -1107,7 +1121,10 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
     notes.learn(kind, seed, &radio);
     let seed_artist = first_artist(&seed.artist);
     let seed_script = script(seed);
-    let liked_artists: HashSet<String> = liked.iter().map(|t| first_artist(&t.artist)).collect();
+    let mut liked_artists: HashMap<String, usize> = HashMap::new();
+    for t in liked {
+        *liked_artists.entry(first_artist(&t.artist)).or_default() += 1;
+    }
     let radio_artists: HashSet<String> = radio.iter().map(|t| first_artist(&t.artist)).collect();
     let mut rng = Rng(random | 1);
     let mut ids: HashSet<String> = HashSet::from([seed.video_id.clone()]);
@@ -1146,9 +1163,7 @@ fn rank_up_next(notes: &mut Notes, radio: Vec<Track>, seed: &Track, liked: &[Tra
         points += notes.together(&seed_artist, &artist).min(6) as i32 * 2;
         // Familiar or new (the setting).
         points += discovery_points(notes.tracks.contains_key(&t.video_id), notes.track_points(&t.video_id, lately.now));
-        if liked_artists.contains(&artist) {
-            points += 6;
-        }
+        points += liked_artist_points(liked_artists.get(&artist).copied().unwrap_or(0));
         let s = script(&t);
         if s == seed_script {
             points += 12;
@@ -1708,5 +1723,21 @@ mod bucket_tests {
         assert_eq!(r.late_night.map(|t| t.video_id), Some("late".into()), "the old song is outside this month");
         assert_eq!(r.mood, Some(0), "morning: 6 plays against 3 late at night");
         assert_eq!(r.top_artist.as_deref(), Some("adele"));
+    }
+}
+
+#[cfg(test)]
+mod like_tests {
+    use super::*;
+
+    #[test]
+    fn a_like_counts_and_an_unlike_takes_it_back() {
+        assert_eq!(Love::Like.points(), 15.0);
+        assert_eq!(Love::Unlike.points(), -15.0);
+        assert!(Love::Like.points() > Love::Download.points());
+        assert_eq!(liked_artist_points(0), 0);
+        assert_eq!(liked_artist_points(1), 6);
+        assert_eq!(liked_artist_points(3), 12);
+        assert_eq!(liked_artist_points(9), 15);
     }
 }

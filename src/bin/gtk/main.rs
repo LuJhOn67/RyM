@@ -4432,6 +4432,8 @@ fn toggle_like(ui: &Shared, t: &Track) {
         let mut s = ui.borrow_mut();
         let like = !s.liked.contains(&vid);
         s.liked.set(&vid, like);
+        // RaM points: a like counts toward the suggestions (an unlike takes it back).
+        rymplayer::ram_points::loved(t.clone(), if like { rymplayer::ram_points::Love::Like } else { rymplayer::ram_points::Love::Unlike });
         if like {
             if !s.liked_tracks.iter().any(|x| x.video_id == vid) {
                 s.liked_tracks.insert(0, t.clone());
@@ -4457,7 +4459,7 @@ fn toggle_like(ui: &Shared, t: &Track) {
 fn sync_likes(ui: &Shared) {
     let Some(api) = api_of(ui).filter(Api::logged_in) else { return };
     ui.borrow_mut().likes_synced = Instant::now();
-    post(ui, async move { Ev::Liked(api.playlist_tracks(LIKED_ID.into()).await) });
+    post(ui, async move { Ev::Liked(api.playlist_all(LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await) });
 }
 
 // ---------------------------------------------------------------- playback

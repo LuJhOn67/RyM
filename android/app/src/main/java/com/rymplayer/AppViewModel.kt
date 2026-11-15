@@ -127,6 +127,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var sourcesJob: Job? = null
 
     init {
+        // Likes made on the PC (RyM Link).
+        com.rymplayer.playback.Link.onLike = { id, on -> likedElsewhere(id, on) }
+    }
+
+    init {
         I18n.arabic = prefs.getBoolean("arabic", false)
         com.rymplayer.data.YtMusicApi.init(app)
         com.rymplayer.data.YtMusicApi.arabic = I18n.arabic
@@ -309,6 +314,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Music Cross Ears: this phone's music can move to a PC of the same account (RyM Link). */
     var crossEars by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("cross_ears", true).also { com.rymplayer.playback.Link.enabled = it })
         private set
+
+    /** The PC's address typed in Settings (the phone on another network than the PC), or "". */
+    var pcAddress by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("pc_address", "").orEmpty().also { com.rymplayer.playback.Link.pcAddress = it })
+        private set
+
+    fun choosePcAddress(typed: String) {
+        pcAddress = typed.trim()
+        com.rymplayer.playback.Link.pcAddress = pcAddress
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putString("pc_address", pcAddress).apply()
+    }
 
     fun toggleCrossEars() {
         crossEars = !crossEars
@@ -797,7 +812,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // Both at once instead of one after the other.
                     val (lists, likedSongs) = coroutineScope {
                         val lists = async { api.libraryPlaylists() }
-                        val likedSongs = async { api.playlist(LIKED_ID) }
+                        val likedSongs = async { api.playlistAll(LIKED_ID, 5000) }
                         lists.await() to likedSongs.await()
                     }
                     playlists = lists
@@ -998,7 +1013,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val user = api.signedIn
                     val recent = Recent.tracks(ctx)
                     val page = async { api.homePaged(3) }
-                    val likedSongs = async { if (user) runCatching { api.playlist(LIKED_ID) }.getOrNull() else null }
+                    val likedSongs = async { if (user) runCatching { api.playlistAll(LIKED_ID, 5000) }.getOrNull() else null }
                     val played = async { if (user) runCatching { api.history() }.getOrDefault(emptyList()) else emptyList() }
                     val home = page.await()
                     val arranged = FeedMemory.arrange(ctx, home.tracks)
@@ -1181,8 +1196,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun syncLiked(songs: List<Track>) {
         likedTracks = songs
         val now = System.currentTimeMillis()
-        localLikes.entries.removeAll { now - it.value.second > 60_000 }
         val ids = LinkedHashSet(songs.map { it.videoId })
+        // A like made here stays until YouTube's list shows it (it can take minutes), a day at most.
+        localLikes.entries.removeAll { (id, change) -> (id in ids) == change.first || now - change.second > 24 * 60 * 60 * 1000L }
         var shown = songs
         for ((id, change) in localLikes) {
             if (change.first) ids += id else { ids -= id; shown = shown.filter { it.videoId != id } }
@@ -1198,7 +1214,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun syncLikesNow() {
         if (!api.signedIn || syncJob?.isActive == true) return
-        syncJob = viewModelScope.launch { runCatching { api.playlist(LIKED_ID) }.onSuccess(::syncLiked) }
+        syncJob = viewModelScope.launch { runCatching { api.playlistAll(LIKED_ID, 5000) }.onSuccess(::syncLiked) }
     }
 
     /**
@@ -1463,11 +1479,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleLike(t: Track) {
         val like = t.videoId !in liked
         setLiked(t, like)
+        val app = getApplication<Application>()
         viewModelScope.launch {
-            runCatching { api.rate(t.videoId, if (like) MusicApi.Rating.Like else MusicApi.Rating.None) }.onFailure {
+            // RaM points: a like counts toward the suggestions (an unlike takes it back).
+            launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(app, t, if (like) com.rymplayer.data.RamPoints.Love.Like else com.rymplayer.data.RamPoints.Love.Unlike) }
+            runCatching { api.rate(t.videoId, if (like) MusicApi.Rating.Like else MusicApi.Rating.None) }.onSuccess {
+                // The PC of the same account (heard lately): its heart follows at once.
+                player.pc?.let { pc -> launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.playback.Link.like(pc.ip, pc.port, t.videoId, like) } }
+            }.onFailure {
                 setLiked(t, !like)
                 status = tr("Couldn't save the like")
             }
+        }
+    }
+
+    /** A like made on the PC (it told the account): the heart here follows, and the liked songs are read again soon. */
+    private fun likedElsewhere(id: String, on: Boolean) {
+        localLikes[id] = on to System.currentTimeMillis()
+        if (on) { if (id !in liked) liked += id } else {
+            liked -= id
+            for (key in likedPages()) pages[key] = pages[key].orEmpty().filter { it.videoId != id }
+        }
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(5000)
+            syncLikesNow()
         }
     }
 

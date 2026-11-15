@@ -7,8 +7,12 @@ use std::time::{Duration, Instant};
 
 /// How often the apps re-read the liked songs while open.
 pub const SYNC_EVERY: Duration = Duration::from_secs(120);
-/// A like or unlike made here wins over synced lists for this long.
-const LOCAL_WINS_FOR: Duration = Duration::from_secs(60);
+/// A like or unlike made here wins over synced lists until the account's list agrees, or this
+/// long at most (YouTube Music's liked list can take minutes to show a new like).
+const LOCAL_WINS_FOR: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How many liked songs are read (the whole list, page after page).
+pub const READ_UP_TO: usize = 5000;
 
 #[derive(Debug, Default, Clone)]
 pub struct Likes {
@@ -42,7 +46,9 @@ impl Likes {
     /// The account's liked songs as YouTube Music has them now.
     pub fn sync(&mut self, ids: impl IntoIterator<Item = String>) {
         self.ids = ids.into_iter().collect();
-        self.local.retain(|_, (_, at)| at.elapsed() < LOCAL_WINS_FOR);
+        // A change the account's list shows now is done; one it doesn't show yet still wins.
+        let ids = &self.ids;
+        self.local.retain(|id, (liked, at)| ids.contains(id) != *liked && at.elapsed() < LOCAL_WINS_FOR);
         for (id, (liked, _)) in &self.local {
             if *liked {
                 self.ids.insert(id.clone());
@@ -73,5 +79,20 @@ mod tests {
         l.sync(["a".to_string(), "d".to_string()]);
         assert!(!l.contains("a") && !l.contains("b") && l.contains("c") && l.contains("d"));
         assert_eq!(l.len(), 2);
+    }
+
+    #[test]
+    fn a_like_stays_until_the_account_shows_it() {
+        let mut l = Likes::default();
+        l.set("new", true);
+        // Many syncs before YouTube's list has it: still liked.
+        for _ in 0..5 {
+            l.sync(["old".to_string()]);
+            assert!(l.contains("new"));
+        }
+        // The list has it now: from here the account decides (an unlike elsewhere shows).
+        l.sync(["old".to_string(), "new".to_string()]);
+        l.sync(["old".to_string()]);
+        assert!(!l.contains("new"));
     }
 }

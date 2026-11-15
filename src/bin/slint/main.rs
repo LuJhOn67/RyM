@@ -1738,6 +1738,10 @@ fn fill_settings(st: &Shared) {
         switch("headphones", "Ask when headphones connect", "Headphones or Bluetooth with nothing playing: go on with your last songs, or a Road Radio mix", c.headphones_prompt),
         button("mix-tastes", "Mix Tastes", t("Your top songs and the phone's (RaM points), mixed into one queue · same Wi-Fi and account"), "Mix"),
         switch("seamless", "Seamless Music", "Music playing on your phone (same account, same Wi-Fi) moves here when this app is idle", c.cross_ears),
+        button("link-address", "This PC's address", match rymplayer::link::lan_ipv4() {
+            Some(ip) => format!("{ip} · {}", t("Phone on another Wi-Fi or router: type it on the phone, Settings > Devices > PC address")),
+            None => t("Not on a network"),
+        }, "Copy"),
         switch("link-auto", "Take over from the phone by itself", "Off: RyM asks first", c.link_auto),
         switch("announce", "Tell the phone what plays here", "Open RyM on your phone and it takes the music from here", c.link_announce),
         switch("remote", "Remote from the phone", "Your phone can play, pause, skip, seek and set the volume here, and play along in step", c.remote_control),
@@ -2503,6 +2507,13 @@ fn press(st: &Shared, id: &str) {
             fill_settings(st);
         }
         "focus" => toggle_focus(st),
+        "link-address" => {
+            let ip = rymplayer::link::lan_ipv4().map(|ip| ip.to_string());
+            match ip.map(|ip| arboard::Clipboard::new().and_then(|mut c| c.set_text(ip))) {
+                Some(Ok(())) => toast(st, tr("Address copied")),
+                _ => toast(st, tr("Not on a network")),
+            }
+        }
         "mix-tastes" => {
             let phone = st.borrow().last_phone.clone();
             match phone {
@@ -2975,7 +2986,7 @@ fn open_card(st: &Shared, key: &str) {
         match rest {
             "liked" => {
                 let liked = st.borrow().liked_tracks.clone();
-                open_list(st, tr("Liked songs").into(), async move { if liked.is_empty() { api.playlist_tracks(LIKED_ID.into()).await } else { Ok(liked) } });
+                open_list(st, tr("Liked songs").into(), async move { if liked.is_empty() { api.playlist_all(LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await } else { Ok(liked) } });
             }
             "history" => open_list(st, tr("History").into(), api.history()),
             _ => {
@@ -3242,7 +3253,7 @@ fn sync_with_account(st: &Shared) {
     let api = st.borrow().api.clone().filter(Api::logged_in);
     if let Some(api) = api {
         let a2 = api.clone();
-        post(async move { Ev::Liked(a2.playlist_tracks(LIKED_ID.into()).await) });
+        post(async move { Ev::Liked(a2.playlist_all(LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await) });
         post(async move { Ev::History(api.history().await) });
     }
 }
@@ -3320,7 +3331,33 @@ fn toggle_like(st: &Shared, t: &Track) {
         like
     };
     refresh_hearts(st);
+    // RaM points: a like counts toward the suggestions (an unlike takes it back).
+    rymplayer::ram_points::loved(t.clone(), if like { rymplayer::ram_points::Love::Like } else { rymplayer::ram_points::Love::Unlike });
+    // The phone of the same account (heard lately): its heart follows at once.
+    let phone = st.borrow().last_phone.clone();
+    if let Some((ip, port, key)) = phone {
+        let v = vid.clone();
+        post(async move {
+            let _ = rymplayer::link::send_like(ip, port, &key, &v, like).await;
+            Ev::Done
+        });
+    }
     post(async move { Ev::Rated(vid.clone(), like, api.rate(vid, like).await) });
+}
+
+/// A like made on the phone (it told the account): the heart here follows at once, and the liked
+/// songs are read again a moment later (with the song in them).
+fn liked_elsewhere(st: &Shared, vid: &str, on: bool) {
+    {
+        let mut s = st.borrow_mut();
+        s.liked.set(vid, on);
+        if !on {
+            s.liked_tracks.retain(|x| x.video_id != vid);
+        }
+    }
+    refresh_hearts(st);
+    let st2 = st.clone();
+    slint::Timer::single_shot(Duration::from_secs(5), move || sync_with_account(&st2));
 }
 
 // ---------------------------------------------------------------- playback
@@ -5619,7 +5656,10 @@ fn handle(st: &Shared, ev: Ev) {
             }
         }
         Ev::Peer(note, ip) => heard_peer(st, note, ip),
-        Ev::Remote(what, value) => remote(st, &what, value),
+        Ev::Remote(what, value) => match what.strip_prefix("like:") {
+            Some(vid) => liked_elsewhere(st, vid, value > 0.5),
+            None => remote(st, &what, value),
+        },
         Ev::Segments(vid, segments) => st.borrow_mut().non_music.got(&vid, segments),
         Ev::YtDlpStatus(text) => {
             st.borrow_mut().ytdlp_status = text;

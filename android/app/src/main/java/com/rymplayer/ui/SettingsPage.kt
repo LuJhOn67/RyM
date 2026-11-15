@@ -303,6 +303,24 @@ fun SettingsPage(vm: AppViewModel) {
                         else -> "${tr("Heard")}: ${heard.device.ifEmpty { "PC" }} (${heard.ip}) · ${(System.currentTimeMillis() - heard.at) / 1000} ${tr("s ago")}"
                     }
                     Text(status, color = Dim, fontSize = 13.sp, modifier = Modifier.padding(start = 64.dp, end = 20.dp, bottom = 8.dp))
+                    // The PC on another network (another Wi-Fi or router): its address, typed here.
+                    var editAddress by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                    TapRow(Icons.Default.Devices, tr("PC address"), tr("Only when the PC is on another network (another Wi-Fi or router) · RyM on the PC shows it in Settings > Devices"), vm.pcAddress.ifEmpty { tr("None") }) { editAddress = true }
+                    if (editAddress) {
+                        var typed by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(vm.pcAddress) }
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { editAddress = false },
+                            title = { Text(tr("PC address")) },
+                            text = {
+                                OutlinedTextField(
+                                    typed, { typed = it }, singleLine = true, placeholder = { Text("192.168.100.3") },
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
+                                )
+                            },
+                            confirmButton = { TextButton({ vm.choosePcAddress(typed); editAddress = false }) { Text(tr("Save")) } },
+                            dismissButton = { TextButton({ vm.choosePcAddress(""); editAddress = false }) { Text(tr("Clear")) } },
+                        )
+                    }
                 }
             }
             Section(tr("Suggestions (RaM points)")) {

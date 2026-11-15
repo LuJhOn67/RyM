@@ -401,7 +401,10 @@ object RamPoints {
         load(ctx).rewind(known, System.currentTimeMillis()).copy(hours = com.rymplayer.data.Recent.recap(ctx).hoursMonth)
 
     /** What shows a song is loved, beyond playing it (the same as the PC's ram_points::Love). */
-    enum class Love(val points: Float) { BackToStart(4f), Download(12f), AddToPlaylist(12f) }
+    enum class Love(val points: Float) { BackToStart(4f), Download(12f), AddToPlaylist(12f), Like(15f), Unlike(-15f) }
+
+    /** Up next: an artist of your liked songs, more for each liked song of theirs (up to 4); the PC's liked_artist_points. */
+    fun likedArtistPoints(likedSongs: Int): Int = if (likedSongs == 0) 0 else 6 + 3 * (likedSongs.coerceAtMost(4) - 1)
 
     /**
      * Why each song (picked for Up next after [seed]) is there, in a few words ("" when it's
@@ -689,7 +692,7 @@ object RamPoints {
         notes.learn(kind, seed, radio)
         val seedArtist = firstArtist(seed.artist)
         val seedScript = script(seed)
-        val likedArtists = liked.map { firstArtist(it.artist) }.toSet()
+        val likedArtists = liked.groupingBy { firstArtist(it.artist) }.eachCount()
         val radioArtists = radio.map { firstArtist(it.artist) }.toSet()
         val ids = mutableSetOf(seed.videoId)
         val keys = mutableSetOf(Radio.sameSongKey(seed))
@@ -717,7 +720,7 @@ object RamPoints {
             points += notes.together(seedArtist, artist).coerceAtMost(6) * 2
             // Familiar or new (the setting).
             points += discoveryPoints(t.videoId in notes.tracks, notes.trackPoints(t.videoId, now))
-            if (artist in likedArtists) points += 6
+            points += likedArtistPoints(likedArtists[artist] ?: 0)
             val s = script(t)
             if (s == seedScript) points += 12 else if (s != Script.Other && seedScript != Script.Other) points -= 25
             val at = playedAt(t.videoId)

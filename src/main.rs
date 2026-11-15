@@ -1959,6 +1959,8 @@ impl App {
         let vid = t.video_id.clone();
         let like = !self.liked.contains(&vid);
         self.liked.set(&vid, like);
+        // RaM points: a like counts toward the suggestions (an unlike takes it back).
+        rymplayer::ram_points::loved(t.clone(), if like { rymplayer::ram_points::Love::Like } else { rymplayer::ram_points::Love::Unlike });
         // The Liked songs page follows at once.
         if self.page == Page::Playlist(api::LIKED_ID.into()) {
             if like {
@@ -2144,7 +2146,7 @@ impl App {
         if self.logged_in() && self.likes_synced.elapsed() > SYNC_EVERY {
             self.likes_synced = Instant::now();
             if let Some(api) = self.api.clone() {
-                self.spawn(async move { Event::Liked(s(api.playlist_tracks(api::LIKED_ID.into()).await)) });
+                self.spawn(async move { Event::Liked(s(api.playlist_all(api::LIKED_ID.into(), rymplayer::likes::READ_UP_TO).await)) });
             }
         }
         self.sound_tick();

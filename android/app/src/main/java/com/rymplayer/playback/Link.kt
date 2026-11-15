@@ -52,6 +52,12 @@ object Link {
 
     const val PORT = 47811
 
+    /** A PC's TCP port (when it had it free): with its address typed here, it's asked for its note. */
+    const val PC_TCP_PORT = 47812
+
+    /** The PC's address typed in Settings (another network, where broadcasts don't reach), or "". */
+    @Volatile var pcAddress = ""
+
     /** What plays, as the app's player last said: the queue, the song, the second, and since when. */
     data class Snapshot(val queue: List<Track>, val index: Int, val positionMs: Long, val at: Long, val playing: Boolean, val speed: Float) {
         /** Seconds into the song now. */
@@ -64,6 +70,9 @@ object Link {
     @Volatile var account: String? = null
     /** Pauses the music (set by the app's player). */
     @Volatile var pause: (() -> Unit)? = null
+
+    /** A like made on the PC (video id, liked): the heart here follows at once. */
+    @Volatile var onLike: ((String, Boolean) -> Unit)? = null
     /** Music Cross Ears on (the setting): off, nothing is sent and nothing answered. */
     @Volatile var enabled = true
     /** For the RaM points sync (set by the player's service). */
@@ -160,6 +169,16 @@ object Link {
                                 main.post { pause?.invoke() }
                                 200 to "{}"
                             }
+                            // A like made on the PC (it told the account): the heart here follows at once.
+                            method == "POST" && target.startsWith("/like") -> {
+                                val id = query["video"].orEmpty()
+                                if (id.isEmpty() || !id.all { it.isLetterOrDigit() || it == '-' || it == '_' }) 400 to "{}"
+                                else {
+                                    val on = query["on"] == "1"
+                                    main.post { onLike?.invoke(id, on) }
+                                    200 to "{}"
+                                }
+                            }
                             else -> 404 to "{}"
                         }
                         val bytes = body.toByteArray()
@@ -222,23 +241,47 @@ object Link {
                 val packet = DatagramPacket(buf, buf.size)
                 if (runCatching { socket.receive(packet) }.isFailure) break
                 val note = runCatching { Json.parseToJsonElement(String(packet.data, 0, packet.length)).jsonObject }.getOrNull() ?: continue
-                val key = account ?: continue
-                if (!enabled || note["kind"]?.jsonPrimitive?.content != "pc" || note["account"]?.jsonPrimitive?.content != key) continue
-                val port = note["port"]?.jsonPrimitive?.intOrNull ?: continue
                 val ip = packet.address?.hostAddress ?: continue
-                fun str(k: String) = note[k]?.jsonPrimitive?.takeIf { it.isString }?.content.orEmpty()
-                fun num(k: String) = note[k]?.jsonPrimitive?.floatOrNull ?: 0f
-                val state = PcState(
-                    ip, port, str("device"), str("video_id"), str("title"), str("artist"), str("thumb").ifEmpty { null },
-                    note["playing"]?.jsonPrimitive?.booleanOrNull == true, num("position"), num("duration"),
-                    note["volume"]?.jsonPrimitive?.floatOrNull ?: 1f, note["remote"]?.jsonPrimitive?.booleanOrNull == true,
-                    System.currentTimeMillis(),
-                )
+                val state = pcState(note, ip) ?: continue
                 main.post { onPc(state) }
             }
             socket.close()
             lock?.release()
         }, "rym-link-listen").apply { isDaemon = true }.start()
+        // A PC on another network (its address typed in Settings): asked for its note every 3 s.
+        Thread({
+            while (listening) {
+                val (ip, port) = addressOf(pcAddress) ?: (null to 0)
+                if (ip != null && enabled) {
+                    val note = call(ip, port, "GET", "/note")?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() }
+                    note?.let { pcState(it, ip) }?.let { s -> main.post { onPc(s) } }
+                }
+                Thread.sleep(3000)
+            }
+        }, "rym-link-address").apply { isDaemon = true }.start()
+    }
+
+    /** "192.168.100.3" or "192.168.100.3:47812" as (address, port); null when empty. */
+    fun addressOf(typed: String): Pair<String, Int>? {
+        val t = typed.trim().removePrefix("http://").trimEnd('/')
+        if (t.isEmpty()) return null
+        val port = t.substringAfterLast(':', "").toIntOrNull()
+        return (if (port != null) t.substringBeforeLast(':') else t) to (port ?: PC_TCP_PORT)
+    }
+
+    /** A PC's note (by broadcast or asked for) as what it plays; null when it isn't one of this account's. */
+    private fun pcState(note: JsonObject, ip: String): PcState? {
+        val key = account ?: return null
+        if (!enabled || note["kind"]?.jsonPrimitive?.content != "pc" || note["account"]?.jsonPrimitive?.content != key) return null
+        val port = note["port"]?.jsonPrimitive?.intOrNull ?: return null
+        fun str(k: String) = note[k]?.jsonPrimitive?.takeIf { it.isString }?.content.orEmpty()
+        fun num(k: String) = note[k]?.jsonPrimitive?.floatOrNull ?: 0f
+        return PcState(
+            ip, port, str("device"), str("video_id"), str("title"), str("artist"), str("thumb").ifEmpty { null },
+            note["playing"]?.jsonPrimitive?.booleanOrNull == true, num("position"), num("duration"),
+            note["volume"]?.jsonPrimitive?.floatOrNull ?: 1f, note["remote"]?.jsonPrimitive?.booleanOrNull == true,
+            System.currentTimeMillis(),
+        )
     }
 
     /** One request to a PC, with the account's key (and [query] after it). Blocking. */
@@ -256,6 +299,10 @@ object Link {
             c.inputStream.bufferedReader().use { it.readText() }.also { c.disconnect() }
         }.getOrNull()
     }
+
+    /** A like (or unlike) made here, told to the PC so its heart follows at once. Blocking. */
+    fun like(ip: String, port: Int, videoId: String, on: Boolean): Boolean =
+        call(ip, port, "POST", "/like", "&video=$videoId&on=${if (on) 1 else 0}") != null
 
     /** This phone's top songs by RaM points (played here), for Mix Tastes. */
     fun topSongs(ctx: android.content.Context, n: Int = 25): List<Track> =

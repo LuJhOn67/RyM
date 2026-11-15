@@ -20,6 +20,11 @@ use crate::api::Track;
 /// The UDP port the notes go to.
 pub const PORT: u16 = 47811;
 
+/// A computer's TCP port for `/state`, `/note` and the rest, when it's free (else any): a phone on
+/// another network (another router) reaches the PC at its address and this port, typed on the
+/// phone, where the notes by broadcast don't get through.
+pub const TCP_PORT: u16 = 47812;
+
 /// A device's note: what it is and what it plays.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Announce {
@@ -221,6 +226,14 @@ pub fn lan_ipv4() -> Option<std::net::Ipv4Addr> {
     }
 }
 
+/// A like (or unlike) made here, told to the phone of the same account so its heart follows at
+/// once (the account's own list catches up later).
+pub async fn send_like(ip: IpAddr, port: u16, account: &str, video_id: &str, on: bool) -> Result<()> {
+    let url = format!("http://{}/like?account={account}&video={video_id}&on={}", std::net::SocketAddr::new(ip, port), on as u8);
+    http().post(url).send().await?.error_for_status()?;
+    Ok(())
+}
+
 /// RaM points sync: the phone's song points, fetched and merged (the newer play of each song
 /// wins). At most once in half an hour; how many songs changed.
 pub async fn sync_points(ip: IpAddr, port: u16, account: &str) -> Result<usize> {
@@ -241,9 +254,10 @@ pub async fn sync_points(ip: IpAddr, port: u16, account: &str) -> Result<usize> 
 /// (with the account's key); `pause` runs when a phone took the music, `control` for the remote.
 pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing>>, pause: impl Fn() + Send + Sync + 'static, control: impl Fn(String, f32) + Send + Sync + 'static) -> bool {
     use std::io::{BufRead, BufReader, Write};
-    let Ok(server) = std::net::TcpListener::bind(("0.0.0.0", 0)) else { return false };
+    let Some(server) = std::net::TcpListener::bind(("0.0.0.0", TCP_PORT)).or_else(|_| std::net::TcpListener::bind(("0.0.0.0", 0))).ok() else { return false };
     let Ok(port) = server.local_addr().map(|a| a.port()) else { return false };
     let answers = playing.clone();
+    let name = device.clone();
     let spawned = std::thread::Builder::new().name("rym-link-server".into()).spawn(move || {
         for client in server.incoming().flatten() {
             let _ = client.set_read_timeout(Some(Duration::from_secs(3)));
@@ -260,10 +274,24 @@ pub fn announce(device: String, playing: std::sync::Arc<std::sync::Mutex<Playing
                 match (ok, method) {
                     (false, _) => (403, "{}".to_string()),
                     (true, "GET") if target.starts_with("/state") => p.state().map_or((404, "{}".to_string()), |s| (200, s)),
+                    // The note, asked for: a phone on another network (the address typed on it).
+                    (true, "GET") if target.starts_with("/note") => p.note(&name, port).map_or((404, "{}".to_string()), |s| (200, s)),
                     // RaM points sync: this computer's song points.
                     (true, "GET") if target.starts_with("/points") => (200, crate::ram_points::export_scores()),
                     // Mix Tastes: this computer's top songs by RaM points.
                     (true, "GET") if target.starts_with("/top") => (200, crate::ram_points::top_json(25)),
+                    // A like made on the phone: the heart here follows at once (the phone told the account).
+                    (true, "POST") if target.starts_with("/like") => {
+                        let q = target.split_once('?').map_or("", |(_, q)| q);
+                        let get = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k)).unwrap_or_default();
+                        let vid = get("video=");
+                        if vid.is_empty() || !vid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                            (400, "{}".to_string())
+                        } else {
+                            control(format!("like:{vid}"), if get("on=") == "1" { 1.0 } else { 0.0 });
+                            (200, "{}".to_string())
+                        }
+                    }
                     (true, "POST") if target.starts_with("/pause") => {
                         pause();
                         (200, "{}".to_string())
