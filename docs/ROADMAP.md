@@ -3,7 +3,7 @@
 Features planned next, in the order suggested. Nothing here is started yet.
 
 ## First
-- [ ] **Arabic lyrics translation:** an Arabic line under each line of any song (English, Turkish, Korean...), not only English under Japanese. Small: the translation path exists.
+- [ ] **Arabic lyrics translation:** an Arabic line under each line of any song (English, Turkish, Korean...), not only English under Japanese. Decided: only the lyrics sites' own human translations (Musixmatch, Genius Arabic Translations), no machine translation, so a song is never mangled; songs without one show none. Fewer songs get one.
 - [ ] **Now playing on Discord:** an opt-in setting that posts the playing song to RyM huB's `now-playing` room, with the cover and a "Play in RyM" link. Medium.
 - [ ] **Smart offline:** on Wi-Fi and charging, the phone downloads your top songs by RaM points by itself. Small to medium.
 
