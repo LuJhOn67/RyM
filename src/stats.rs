@@ -98,6 +98,49 @@ pub struct Recap {
     pub top_artists: Vec<(String, f32)>,
 }
 
+/// RyM Wrapped: this year in numbers (from the months kept).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Year {
+    /// "2026".
+    pub year: String,
+    pub hours: f32,
+    /// The year's artists, most listened first, with hours.
+    pub top_artists: Vec<(String, f32)>,
+    /// The month listened to most ("2026-08") and its hours.
+    pub busiest_month: Option<(String, f32)>,
+}
+
+pub fn wrapped() -> Year {
+    flush();
+    let now = month_of(crate::updates::now());
+    year_of(&load(), &now[..4])
+}
+
+fn year_of(s: &Stats, year: &str) -> Year {
+    let prefix = format!("{year}-");
+    let mut ms = 0u64;
+    let mut artists: BTreeMap<String, u64> = BTreeMap::new();
+    let mut busiest: Option<(String, u64)> = None;
+    for (name, m) in s.months.iter().filter(|(k, _)| k.starts_with(&prefix)) {
+        ms += m.ms;
+        for (a, t) in &m.artists {
+            *artists.entry(a.clone()).or_default() += t;
+        }
+        if busiest.as_ref().is_none_or(|b| m.ms > b.1) {
+            busiest = Some((name.clone(), m.ms));
+        }
+    }
+    let mut top: Vec<(String, u64)> = artists.into_iter().filter(|(a, _)| !a.is_empty()).collect();
+    top.sort_by_key(|a| std::cmp::Reverse(a.1));
+    let hours = |ms: u64| ms as f32 / 3_600_000.0;
+    Year {
+        year: year.to_string(),
+        hours: hours(ms),
+        top_artists: top.into_iter().take(10).map(|(a, t)| (a, hours(t))).collect(),
+        busiest_month: busiest.filter(|b| b.1 > 0).map(|(n, t)| (n, hours(t))),
+    }
+}
+
 pub fn recap() -> Recap {
     flush();
     let s = load();
@@ -121,5 +164,25 @@ mod tests {
         assert_eq!(super::month_of(0), "1970-01");
         assert_eq!(super::month_of(1_793_000_000), "2026-10");
         assert_eq!(super::month_of(1_793_600_000), "2026-11");
+    }
+}
+
+#[cfg(test)]
+mod wrapped_tests {
+    use super::*;
+
+    #[test]
+    fn the_year_from_its_months() {
+        let mut s = Stats::default();
+        let month = |ms: u64, artists: &[(&str, u64)]| Month { ms, artists: artists.iter().map(|(a, t)| (a.to_string(), *t)).collect() };
+        s.months.insert("2026-01".into(), month(3_600_000, &[("Daft Punk", 3_600_000)]));
+        s.months.insert("2026-08".into(), month(9_000_000, &[("Daft Punk", 1_800_000), ("Linkin Park", 7_200_000)]));
+        s.months.insert("2025-12".into(), month(36_000_000, &[("Old", 36_000_000)]));
+        let y = year_of(&s, "2026");
+        assert_eq!(y.hours, 3.5);
+        assert_eq!(y.top_artists[0], ("Linkin Park".to_string(), 2.0));
+        assert_eq!(y.top_artists[1], ("Daft Punk".to_string(), 1.5));
+        assert_eq!(y.busiest_month, Some(("2026-08".to_string(), 2.5)));
+        assert_eq!(year_of(&s, "2024"), Year { year: "2024".into(), ..Default::default() });
     }
 }

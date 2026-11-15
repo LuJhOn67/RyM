@@ -749,6 +749,13 @@ fn wire(ui: &AppWindow, st: &Shared) {
         set_toggle(st, "float", on);
     }));
     app.on_share(w(open_share));
+    app.on_share_wrapped(w(|st| {
+        let recap = rymplayer::stats::recap();
+        let (title, lines) = wrapped_card(&recap);
+        if !title.is_empty() {
+            open_share_card(st, title, lines);
+        }
+    }));
     app.on_preview({
         let st = st.clone();
         move |key| preview(&st, &key)
@@ -4416,6 +4423,15 @@ fn open_share(st: &Shared) {
     open_share_with(st, None);
 }
 
+/// The share window as a card of its own (RyM Wrapped): a title and lines over the playing song's cover.
+fn open_share_card(st: &Shared, title: String, lines: Vec<String>) {
+    open_share_with(st, Some(lines.join("\n")));
+    if let Some(w) = st.borrow().share.as_ref() {
+        w.set_song(title.into());
+        w.set_artist(SharedString::new());
+    }
+}
+
 /// The share window; `lines`: a lyric card's picked lines in place of the sung one.
 fn open_share_with(st: &Shared, lines: Option<String>) {
     let Some(ui) = st.borrow().ui.upgrade() else { return };
@@ -4548,7 +4564,15 @@ fn fill_stats(st: &Shared) {
     };
     let fav_songs = bars(fav_songs.into_iter().map(|(t, p)| (format!("{} — {}", t.title, t.artist), p)).collect());
     let fav_artists = bars(fav_artists);
+    // RyM Wrapped: the year so far.
+    let (wrapped_title, wrapped_lines) = wrapped_card(&recap);
+    let year = rymplayer::stats::wrapped();
+    let year_top = year.top_artists.first().map_or(1.0, |a| a.1).max(0.01);
+    let year_artists: Vec<Bar> = year.top_artists.iter().map(|(a, h)| Bar { label: a.clone().into(), value: h / year_top, text: format!("{:.1} h", h).into() }).collect();
     with_app(st, |a| {
+        a.set_wrapped_title(wrapped_title.into());
+        a.set_wrapped_text(wrapped_lines.join("\n").into());
+        a.set_year_artists(ModelRc::from(Rc::new(VecModel::from(year_artists))));
         a.set_fav_songs(ModelRc::from(Rc::new(VecModel::from(fav_songs))));
         a.set_fav_artists(ModelRc::from(Rc::new(VecModel::from(fav_artists))));
         a.set_kinds(ModelRc::from(Rc::new(VecModel::from(kind_bars))));
@@ -4556,6 +4580,26 @@ fn fill_stats(st: &Shared) {
         a.set_top_songs(ModelRc::from(Rc::new(VecModel::from(songs))));
         a.set_stats_text(text.into());
     });
+}
+
+/// RyM Wrapped's title ("RyM Wrapped 2026 · 120 h") and its facts (top artist, most played song,
+/// busiest month); no title before any listening this year.
+fn wrapped_card(recap: &rymplayer::stats::Recap) -> (String, Vec<String>) {
+    let y = rymplayer::stats::wrapped();
+    if y.hours <= 0.0 {
+        return (String::new(), Vec::new());
+    }
+    let mut lines = Vec::new();
+    if let Some((a, h)) = y.top_artists.first() {
+        lines.push(format!("{}: {a} ({h:.1} h)", tr("Top artist of the year")));
+    }
+    if let Some((t, n)) = recap.top_songs.first() {
+        lines.push(format!("{}: {} · {} ({n}\u{00d7})", tr("Most played song"), t.title, t.artist));
+    }
+    if let Some((m, h)) = &y.busiest_month {
+        lines.push(format!("{}: {m} ({h:.1} h)", tr("Busiest month")));
+    }
+    (format!("RyM Wrapped {} · {:.0} {}", y.year, y.hours, tr("hours this year")), lines)
 }
 
 /// The source pills over the lyrics; every source is looked up once per song.

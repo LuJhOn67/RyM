@@ -250,6 +250,11 @@ export global App {
     in property <[Bar]> fav-songs;
     in property <[Bar]> fav-artists;
     in property <string> stats-text;
+    // RyM Wrapped: the year's title, its facts, and its artists.
+    in property <string> wrapped-title;
+    in property <string> wrapped-text;
+    in property <[Bar]> year-artists;
+    callback share-wrapped();
 
     // ---- account, settings, notices
     in property <bool> signed-in;
@@ -2068,6 +2073,23 @@ component StatsPage inherits Page {
         spacing: 18px * Ui.k;
         Header { title: App.tr("Your stats"); }
         Text { text: App.stats-text; font-size: 20px * Ui.k; color: Theme.dim; wrap: word-wrap; horizontal-alignment: Ui.start; }
+        // RyM Wrapped: the year so far.
+        if App.wrapped-title != "": Rectangle {
+            height: wcol.preferred-height;
+            border-radius: (20px * Ui.k) * Theme.round;
+            background: @linear-gradient(135deg, Theme.accent.with-alpha(0.55) 0%, #16161c 60%, #0b0b0f 100%);
+            wcol := VerticalLayout {
+                padding: 24px * Ui.k;
+                spacing: 10px * Ui.k;
+                HorizontalLayout {
+                    Text { text: App.wrapped-title; font-size: 30px * Ui.k; font-weight: 700; color: #ffffff; horizontal-alignment: Ui.start; horizontal-stretch: 1; vertical-alignment: center; }
+                    Button { text: App.tr("Share"); strong: true; clicked => { App.share-wrapped(); } }
+                }
+                Text { text: App.wrapped-text; font-size: 18px * Ui.k; color: #ffffffd0; wrap: word-wrap; horizontal-alignment: Ui.start; }
+            }
+        }
+        if App.year-artists.length > 0: Text { text: App.tr("Artists of the year"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        if App.year-artists.length > 0: Bars { bars: App.year-artists; }
         Text { text: App.tr("What you listen to (RaM points)"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         Bars { bars: App.kinds; }
         Text { text: App.tr("Top artists this month"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }

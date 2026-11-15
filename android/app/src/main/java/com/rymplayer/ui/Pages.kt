@@ -71,6 +71,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -594,6 +596,42 @@ private fun RewindCard(vm: AppViewModel) {
     }
 }
 
+/** RyM Wrapped: the year so far, with a button to share it as a picture. */
+@Composable
+private fun WrappedCard(vm: AppViewModel, recap: com.rymplayer.data.Recent.Recap) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val y = remember { com.rymplayer.data.Recent.wrapped(ctx) }
+    if (y.hours <= 0f) return
+    val accent = MaterialTheme.colorScheme.primary
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val lines = buildList {
+        y.topArtists.firstOrNull()?.let { (a, h) -> add("${tr("Top artist of the year")}: $a (%.1f h)".format(h)) }
+        recap.topSongs.firstOrNull()?.let { (t, n) -> add("${tr("Most played song")}: ${t.title} · ${t.artist} (${n}×)") }
+        y.busiestMonth?.let { (m, h) -> add("${tr("Busiest month")}: $m (%.1f h)".format(h)) }
+    }
+    val title = "RyM Wrapped ${y.year}"
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.7f), Color(0xFF16161C), Color(0xFF0B0B0F))))
+            .padding(20.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("%.0f %s".format(y.hours, tr("hours this year")), fontSize = 14.sp, color = Color.White.copy(alpha = 0.7f))
+            }
+            androidx.compose.material3.FilledTonalButton({
+                // The year as a card picture (the most played song's cover), shared.
+                val cover = recap.topSongs.firstOrNull()?.first
+                val card = (cover ?: Track("", title, "")).copy(title = title, artist = "%.0f %s".format(y.hours, tr("hours this year")))
+                scope.launch { com.rymplayer.ui.LyricCard.share(ctx, card, lines, accent.toArgb()) }
+            }) { Text(tr("Share")) }
+        }
+        Spacer(Modifier.height(12.dp))
+        for (l in lines) Text(l, fontSize = 15.sp, color = Color.White, modifier = Modifier.padding(vertical = 3.dp))
+    }
+}
+
 @Composable
 private fun RecapPageBody(vm: AppViewModel) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -605,6 +643,7 @@ private fun RecapPageBody(vm: AppViewModel) {
                 Text(tr("Your recap"), fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
         }
+        item { WrappedCard(vm, r) }
         item { RewindCard(vm) }
         item {
             Row(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(36.dp)) {

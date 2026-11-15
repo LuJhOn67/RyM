@@ -73,6 +73,29 @@ object Recent {
         pending.clear()
     }
 
+    /** RyM Wrapped: this year's hours, its artists (most first, with hours) and its busiest month. */
+    data class Year(val year: String, val hours: Float, val topArtists: List<Pair<String, Float>>, val busiestMonth: Pair<String, Float>?)
+
+    fun wrapped(ctx: Context): Year {
+        flushListening(ctx)
+        val year = month().take(4)
+        val all = stats(ctx).all
+        val months = all.filterKeys { it.startsWith("m:$year-") }.mapValues { (it.value as? Long) ?: 0L }
+        val artists = HashMap<String, Long>()
+        for ((k, v) in all) {
+            if (!k.startsWith("a:$year-")) continue
+            val name = k.removePrefix("a:").substringAfter(':')
+            if (name.isNotEmpty()) artists[name] = (artists[name] ?: 0L) + ((v as? Long) ?: 0L)
+        }
+        val hours = { ms: Long -> ms / 3_600_000f }
+        return Year(
+            year,
+            hours(months.values.sum()),
+            artists.entries.sortedByDescending { it.value }.take(10).map { it.key to hours(it.value) },
+            months.maxByOrNull { it.value }?.takeIf { it.value > 0 }?.let { it.key.removePrefix("m:") to hours(it.value) },
+        )
+    }
+
     /** "Your recap": hours this month and in all, the most played songs (with plays), the top artists this month (with hours). */
     data class Recap(val hoursMonth: Float, val hoursTotal: Float, val topSongs: List<Pair<Track, Int>>, val topArtists: List<Pair<String, Float>>)
 
