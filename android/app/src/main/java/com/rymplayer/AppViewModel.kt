@@ -825,6 +825,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // Updates: the 12-hour background check, and a look now when it's been that long.
         UpdateWorker.schedule(app, autoUpdates)
+        OfflineWorker.schedule(app, prefs.getBoolean(OfflineWorker.ON, false))
         if (autoUpdates && System.currentTimeMillis() - lastUpdateCheck > com.rymplayer.data.Updates.EVERY_MS) checkUpdates(false)
         loadStore()
     }
@@ -1498,6 +1499,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Downloads in the best quality (yt-dlp, slow on a phone) instead of the playback file. */
+    /** Smart downloads: on Wi-Fi and charging, the top songs by RaM points are saved by themselves. */
+    var smartDownloads by mutableStateOf(prefs.getBoolean(OfflineWorker.ON, false))
+        private set
+
+    /** How many of the top songs smart downloads keeps on the phone. */
+    var smartCount by mutableStateOf(prefs.getInt(OfflineWorker.COUNT, 30))
+        private set
+
+    fun toggleSmartDownloads() {
+        smartDownloads = !smartDownloads
+        prefs.edit().putBoolean(OfflineWorker.ON, smartDownloads).apply()
+        OfflineWorker.schedule(getApplication(), smartDownloads)
+    }
+
+    fun cycleSmartCount(step: Int = 1) {
+        val steps = listOf(10, 30, 50, 100)
+        smartCount = steps[(steps.indexOf(smartCount).coerceAtLeast(0) + step + steps.size) % steps.size]
+        prefs.edit().putInt(OfflineWorker.COUNT, smartCount).apply()
+    }
+
     var downloadBest by mutableStateOf(prefs.getBoolean("download_best", false))
         private set
 

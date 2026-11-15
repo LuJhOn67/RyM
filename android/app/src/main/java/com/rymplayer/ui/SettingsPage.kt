@@ -369,6 +369,10 @@ fun SettingsPage(vm: AppViewModel) {
             Section(tr("Network & Parsers")) {
                 SwitchRow(Icons.Default.Sync, tr("Data saver"), tr("On mobile data songs come at about 70 kbps; full quality on Wi-Fi"), vm.dataSaver) { vm.toggleDataSaver() }
                 SwitchRow(Icons.Default.Sync, tr("Download on Wi-Fi only"), tr("Downloads wait for Wi-Fi instead of using mobile data"), vm.wifiDownloads) { vm.toggleWifiDownloads() }
+                SwitchRow(Icons.Default.Sync, tr("Smart downloads"), tr("On Wi-Fi and charging, your top songs by RaM points are saved by themselves, to play without the internet"), vm.smartDownloads) { vm.toggleSmartDownloads() }
+                if (vm.smartDownloads) {
+                    TapRow(Icons.Default.Sync, tr("How many top songs"), "", vm.smartCount.toString(), onPrev = { vm.cycleSmartCount(-1) }) { vm.cycleSmartCount() }
+                }
                 Divider()
                 TapRow(Icons.Default.Search, tr("Song finder"), tr("Search, radio and mixes; the built-in one is the rollback if a YouTube change breaks ytmusicapi") + " · " + tr("tap to change"), tr(vm.musicEngine.label), onPrev = { vm.cycleEngine(-1) }) { vm.cycleEngine() }
                 Divider()
