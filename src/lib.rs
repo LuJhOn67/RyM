@@ -10,6 +10,7 @@ pub mod config;
 pub mod discord;
 pub mod feed;
 pub mod fonts;
+pub mod autoeq;
 pub mod fx;
 pub mod i18n;
 pub mod innertube;

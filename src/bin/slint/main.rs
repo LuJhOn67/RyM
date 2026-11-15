@@ -119,6 +119,8 @@ enum Ev {
     Preview(u64, String, anyhow::Result<stream::Playable>, f32),
     /// The focus timer's music (calm Lo-Fi).
     FocusSongs(anyhow::Result<Vec<Track>>),
+    /// AutoEq: the headphones found and their 5 band gains.
+    AutoEq(anyhow::Result<(String, [f32; 5])>),
     /// Road Radio with nothing learned yet: a road-trip song to start from.
     RoadSongs(anyhow::Result<Vec<Track>>),
     /// "Clear cache" finished: the bytes freed.
@@ -1730,6 +1732,7 @@ fn fill_settings(st: &Shared) {
         switch("sponsorblock", "Skip non-music parts", "SponsorBlock: a music video's intro, talk and outro are skipped", c.sponsorblock),
         switch("vocals-off", "Remove vocals (karaoke)", "The voice taken out (it sits in the middle of the stereo); the music stays", c.vocals_off),
         choice("eq", "Equalizer", t(c.eq_name())),
+        field("autoeq", "Headphones (AutoEq)", "Type your headphones' model (like WH-1000XM4): the equalizer is set from AutoEq's measurement", &c.autoeq_name),
         choice("mode", "Speed", t(c.mode_name())),
         choice("sleep", "Sleep timer", sleep),
         choice("saver", "Screen saver", if c.screen_saver_min == 0 { t("Off") } else { format!("{} {}", c.screen_saver_min, t("min idle")) }),
@@ -2144,6 +2147,24 @@ fn choose(st: &Shared, id: &str, step: i32) {
 
 fn set_text(st: &Shared, id: &str, text: &str) {
     let text = text.trim().to_string();
+    // AutoEq: the headphones looked up, and their correction becomes the custom EQ.
+    if id == "autoeq" {
+        if text.is_empty() {
+            st.borrow_mut().config.autoeq_name.clear();
+            st.borrow().config.save();
+            return;
+        }
+        toast(st, tr("Looking in AutoEq…"));
+        post(async move {
+            let found = async {
+                let h = rymplayer::autoeq::search(&text, 1).await?.into_iter().next().ok_or_else(|| anyhow::anyhow!(tr("No headphones by that name in AutoEq")))?;
+                let gains = rymplayer::autoeq::bands(&h).await?;
+                anyhow::Ok((h.name, gains))
+            };
+            Ev::AutoEq(found.await)
+        });
+        return;
+    }
     let mut s = st.borrow_mut();
     let c = &mut s.config;
     match id {
@@ -5887,6 +5908,22 @@ fn handle(st: &Shared, ev: Ev) {
         }
         Ev::Blended(Err(e)) => toast(st, &format!("{}: {e}", tr("Mix Tastes"))),
         Ev::Preview(id, key, song, at) => preview_ready(st, id, key, song, at),
+        Ev::AutoEq(Ok((name, gains))) => {
+            {
+                let mut s = st.borrow_mut();
+                let s = &mut *s;
+                s.config.eq_custom = gains;
+                s.config.eq_preset = rymplayer::fx::PRESETS.len() - 1;
+                s.config.autoeq_name = name.clone();
+                rymplayer::fx::set(s.config.fx());
+                // This output device's EQ from now on.
+                s.device_eq.changed(&mut s.config);
+                s.config.save();
+            }
+            toast(st, &format!("AutoEq: {name}"));
+            fill_settings(st);
+        }
+        Ev::AutoEq(Err(e)) => toast(st, &e.to_string()),
         Ev::FocusSongs(found) => {
             let songs: Vec<Track> = found.unwrap_or_default().into_iter().filter(|t| t.link.is_none() && !t.video_id.is_empty()).collect();
             if st.borrow().focus.on() && !songs.is_empty() {

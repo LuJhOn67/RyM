@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Headphones
@@ -440,6 +441,39 @@ fun SettingsPage(vm: AppViewModel) {
                     if (!fullScreenOk) {
                         TapRow(Icons.Default.Bedtime, tr("Full-screen notifications"), tr("The second way the AOD screen comes up (like an alarm) · tap to allow")) { vm.askFullScreen() }
                     }
+                }
+                // AutoEq: the headphones' measured correction as the custom EQ.
+                var findPhones by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                TapRow(Icons.Default.Headphones, tr("Headphones (AutoEq)"), tr("Type your headphones' model (like WH-1000XM4): the equalizer is set from AutoEq's measurement"), vm.autoEqName.ifEmpty { tr("None") }) { findPhones = true }
+                if (findPhones) {
+                    var typed by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+                    var hits by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(emptyList<com.rymplayer.data.AutoEq.Headphone>()) }
+                    var looking by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                    val scope = androidx.compose.runtime.rememberCoroutineScope()
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { findPhones = false },
+                        title = { Text(tr("Headphones (AutoEq)")) },
+                        text = {
+                            Column {
+                                OutlinedTextField(typed, { typed = it }, singleLine = true, placeholder = { Text("WH-1000XM4") })
+                                if (looking) Text(tr("Looking in AutoEq…"), color = Dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                                for (h in hits) {
+                                    TextButton({ vm.useHeadphones(h); findPhones = false }) { Text(if (h.by.isEmpty()) h.name else "${h.name} · ${h.by}") }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton({
+                                looking = true
+                                scope.launch {
+                                    hits = vm.findHeadphones(typed)
+                                    looking = false
+                                    if (hits.isEmpty()) vm.status = tr("No headphones by that name in AutoEq")
+                                }
+                            }) { Text(tr("Find")) }
+                        },
+                        dismissButton = { TextButton({ findPhones = false }) { Text(tr("Cancel")) } },
+                    )
                 }
                 SwitchRow(Icons.Default.MicOff, tr("Remove vocals (karaoke)"), tr("The voice taken out (it sits in the middle of the stereo); the music stays"), snd.vocalsOff) { vm.changeSound(snd.copy(vocalsOff = !snd.vocalsOff)) }
                 Divider()

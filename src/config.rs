@@ -139,6 +139,9 @@ pub struct Config {
     /// screen (0: off).
     #[serde(default)]
     pub screen_saver_min: u32,
+    /// The headphones whose AutoEq correction is the custom EQ ("" when none).
+    #[serde(default)]
+    pub autoeq_name: String,
     /// Windows 11's glass behind the window: 0 off, 1 Mica (the wallpaper's colors), 2 Acrylic
     /// (what's behind the window, blurred).
     #[serde(default)]
@@ -377,6 +380,7 @@ impl Default for Config {
             accent_from_cover: false,
             seek_step: seek_step(),
             screen_saver_min: 0,
+            autoeq_name: String::new(),
             window_glass: 0,
             prefer_lossless: false,
             fps_cap: fps_cap(),

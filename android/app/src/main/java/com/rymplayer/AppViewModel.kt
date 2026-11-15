@@ -1500,6 +1500,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Downloads in the best quality (yt-dlp, slow on a phone) instead of the playback file. */
+    /** AutoEq: the headphones whose correction is the custom EQ ("" when none). */
+    var autoEqName by mutableStateOf(prefs.getString("autoeq_name", "").orEmpty())
+        private set
+
+    /** AutoEq's headphones matching [query] (on a worker thread). */
+    suspend fun findHeadphones(query: String): List<com.rymplayer.data.AutoEq.Headphone> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.AutoEq.search(query) }
+
+    /** The headphones' AutoEq correction becomes the custom EQ. */
+    fun useHeadphones(h: com.rymplayer.data.AutoEq.Headphone) {
+        viewModelScope.launch {
+            val gains = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.AutoEq.bands(h) }
+            if (gains == null) {
+                status = tr("No headphones by that name in AutoEq")
+                return@launch
+            }
+            changeSound(sound.copy(eqPreset = com.rymplayer.playback.Sound.PRESETS.lastIndex, eqCustom = gains))
+            autoEqName = h.name
+            prefs.edit().putString("autoeq_name", h.name).apply()
+            status = "AutoEq: ${h.name}"
+        }
+    }
+
     /** Smart downloads: on Wi-Fi and charging, the top songs by RaM points are saved by themselves. */
     var smartDownloads by mutableStateOf(prefs.getBoolean(OfflineWorker.ON, false))
         private set
