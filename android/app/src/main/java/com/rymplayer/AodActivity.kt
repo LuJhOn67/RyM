@@ -87,6 +87,8 @@ class AodActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         Aod.open = true
         Aod.close = { runOnUiThread { finish() } }
+        // Brought by the full-screen notification: it's done.
+        getSystemService(android.app.NotificationManager::class.java)?.cancel(com.rymplayer.playback.AOD_NOTIFICATION)
         setContent { AodScreen(::finish) }
     }
 

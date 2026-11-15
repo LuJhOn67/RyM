@@ -520,6 +520,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (aodLyrics && !android.provider.Settings.canDrawOverlays(app)) askOverlay()
     }
 
+    /** A Xiaomi, Redmi or POCO phone (HyperOS, MIUI): two permissions of its own, off at first. */
+    val isXiaomi: Boolean = android.os.Build.MANUFACTURER.lowercase().let { it == "xiaomi" || it == "redmi" || it == "poco" }
+
+    /** Xiaomi's own permissions page for RyM (pop-up windows in the background, show on lock screen). */
+    fun askXiaomiPermissions() {
+        val app = getApplication<Application>()
+        val tries = listOf(
+            android.content.Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity"),
+            android.content.Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.AppPermissionsEditorActivity"),
+            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${app.packageName}")),
+        )
+        for (intent in tries) {
+            val ok = runCatching {
+                app.startActivity(intent.putExtra("extra_pkgname", app.packageName).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.isSuccess
+            if (ok) return
+        }
+    }
+
+    /** Android 14+: whether RyM may show full-screen notifications (the AOD screen's second way). */
+    fun fullScreenAllowed(): Boolean = android.os.Build.VERSION.SDK_INT < 34 ||
+        getApplication<Application>().getSystemService(android.app.NotificationManager::class.java)?.canUseFullScreenIntent() != false
+
+    fun askFullScreen() {
+        if (android.os.Build.VERSION.SDK_INT < 34) return
+        val app = getApplication<Application>()
+        runCatching {
+            app.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, android.net.Uri.parse("package:${app.packageName}"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
     /** Android's "Display over other apps" page for RyM (the AOD lyrics open from the background). */
     fun askOverlay() {
         val app = getApplication<Application>()

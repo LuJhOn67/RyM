@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Lyrics when the screen is off: RyM's always-on screen opens from the background. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- The same screen by a full-screen notification (like an alarm), where opening it from the
+         background is blocked (Xiaomi's HyperOS and MIUI). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Songs on this phone (Library > Songs on this phone), asked the first time it opens. -->

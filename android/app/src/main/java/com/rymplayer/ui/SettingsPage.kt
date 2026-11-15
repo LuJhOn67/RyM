@@ -423,6 +423,20 @@ fun SettingsPage(vm: AppViewModel) {
                     else tr("Turning the screen off while music plays shows a dim black screen with the clock and the sung line; turn it off again to sleep · needs \"Display over other apps\""),
                     vm.aodLyrics && overlayOk,
                 ) { if (vm.aodLyrics && !overlayOk) vm.askOverlay() else vm.toggleAodLyrics() }
+                if (vm.aodLyrics) {
+                    // Xiaomi blocks the AOD screen until two permissions of its own are on.
+                    if (vm.isXiaomi) {
+                        TapRow(Icons.Default.Bedtime, tr("Xiaomi, Redmi, POCO: two more permissions"), tr("Other permissions: \"Display pop-up windows while running in the background\" and \"Show on Lock screen\" · tap to open")) { vm.askXiaomiPermissions() }
+                    }
+                    var fullScreenOk by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(vm.fullScreenAllowed()) }
+                    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+                        fullScreenOk = vm.fullScreenAllowed()
+                        onPauseOrDispose { }
+                    }
+                    if (!fullScreenOk) {
+                        TapRow(Icons.Default.Bedtime, tr("Full-screen notifications"), tr("The second way the AOD screen comes up (like an alarm) · tap to allow")) { vm.askFullScreen() }
+                    }
+                }
                 SwitchRow(Icons.Default.MicOff, tr("Remove vocals (karaoke)"), tr("The voice taken out (it sits in the middle of the stereo); the music stays"), snd.vocalsOff) { vm.changeSound(snd.copy(vocalsOff = !snd.vocalsOff)) }
                 Divider()
                 SwitchRow(Icons.Default.ContentCut, tr("Skip silence"), tr("Silent parts at the start and end of songs are skipped"), snd.skipSilence) { vm.changeSound(snd.copy(skipSilence = !snd.skipSilence)) }

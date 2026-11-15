@@ -598,14 +598,49 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
                 return
             }
             val on = getSharedPreferences("rym", MODE_PRIVATE).getBoolean("aod_lyrics", false)
-            if (!on || players.none { it?.isPlaying == true } || !android.provider.Settings.canDrawOverlays(this@PlaybackService)) return
-            runCatching {
-                startActivity(
-                    android.content.Intent(this@PlaybackService, com.rymplayer.AodActivity::class.java)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION),
-                )
-            }.onFailure { android.util.Log.w("RyM", "always-on screen: ${it.message}") }
+            if (!on || players.none { it?.isPlaying == true }) return
+            if (android.provider.Settings.canDrawOverlays(this@PlaybackService)) {
+                runCatching {
+                    startActivity(
+                        android.content.Intent(this@PlaybackService, com.rymplayer.AodActivity::class.java)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION),
+                    )
+                }.onFailure { android.util.Log.w("RyM", "always-on screen: ${it.message}") }
+            }
+            // Not up in a moment (Xiaomi's HyperOS and MIUI block opening it from the background):
+            // a full-screen notification brings it, as an alarm's does.
+            handler.postDelayed({ if (!com.rymplayer.Aod.open && players.any { it?.isPlaying == true }) aodByNotification() }, 700)
         }
+    }
+
+    /** The always-on screen by a full-screen notification (quiet; it goes once the screen is up). */
+    private fun aodByNotification() {
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return
+        if (android.os.Build.VERSION.SDK_INT >= 34 && !nm.canUseFullScreenIntent()) return
+        val channel = android.app.NotificationChannel("aod", com.rymplayer.tr("Lyrics when the screen is off (AOD)"), android.app.NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null, null)
+            enableVibration(false)
+            setShowBadge(false)
+        }
+        nm.createNotificationChannel(channel)
+        val open = android.app.PendingIntent.getActivity(
+            this, AOD_NOTIFICATION,
+            android.content.Intent(this, com.rymplayer.AodActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = androidx.core.app.NotificationCompat.Builder(this, "aod")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(com.rymplayer.Aod.title.ifEmpty { "RyM" })
+            .setContentText(com.rymplayer.Aod.line)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_ALARM)
+            .setFullScreenIntent(open, true)
+            // Quiet by its channel (no sound, no vibration): setSilent would stop it opening the screen.
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setTimeoutAfter(15_000)
+            .build()
+        runCatching { nm.notify(AOD_NOTIFICATION, n) }
     }
     private var screenOffWatched = false
 
@@ -637,3 +672,6 @@ class PlaybackService : androidx.media3.session.MediaLibraryService() {
         const val START_LATENCY_MS = 60L
     }
 }
+
+/** The always-on screen's full-screen notification (see PlaybackService.aodByNotification). */
+const val AOD_NOTIFICATION = 51
