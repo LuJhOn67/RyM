@@ -502,7 +502,13 @@ fn draw_bar(f: &mut Frame, app: &mut App, th: &Theme, area: Rect) {
     let block = pane(th, i18n::tr("Now playing"), false);
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let [info, gauge, help] = Layout::vertical([Constraint::Length(1); 3]).areas(inner);
+    // Key hints off: two rows (the song, its progress); the progress kept its row only with them.
+    let [info, gauge, help] = if app.config.help {
+        Layout::vertical([Constraint::Length(1); 3]).areas(inner)
+    } else {
+        let [info, gauge] = Layout::vertical([Constraint::Length(1); 2]).areas(inner);
+        [info, gauge, Rect::default()]
+    };
 
     let icon = if app.loading {
         "…"
@@ -780,6 +786,8 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         // Player bar right under the top bar, lyrics below the songs.
         assert!(lines[3].contains("Now playing"));
+        // Key hints off: the progress still shows, under the song.
+        assert!(lines[5].contains(" / "), "{}", lines[5]);
         let songs = lines.iter().position(|l| l.contains("Liked songs")).unwrap();
         let lyr = lines.iter().position(|l| l.contains("╭ Lyrics ")).unwrap();
         assert!(lyr > songs);
