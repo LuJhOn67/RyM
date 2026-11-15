@@ -234,8 +234,11 @@ class MusicApi(private val cookie: String?) {
         val shelf = page.findAll("musicShelfRenderer").firstOrNull()
         val allSongs = shelf?.at("title/runs/0/navigationEndpoint/browseEndpoint/browseId").str
             ?: shelf?.at("bottomEndpoint/browseEndpoint/browseId").str
-        val songs = allSongs?.let { runCatching { playlistAll(it, 3000) }.getOrNull() }.orEmpty()
-            .ifEmpty { shelf?.let(::songRows).orEmpty() }
+        val top = shelf?.let(::songRows).orEmpty()
+        val catalogue = allSongs?.let { runCatching { playlistAll(it, 3000) }.getOrNull() }.orEmpty()
+        // The most played first ("Top songs"), then the rest of their songs, each once.
+        val seen = top.map { it.videoId }.toMutableSet()
+        val songs = top + catalogue.filter { seen.add(it.videoId) }
         val out = songs.map { it.copy(artistId = it.artistId ?: id) }.toMutableList()
         for (carousel in page.findAll("musicCarouselShelfRenderer")) {
             val header = carousel.at("header/musicCarouselShelfBasicHeaderRenderer")
@@ -251,6 +254,18 @@ class MusicApi(private val cookie: String?) {
             out += cards.filter { it.link is Link.Album }
         }
         return out
+    }
+
+    /**
+     * The artist a search is for, when the words typed are an artist's name and not a song's (the
+     * same as the PC's api::artist_named): their name and channel.
+     */
+    suspend fun artistNamed(query: String): Pair<String, String>? {
+        val page = post("search", buildJsonObject { put("query", query); put("params", ARTISTS_FILTER) })
+        val row = page.findAll("musicResponsiveListItemRenderer").firstOrNull() ?: return null
+        val name = row.at("flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text").runsText().orEmpty()
+        val id = row.findAll("browseEndpoint").firstNotNullOfOrNull { b -> b.at("browseId").str?.takeIf { it.startsWith("UC") } } ?: return null
+        return (name to id).takeIf { namesArtist(query, name) }
     }
 
     /** The channel of an artist known only by name (songs from radios and some lists). */
@@ -522,4 +537,24 @@ fun JsonElement.findAll(key: String): List<JsonElement> {
     }
     walk(this)
     return out
+}
+
+/** A name for comparing (the same as the PC's): lower case, letters and digits, Arabic letters in one form. */
+fun plainName(s: String): String = buildString {
+    for (c in s.lowercase()) {
+        when {
+            c == 'أ' || c == 'إ' || c == 'آ' -> append('ا')
+            c == 'ة' -> append('ه')
+            c == 'ى' -> append('ي')
+            c in '\u064B'..'\u065F' || c == 'ـ' -> {}
+            c.isLetterOrDigit() -> append(c)
+        }
+    }
+}
+
+/** The words typed name this artist: the same name, or its start, not more than the name. */
+fun namesArtist(query: String, artist: String): Boolean {
+    val q = plainName(query)
+    val a = plainName(artist)
+    return q.isNotEmpty() && (q == a || (q.length >= 4 && a.startsWith(q)))
 }

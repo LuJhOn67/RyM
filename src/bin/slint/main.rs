@@ -119,6 +119,8 @@ enum Ev {
     Preview(u64, String, anyhow::Result<stream::Playable>, f32),
     /// The focus timer's music (calm Lo-Fi).
     FocusSongs(anyhow::Result<Vec<Track>>),
+    /// A search that named an artist: the search, the artist's name and channel.
+    ArtistSearch(u64, String, String),
     /// AutoEq: the headphones found and their 5 band gains.
     AutoEq(anyhow::Result<(String, [f32; 5])>),
     /// Road Radio with nothing learned yet: a road-trip song to start from.
@@ -2959,7 +2961,14 @@ fn search(st: &Shared, q: String) {
         a.set_searching(true);
         a.set_page(1);
     });
-    post(async move { Ev::Search(id, api.search_paged(q).await) });
+    // An artist's name: their page (their songs, the most played first), not songs like theirs.
+    post(async move {
+        let (artist, page) = tokio::join!(api.clone().artist_named(q.clone()), api.search_paged(q));
+        match artist {
+            Ok(Some((name, channel))) => Ev::ArtistSearch(id, name, channel),
+            _ => Ev::Search(id, page),
+        }
+    });
 }
 
 // ---------------------------------------------------------------- lists
@@ -5924,6 +5933,14 @@ fn handle(st: &Shared, ev: Ev) {
             fill_settings(st);
         }
         Ev::AutoEq(Err(e)) => toast(st, &e.to_string()),
+        Ev::ArtistSearch(id, name, channel) => {
+            if id != st.borrow().search_id {
+                return;
+            }
+            with_app(st, |a| a.set_searching(false));
+            let Some(api) = st.borrow().api.clone() else { return };
+            open_list(st, name, api.artist_page(channel));
+        }
         Ev::FocusSongs(found) => {
             let songs: Vec<Track> = found.unwrap_or_default().into_iter().filter(|t| t.link.is_none() && !t.video_id.is_empty()).collect();
             if st.borrow().focus.on() && !songs.is_empty() {

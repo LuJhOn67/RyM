@@ -654,6 +654,17 @@ impl Api {
     }
 
     /// The channel of an artist known only by name (songs from radios and some lists).
+    /// The artist a search is for, when the words typed are an artist's name and not a song's
+    /// (see [`names_artist`]): their name and channel.
+    pub async fn artist_named(self, query: String) -> Result<Option<(String, String)>> {
+        let found = match &self {
+            Api::Guest(y) => y.search_artists(query.as_str()).await,
+            Api::User(y) => y.search_artists(query.as_str()).await,
+        }
+        .map_err(err)?;
+        Ok(found.into_iter().next().filter(|a| names_artist(&query, &a.artist)).map(|a| (a.artist, a.browse_id.get_raw().to_string())))
+    }
+
     pub async fn artist_id_for(self, name: String) -> Result<Option<String>> {
         let first = name.split(", ").next().unwrap_or(&name).to_string();
         let found = match &self {
@@ -686,6 +697,29 @@ impl Api {
     }
 }
 
+
+/// A name for comparing: lower case, letters and digits only, Arabic letters in one form (أ إ آ
+/// as ا, ة as ه, ى as ي, no tashkeel or tatweel).
+fn plain_name(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            'أ' | 'إ' | 'آ' => Some('ا'),
+            'ة' => Some('ه'),
+            'ى' => Some('ي'),
+            '\u{064B}'..='\u{065F}' | 'ـ' => None,
+            c if c.is_alphanumeric() => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The words typed name this artist: the same name, or its start ("linkin" for Linkin Park), not
+/// more than the name ("adele hello" is a song search).
+pub fn names_artist(query: &str, artist: &str) -> bool {
+    let (q, a) = (plain_name(query), plain_name(artist));
+    !q.is_empty() && (q == a || (q.chars().count() >= 4 && a.starts_with(&q)))
+}
 
 /// Largest thumbnail of a list.
 fn best_thumb(thumbs: &[Thumbnail]) -> Option<String> {
@@ -1349,5 +1383,31 @@ mod plays_tests {
             println!("{} · {:?}", t.title, super::plays_of(&t.video_id));
         }
         assert!(songs.iter().take(5).any(|t| super::plays_of(&t.video_id).is_some()));
+    }
+}
+
+#[cfg(test)]
+mod artist_search_tests {
+    #[test]
+    fn an_artist_by_name() {
+        assert!(super::names_artist("linkin park", "Linkin Park"));
+        assert!(super::names_artist("LINKIN", "Linkin Park"));
+        assert!(super::names_artist("باسم الكربلائي", "باسم الكربلائي"));
+        assert!(super::names_artist("محمد عبده", "مُحمد عبدة"));
+        assert!(!super::names_artist("adele hello", "Adele"));
+        assert!(!super::names_artist("the", "The Weeknd"));
+        assert!(!super::names_artist("numb", "Linkin Park"));
+    }
+
+    /// `cargo test --lib artist_named_live -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn artist_named_live() {
+        let api = super::Api::guest().await.unwrap();
+        for q in ["linkin park", "باسم الكربلائي", "numb", "adele hello"] {
+            println!("{q} -> {:?}", api.clone().artist_named(q.into()).await.unwrap());
+        }
+        assert!(api.clone().artist_named("linkin park".into()).await.unwrap().is_some());
+        assert!(api.artist_named("numb".into()).await.unwrap().is_none());
     }
 }

@@ -1019,7 +1019,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             scLink -> open(Screen.Songs(Screen.Kind.SoundCloudLink, q, "SoundCloud"))
             searchSoundCloud && hasPlugin(plugins.SOUNDCLOUD) -> open(Screen.Songs(Screen.Kind.SoundCloud, q, "SoundCloud: \"$q\""))
             searchLyrics -> open(Screen.Songs(Screen.Kind.Lyrics, q, "${tr("By lyrics")}: \"$q\""))
-            else -> open(Screen.Songs(Screen.Kind.Results, q, "${tr("Results for")} \"$q\""))
+            else -> viewModelScope.launch {
+                // An artist's name: their page (their songs, the most played first), not songs like theirs.
+                val artist = runCatching { api.artistNamed(q) }.getOrNull()
+                if (artist != null) open(Screen.Songs(Screen.Kind.Artist, artist.second, artist.first))
+                else open(Screen.Songs(Screen.Kind.Results, q, "${tr("Results for")} \"$q\""))
+            }
         }
     }
 
