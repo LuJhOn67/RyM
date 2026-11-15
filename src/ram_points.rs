@@ -213,6 +213,10 @@ pub struct Notes {
     /// The artist last heard (not skipped) and when, for [`together`](Self::together).
     #[serde(default)]
     last_heard: Option<(String, u64)>,
+    /// When all points were last reset (unix seconds, 0: never). It goes with the points to the
+    /// other device, which resets too; plays from before it don't come back.
+    #[serde(default)]
+    reset_at: u64,
 }
 
 impl Notes {
@@ -460,15 +464,26 @@ pub fn reasons(songs: &[Track], seed: &Track, liked: impl Fn(&str) -> bool) -> V
 pub fn export_scores() -> String {
     let _one = FILE.lock();
     let notes = Notes::load();
-    notes.tracks.iter().map(|(id, s)| format!("{}\t{}\t{}\t{}\t{}", id.replace(['\t', '\n'], " "), s.points, s.last, s.plays, s.week)).collect::<Vec<_>>().join("\n")
+    notes.export()
 }
 
 /// The other device's song points (as [`export_scores`] writes them): for each song, the
 /// device that played it last wins. Returns how many songs changed.
 pub fn merge_scores(text: &str) -> usize {
+    merge(text, false)
+}
+
+/// A RaM points file the user picked (a backup, another device's): its songs and artists come
+/// back even from before a reset here (this device's reset date stays, so the other devices
+/// aren't reset by it).
+pub fn merge_file(text: &str) -> usize {
+    merge(text, true)
+}
+
+fn merge(text: &str, restore: bool) -> usize {
     let _one = FILE.lock();
     let mut notes = Notes::load();
-    let changed = notes.merge_scores(text);
+    let changed = notes.merge(text, restore);
     if changed > 0 {
         notes.save();
     }
@@ -925,14 +940,61 @@ impl Notes {
     }
 
     /// The other device's song points: the newer play of each song wins.
+    /// The points as text for the other device or a file (see [`merge_scores`](Self::merge_scores)):
+    /// a `#reset` line, a `#artist` line per artist, then a line per song.
+    pub fn export(&self) -> String {
+        let clean = |s: &str| s.replace(['\t', '\n'], " ");
+        let mut out = vec![format!("#reset\t{}", self.reset_at)];
+        out.extend(self.affinity.iter().map(|(a, p)| format!("#artist\t{}\t{p}\t{}", clean(a), clean(self.names.get(a).map_or("", String::as_str)))));
+        out.extend(self.tracks.iter().map(|(id, s)| format!("{}\t{}\t{}\t{}\t{}", clean(id), s.points, s.last, s.plays, s.week)));
+        out.join("\n")
+    }
+
     pub fn merge_scores(&mut self, text: &str) -> usize {
+        self.merge(text, false)
+    }
+
+    /// `restore`: a file the user picked: its points come back even from before a reset here.
+    fn merge(&mut self, text: &str, restore: bool) -> usize {
         let mut changed = 0;
+        // Their last reset, when newer than this device's: this one resets too (songs played here
+        // since then stay).
+        let theirs_reset = text.lines().find_map(|l| l.strip_prefix("#reset\t")).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+        if theirs_reset > self.reset_at && !restore {
+            self.tracks.retain(|_, s| s.last >= theirs_reset);
+            self.affinity.clear();
+            self.bias.clear();
+            self.names.clear();
+            self.reset_at = theirs_reset;
+            changed += 1;
+        }
+        // Artists' points come only from a device reset as lately (an older one's are from before the reset).
+        let artists_ok = restore || theirs_reset >= self.reset_at;
         for line in text.lines() {
             let f: Vec<&str> = line.split('\t').collect();
-            if f.len() < 3 || f[0].is_empty() {
+            // An artist's points: taken when this device has none for them.
+            if f.first() == Some(&"#artist") {
+                if artists_ok
+                    && let (Some(a), Some(Ok(p))) = (f.get(1), f.get(2).map(|p| p.parse::<f32>()))
+                    && !a.is_empty()
+                    && !self.affinity.contains_key(*a)
+                {
+                    self.affinity.insert(a.to_string(), p.clamp(-100.0, 100.0));
+                    if let Some(name) = f.get(3).filter(|n| !n.is_empty()) {
+                        self.names.insert(a.to_string(), name.to_string());
+                    }
+                    changed += 1;
+                }
+                continue;
+            }
+            if f.len() < 3 || f[0].is_empty() || f[0].starts_with('#') {
                 continue;
             }
             let (Ok(points), Ok(last)) = (f[1].parse::<f32>(), f[2].parse::<u64>()) else { continue };
+            // Played before the last reset: it stays reset (a file the user picked brings it back).
+            if last < self.reset_at && !restore {
+                continue;
+            }
             // Times of day aren't sent: this device's own stay.
             let buckets = self.tracks.get(f[0]).map(|s| s.buckets).unwrap_or_default();
             let theirs = Score { points: points.clamp(-100.0, 100.0), last, plays: f.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), week: f.get(4).and_then(|w| w.parse().ok()).unwrap_or(0), buckets };
@@ -1027,6 +1089,7 @@ impl Notes {
         self.affinity.clear();
         self.bias.clear();
         self.names.clear();
+        self.reset_at = crate::updates::now();
     }
 
     pub fn reset_negative(&mut self) {
@@ -1832,5 +1895,57 @@ mod smart_tests {
         assert_eq!(ids(notes.smart(Smart::OnRepeat, &known, now, 10)), ["hot", "night"]);
         assert_eq!(ids(notes.smart(Smart::LateNight, &known, now, 10)), ["night"]);
         assert_eq!(Smart::from_key("late"), Some(Smart::LateNight));
+    }
+}
+
+#[cfg(test)]
+mod reset_sync_tests {
+    use super::*;
+
+    fn score(points: f32, last: u64) -> Score {
+        Score { points, last, plays: 1, week: 0, buckets: [0; 4] }
+    }
+
+    #[test]
+    fn a_reset_reaches_the_other_device() {
+        // The phone has old points; the PC was reset at 1000 and played "new" since.
+        let mut phone = Notes::default();
+        phone.tracks.insert("old".into(), score(30.0, 500));
+        phone.tracks.insert("later".into(), score(5.0, 1200));
+        phone.affinity.insert("someone".into(), 9.0);
+        let mut pc = Notes::default();
+        pc.reset_at = 1000;
+        pc.tracks.insert("new".into(), score(4.0, 1100));
+        // The phone's points reach the PC: nothing played before the reset comes back.
+        assert!(pc.merge_scores(&phone.export()) >= 1);
+        assert!(!pc.tracks.contains_key("old"));
+        assert!(pc.tracks.contains_key("later") && pc.tracks.contains_key("new"));
+        // The PC's reach the phone: it resets too, keeping what it played since.
+        phone.merge_scores(&pc.export());
+        assert_eq!(phone.reset_at, 1000);
+        assert!(!phone.tracks.contains_key("old"));
+        assert!(phone.tracks.contains_key("later") && phone.tracks.contains_key("new"));
+        assert!(phone.affinity.is_empty());
+    }
+
+    #[test]
+    fn a_file_brings_artists_too() {
+        let mut a = Notes::default();
+        a.affinity.insert("adele".into(), 12.0);
+        a.names.insert("adele".into(), "Adele".into());
+        a.tracks.insert("x".into(), score(8.0, 50));
+        let mut b = Notes::default();
+        assert_eq!(b.merge_scores(&a.export()), 2);
+        assert_eq!(b.affinity.get("adele"), Some(&12.0));
+        assert_eq!(b.names.get("adele").map(String::as_str), Some("Adele"));
+        // A backup file brings its points back even after a reset here, which stays.
+        let mut d = Notes::default();
+        d.reset_at = 1000;
+        assert_eq!(d.merge(&a.export(), true), 2);
+        assert_eq!(d.reset_at, 1000);
+        assert!(d.tracks.contains_key("x"));
+        // Old devices' lines (no #reset, no #artist) still merge.
+        let mut c = Notes::default();
+        assert_eq!(c.merge_scores("y\t3\t60\t1\t0"), 1);
     }
 }

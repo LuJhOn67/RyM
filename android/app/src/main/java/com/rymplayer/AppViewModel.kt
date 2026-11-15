@@ -224,6 +224,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         player.message = tr(if (why == "date") "Points reset: the day you picked came" else "Points reset: a week passed")
     }
 
+    /** The RaM points written to a file the user picked (Android's save window). */
+    fun exportPoints(uri: android.net.Uri) {
+        val app = getApplication<Application>()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val ok = runCatching { app.contentResolver.openOutputStream(uri)?.use { it.write(com.rymplayer.data.RamPoints.exportScores(app).toByteArray()) } }.isSuccess
+            status = if (ok) tr("Points saved to") + " " + (uri.lastPathSegment ?: "") else tr("Not a RaM points file")
+        }
+    }
+
+    /** A RaM points file (from the PC or a phone) merged in: for each song the newer play wins. */
+    fun importPoints(uri: android.net.Uri) {
+        val app = getApplication<Application>()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val text = runCatching { app.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }.getOrNull()
+            if (text == null || text.lineSequence().none { it.startsWith("#reset\t") || it.split('\t').size >= 3 }) {
+                status = tr("Not a RaM points file")
+                return@launch
+            }
+            val n = com.rymplayer.data.RamPoints.mergeScores(app, text, restore = true)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { refreshRamSummary() }
+            status = "${tr("Songs added or updated")}: $n"
+        }
+    }
+
     fun resetAllPoints() {
         com.rymplayer.data.RamPoints.resetAll(getApplication())
         refreshRamSummary()
@@ -1249,7 +1273,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun syncLiked(songs: List<Track>) {
-        likedTracks = songs
         val now = System.currentTimeMillis()
         val ids = LinkedHashSet(songs.map { it.videoId })
         // A like made here stays until YouTube's list shows it (it can take minutes), a day at most.
@@ -1262,6 +1285,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             liked.clear()
             liked += ids
         }
+        // Songs liked here that YouTube's list doesn't show yet stay (first, as the newest).
+        val listed = shown.map { it.videoId }.toHashSet()
+        val before = (likedPages().firstNotNullOfOrNull { pages[it] }.orEmpty() + likedTracks).distinctBy { it.videoId }
+        shown = before.filter { it.videoId in ids && it.videoId !in listed } + shown
+        likedTracks = shown
         likedPages().forEach { pages[it] = shown }
     }
 

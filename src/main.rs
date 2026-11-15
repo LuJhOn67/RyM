@@ -757,6 +757,8 @@ impl App {
             }
             Event::Liked(Ok(t)) => {
                 self.liked.sync(t.iter().map(|t| t.video_id.clone()));
+                // The list matches the hearts (likes made here a moment ago stay).
+                let t = self.liked.shown(t, &self.liked_tracks);
                 self.liked_tracks = t.clone();
                 if self.page == Page::Playlist(api::LIKED_ID.into()) && !self.busy {
                     self.tracks = t;

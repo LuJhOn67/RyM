@@ -4418,6 +4418,8 @@ fn sync_liked(ui: &Shared, tracks: Vec<Track>) {
         let mut s = ui.borrow_mut();
         s.liked.sync(tracks.iter().map(|t| t.video_id.clone()));
         s.likes_synced = Instant::now();
+        // The list matches the hearts (likes made here a moment ago stay).
+        let tracks = s.liked.shown(tracks, &s.liked_tracks);
         s.liked_tracks = tracks.clone();
         if s.page == Page::Liked && !s.tracks_loading {
             let changed = s.tracks.len() != tracks.len() || s.tracks.iter().zip(&tracks).any(|(a, b)| a.video_id != b.video_id);

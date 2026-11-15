@@ -341,6 +341,11 @@ fun SettingsPage(vm: AppViewModel) {
                     if (resetNegative) tr("Negative only") else tr("All"),
                     { resetNegative = !resetNegative },
                 ) { if (resetNegative) vm.resetNegativePoints() else askReset = true }
+                // RaM points to a file and back (Android's own save and open windows).
+                val savePoints = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain")) { uri -> uri?.let(vm::exportPoints) }
+                val openPoints = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importPoints) }
+                TapRow(Icons.Default.Tune, tr("Save points to a file"), tr("Your RaM points as a file: keep it, or open it in RyM on another device"), tr("Save")) { savePoints.launch("RyM RaM points.txt") }
+                TapRow(Icons.Default.Tune, tr("Add points from a file"), tr("A RaM points file from RyM (PC or phone): for each song the newer play wins"), tr("Open")) { openPoints.launch(arrayOf("text/plain", "*/*")) }
                 var pickDate by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
                 TapRow(Icons.Default.Tune, tr("Reset on a date"), tr("On that day all points go back to 0 · tap to pick"), vm.ramResetDate.ifEmpty { tr("None") }) { pickDate = true }
                 if (pickDate) ResetDatePicker(vm.ramResetDate, { pickDate = false }) { vm.chooseResetDate(it); pickDate = false }

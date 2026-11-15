@@ -106,6 +106,15 @@ impl Likes {
         }
     }
 
+    /// The liked songs to show after a sync: songs liked here that YouTube's list doesn't show
+    /// yet stay (first, as the newest), and songs unliked here go, so the list matches the hearts.
+    pub fn shown(&self, synced: Vec<crate::api::Track>, before: &[crate::api::Track]) -> Vec<crate::api::Track> {
+        let ids: HashSet<&str> = synced.iter().map(|t| t.video_id.as_str()).collect();
+        let mut out: Vec<crate::api::Track> = before.iter().filter(|t| self.contains(&t.video_id) && !ids.contains(t.video_id.as_str())).cloned().collect();
+        out.extend(synced.into_iter().filter(|t| self.contains(&t.video_id)));
+        out
+    }
+
     pub fn clear(&mut self) {
         self.ids.clear();
         self.local.clear();
@@ -143,6 +152,25 @@ mod tests {
         assert_eq!(merged(&["x", "y"], &before), ["x", "y", "e", "d", "c", "b", "a"]);
         // Nothing read before.
         assert_eq!(merged(&["x"], &[]), ["x"]);
+    }
+
+    fn song(id: &str) -> crate::api::Track {
+        crate::api::Track { video_id: id.into(), album_id: None, artist_id: None, title: id.into(), artist: String::new(), album: String::new(), duration: String::new(), link: None, thumb: None }
+    }
+
+    #[test]
+    fn the_list_matches_the_hearts() {
+        let mut l = Likes::default();
+        l.sync(["a".to_string(), "b".to_string()]);
+        let before = vec![song("a"), song("b")];
+        l.set("new", true);
+        l.set("b", false);
+        let mut with_new = vec![song("new")];
+        with_new.extend(before);
+        // YouTube's list doesn't show either change yet.
+        l.sync(["a".to_string(), "b".to_string()]);
+        let ids: Vec<String> = l.shown(vec![song("a"), song("b")], &with_new).into_iter().map(|t| t.video_id).collect();
+        assert_eq!(ids, ["new", "a"]);
     }
 
     #[test]

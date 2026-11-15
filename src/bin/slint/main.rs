@@ -119,6 +119,8 @@ enum Ev {
     Preview(u64, String, anyhow::Result<stream::Playable>, f32),
     /// The focus timer's music (calm Lo-Fi).
     FocusSongs(anyhow::Result<Vec<Track>>),
+    /// A RaM points file picked to add (None: closed without one).
+    PointsFile(Option<std::path::PathBuf>),
     /// RyM huB: the member's key (linked) or why not.
     HubLinked(anyhow::Result<String>),
     /// A search that named an artist: the search, the artist's name and channel.
@@ -1753,6 +1755,8 @@ fn fill_settings(st: &Shared) {
         choice("discovery", "Familiar or new", t(rymplayer::ram_points::DISCOVERY_NAMES[c.discovery.min(4) as usize])),
         button("ram-reset-all", "Reset all points", ram_summary(), "Reset all"),
         button("ram-reset-neg", "Reset negative points only", t("Skipped songs come back; your favorites stay"), "Reset"),
+        button("ram-export", "Save points to a file", t("Your RaM points as a file: keep it, or open it in RyM on another device"), "Save"),
+        button("ram-import", "Add points from a file", t("A RaM points file from RyM (PC or phone): for each song the newer play wins"), "Open"),
         field("ram-reset-date", "Reset on a date", "Like 2026-12-31; empty: no date. On that day all points go back to 0", &c.ram_reset_date),
         switch("ram-weekly", "Weekly reset", "Every 7 days all points go back to 0 (off unless you turn it on)", c.ram_weekly_reset),
         head("Alarm"),
@@ -2635,6 +2639,18 @@ fn press(st: &Shared, id: &str) {
         }
         "theme-export" => export_colors(st),
         "theme-import" => ask_text(st, "theme", tr("Import colors"), tr("A .json theme file (its path), or the JSON itself")),
+        "ram-export" => {
+            let dir = directories::UserDirs::new().and_then(|u| u.download_dir().map(|d| d.to_path_buf())).unwrap_or_else(rymplayer::data_dir);
+            let file = dir.join(format!("RyM RaM points {}.txt", rymplayer::ram_points::today()));
+            match std::fs::write(&file, rymplayer::ram_points::export_scores()) {
+                Ok(()) => toast(st, &format!("{} {}", tr("Points saved to"), file.display())),
+                Err(e) => toast(st, &e.to_string()),
+            }
+        }
+        "ram-import" => {
+            let title = tr("Add points from a file");
+            std::thread::spawn(move || send(Ev::PointsFile(rfd::FileDialog::new().set_title(title).add_filter("RaM points", &["txt"]).pick_file())));
+        }
         "ram-reset-neg" => {
             rymplayer::ram_points::reset_negative();
             toast(st, tr("Negative points are back to 0"));
@@ -5298,7 +5314,8 @@ fn handle(st: &Shared, ev: Ev) {
             {
                 let mut s = st.borrow_mut();
                 s.liked.sync(liked.iter().map(|t| t.video_id.clone()));
-                s.liked_tracks = liked;
+                let shown = s.liked.shown(liked, &s.liked_tracks);
+                s.liked_tracks = shown;
             }
             refresh_hearts(st);
         }
@@ -5961,6 +5978,16 @@ fn handle(st: &Shared, ev: Ev) {
             fill_settings(st);
         }
         Ev::AutoEq(Err(e)) => toast(st, &e.to_string()),
+        Ev::PointsFile(None) => {}
+        Ev::PointsFile(Some(path)) => match std::fs::read_to_string(&path) {
+            Ok(text) if text.lines().any(|l| l.starts_with("#reset\t") || l.split('\t').count() >= 3) => {
+                let n = rymplayer::ram_points::merge_file(&text);
+                toast(st, &format!("{}: {n}", tr("Songs added or updated")));
+                fill_settings(st);
+            }
+            Ok(_) => toast(st, tr("Not a RaM points file")),
+            Err(e) => toast(st, &e.to_string()),
+        },
         Ev::HubLinked(Ok(key)) => {
             {
                 let mut s = st.borrow_mut();

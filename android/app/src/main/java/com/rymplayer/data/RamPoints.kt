@@ -129,15 +129,13 @@ object RamPoints {
      * same as the PC's ram_points::export_scores.
      */
     @Synchronized
-    fun exportScores(ctx: Context): String = load(ctx).tracks.entries.joinToString("\n") { (id, s) ->
-        "${clean(id)}\t${s.points}\t${s.last / 1000}\t${s.plays}\t${s.week / 1000}"
-    }
+    fun exportScores(ctx: Context): String = load(ctx).export()
 
     /** The other device's song points: for each song, the device that played it last wins. */
     @Synchronized
-    fun mergeScores(ctx: Context, text: String): Int {
+    fun mergeScores(ctx: Context, text: String, restore: Boolean = false): Int {
         val notes = load(ctx)
-        val changed = notes.mergeScores(text)
+        val changed = notes.mergeScores(text, restore)
         if (changed > 0) save(ctx, notes)
         return changed
     }
@@ -191,6 +189,9 @@ object RamPoints {
         /** The artist last heard (not skipped) and when (ms), for [together]. */
         var lastHeard: Pair<String, Long>? = null
 
+        /** When all points were last reset (ms, 0: never): it goes to the other device, which resets too. */
+        var resetAt = 0L
+
         /** Two artists' place together: how often they were heard one after the other. */
         fun together(a: String, b: String): Int {
             if (a.isEmpty() || b.isEmpty() || a == b) return 0
@@ -241,13 +242,37 @@ object RamPoints {
         }
 
         /** The other device's song points (times in seconds): the newer play of each song wins. */
-        fun mergeScores(text: String): Int {
+        /** [restore]: a file the user picked: its points come back even from before a reset here (the reset date stays). */
+        fun mergeScores(text: String, restore: Boolean = false): Int {
             var changed = 0
+            // Their last reset, when newer: this phone resets too (songs played here since stay).
+            val theirsReset = (text.lineSequence().firstNotNullOfOrNull { it.removePrefix("#reset\t").takeIf { r -> r != it } }?.trim()?.toLongOrNull() ?: 0L) * 1000
+            if (theirsReset > resetAt && !restore) {
+                tracks.values.removeAll { it.last < theirsReset }
+                affinity.clear(); bias.clear(); names.clear()
+                resetAt = theirsReset
+                changed++
+            }
+            // Artists' points come only from a device reset as lately (an older one's are from before the reset).
+            val artistsOk = restore || theirsReset >= resetAt
             for (line in text.lineSequence()) {
                 val f = line.split('\t')
-                if (f.size < 3 || f[0].isEmpty()) continue
+                // An artist's points: taken when this phone has none for them.
+                if (f.firstOrNull() == "#artist") {
+                    val a = f.getOrNull(1).orEmpty()
+                    val p = f.getOrNull(2)?.toFloatOrNull()
+                    if (artistsOk && a.isNotEmpty() && p != null && a !in affinity) {
+                        affinity[a] = p.coerceIn(-100f, 100f)
+                        f.getOrNull(3)?.takeIf { it.isNotEmpty() }?.let { names[a] = it }
+                        changed++
+                    }
+                    continue
+                }
+                if (f.size < 3 || f[0].isEmpty() || f[0].startsWith("#")) continue
                 val points = f[1].toFloatOrNull() ?: continue
                 val last = (f[2].toLongOrNull() ?: continue) * 1000
+                // Played before the last reset: it stays reset (a file the user picked brings it back).
+                if (last < resetAt && !restore) continue
                 val mine = tracks[f[0]]
                 if (mine != null && mine.last >= last) continue
                 // Times of day aren't sent: this phone's own stay.
@@ -304,7 +329,15 @@ object RamPoints {
 
         fun resetAll() {
             tracks.clear(); affinity.clear(); bias.clear(); names.clear()
+            resetAt = System.currentTimeMillis()
         }
+
+        /** The points as text for the other device or a file (the same as the PC's Notes::export). */
+        fun export(): String = buildList {
+            add("#reset\t${resetAt / 1000}")
+            for ((a, p) in affinity) add("#artist\t${clean(a)}\t$p\t${clean(names[a].orEmpty())}")
+            for ((id, s) in tracks) add("${clean(id)}\t${s.points}\t${s.last / 1000}\t${s.plays}\t${s.week / 1000}")
+        }.joinToString("\n")
 
         fun resetNegative() {
             tracks.values.removeAll { it.points < 0f }
@@ -595,6 +628,7 @@ object RamPoints {
         }
         return Notes(rekey(base.artists) { a, b -> IntArray(a.size) { a[it] + b.getOrElse(it) { 0 } } }, rekey(base.fixed) { a, _ -> a }, rekey(bias) { a, b -> a + b }, hidden, tracks, rekey(affinity) { a, b -> a + b }, rekey(names) { a, _ -> a }, hours, together).also { n ->
             p.getString("last_heard", "").orEmpty().split('\t').takeIf { it.size == 2 }?.let { (a, at) -> at.toLongOrNull()?.let { n.lastHeard = a to it } }
+            n.resetAt = p.getLong("reset_at", 0L)
         }
     }
 
@@ -623,6 +657,7 @@ object RamPoints {
             .putString("affinity", notes.affinity.entries.joinToString("\n") { (a, n) -> clean(a) + "\t" + n + "\t" + clean(notes.names[a].orEmpty()) })
             .putString("together", notes.together.entries.sortedByDescending { it.value }.take(3000).joinToString("\n") { (k, n) -> clean(k) + "\t" + n })
             .putString("last_heard", notes.lastHeard?.let { clean(it.first) + "\t" + it.second }.orEmpty())
+            .putLong("reset_at", notes.resetAt)
             .putString("hours", (0..4).flatMap { k -> (0..23).filter { notes.hours[k][it] > 0 }.map { h -> "$k\t$h\t${notes.hours[k][h]}" } }.joinToString("\n"))
             .apply()
     }
