@@ -6,7 +6,7 @@
 Your own account and library, synced lyrics, smart suggestions, twelve color themes, and a sound
 engine that mixes songs like a DJ.
 
-[**العربية**](#بالعربية) · [**Download**](../../releases/latest) · [Screenshots](#screenshots) · [Build](#build)
+[**العربية**](#بالعربية) · [**Download**](../../releases/latest) · [**Discord**](https://discord.gg/MruRQzuSrd) · [Screenshots](#screenshots) · [Build](#build)
 
 ![RyM Slint](docs/screenshots/slint-dusk.jpg)
 
@@ -200,7 +200,7 @@ cd android && ./gradlew assembleRelease                                         
 حسابك ومكتبتك، وكلمات أغانٍ متزامنة، واقتراحات ذكية، واثني عشر ثيمًا لونيًا، ومحرّك صوت يدمج الأغاني
 كما يفعل منسّقو الموسيقى.
 
-[التنزيل](../../releases/latest) · [الصور](#screenshots)
+[التنزيل](../../releases/latest) · [الدسكورد](https://discord.gg/MruRQzuSrd) · [الصور](#screenshots)
 
 ### التطبيقات
 
