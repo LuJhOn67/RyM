@@ -44,7 +44,7 @@ sealed interface Screen {
     data object Library : Screen
     data class Songs(val kind: Kind, val id: String, val title: String) : Screen
 
-    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device, Lyrics, HomeMix }
+    enum class Kind { Playlist, Album, Mix, Radio, Artist, History, Results, Downloads, SoundCloud, SoundCloudLink, Spotify, Device, Lyrics, HomeMix, Smart }
 }
 
 /** The focus timer's parts: 25 minutes of work, 5 of break. */
@@ -1385,6 +1385,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     Screen.Kind.Artist -> api.artist(page.id)
                     Screen.Kind.History -> api.history()
                     Screen.Kind.HomeMix -> homeMix()
+                    Screen.Kind.Smart -> com.rymplayer.data.RamPoints.smartList(getApplication(), page.id, Recent.tracks(getApplication()))
                     Screen.Kind.Results -> api.searchPaged(page.id).also { p -> p.more?.let { pageMore[page] = it } }.tracks
                     Screen.Kind.Downloads -> Downloads.list(getApplication())
                     Screen.Kind.Device -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.LocalSongs.list(getApplication()) }

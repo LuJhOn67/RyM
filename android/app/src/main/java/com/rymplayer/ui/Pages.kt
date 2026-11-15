@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
@@ -422,6 +423,12 @@ fun LibraryPage(vm: AppViewModel) {
             val openDevice = { vm.open(Screen.Songs(Screen.Kind.Device, "device", tr("Songs on this phone"))) }
             val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
                 if (ok) openDevice() else vm.status = tr("RyM needs \"Music and audio\" to show the phone's songs")
+            }
+            // Smart playlists (RaM points), before the phone's own songs.
+            for (kind in com.rymplayer.data.RamPoints.Smart.entries) {
+                LibraryRow(tr(kind.title), tr(kind.about), Brush.linearGradient(listOf(Color(0xFFEA814A), Color(0xFF8E44FF))), Icons.Default.AutoAwesome) {
+                    vm.open(Screen.Songs(Screen.Kind.Smart, kind.key, tr(kind.title)))
+                }
             }
             LibraryRow(tr("Songs on this phone"), tr("Your own music files"), Brush.linearGradient(listOf(Color(0xFF7B61FF), Color(0xFF00B4D8))), Icons.Default.PhoneAndroid) {
                 if (com.rymplayer.data.LocalSongs.allowed(ctx)) openDevice() else ask.launch(com.rymplayer.data.LocalSongs.permission)

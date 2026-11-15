@@ -508,6 +508,54 @@ pub fn rewind(known: &[Track]) -> Rewind {
     r
 }
 
+/// Smart playlists: made from RaM points, they fill and change by themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Smart {
+    /// Songs with many points not played in a month.
+    Forgotten,
+    /// The songs played most these two weeks.
+    OnRepeat,
+    /// The songs played most after midnight.
+    LateNight,
+}
+
+impl Smart {
+    pub const ALL: [Smart; 3] = [Smart::Forgotten, Smart::OnRepeat, Smart::LateNight];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Smart::Forgotten => "Forgotten favorites",
+            Smart::OnRepeat => "On repeat",
+            Smart::LateNight => "Late night",
+        }
+    }
+
+    pub fn about(self) -> &'static str {
+        match self {
+            Smart::Forgotten => "Songs you love that you haven't played in a month",
+            Smart::OnRepeat => "What you've played most these two weeks",
+            Smart::LateNight => "What you play after midnight",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Smart::Forgotten => "forgotten",
+            Smart::OnRepeat => "repeat",
+            Smart::LateNight => "late",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Smart> {
+        Smart::ALL.into_iter().find(|s| s.key() == key)
+    }
+}
+
+/// A smart playlist's songs (named from `known`, songs played on this device), the first `n`.
+pub fn smart_list(kind: Smart, known: &[Track], n: usize) -> Vec<Track> {
+    Notes::load().smart(kind, known, crate::updates::now(), n)
+}
+
 /// The top songs by RaM points (played on this device), for "Mix Tastes".
 pub fn top_tracks(n: usize) -> Vec<Track> {
     favorites(&crate::recent::tracks(), n).0.into_iter().map(|(t, _)| t).collect()
@@ -537,6 +585,28 @@ pub fn rewind_text(r: &Rewind) -> String {
 }
 
 impl Notes {
+    fn smart(&self, kind: Smart, known: &[Track], now: u64, n: usize) -> Vec<Track> {
+        let by_id: HashMap<&str, &Track> = known.iter().map(|t| (t.video_id.as_str(), t)).collect();
+        let month = 30 * 24 * 60 * 60;
+        let mut rows: Vec<(&Track, f32)> = self
+            .tracks
+            .iter()
+            .filter(|(id, _)| !self.hidden.contains(*id))
+            .filter_map(|(id, s)| {
+                let t = by_id.get(id.as_str())?;
+                let ago = now.saturating_sub(s.last);
+                let rank = match kind {
+                    Smart::Forgotten => (s.points > 5.0 && ago > month).then_some(s.points),
+                    Smart::OnRepeat => (ago < month / 2 && s.plays >= 2).then_some(s.plays as f32 + s.points / 1000.0),
+                    Smart::LateNight => (s.buckets[3] > 0).then_some(s.buckets[3] as f32 + s.points / 1000.0),
+                }?;
+                Some((*t, rank))
+            })
+            .collect();
+        rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+        rows.into_iter().take(n).map(|(t, _)| t.clone()).collect()
+    }
+
     fn rewind(&self, known: &[Track], now: u64) -> Rewind {
         // This month: songs played in the last 30 days.
         let month = now.saturating_sub(30 * 24 * 60 * 60);
@@ -1739,5 +1809,28 @@ mod like_tests {
         assert_eq!(liked_artist_points(1), 6);
         assert_eq!(liked_artist_points(3), 12);
         assert_eq!(liked_artist_points(9), 15);
+    }
+}
+
+#[cfg(test)]
+mod smart_tests {
+    use super::*;
+
+    #[test]
+    fn smart_playlists() {
+        let now = 100 * 24 * 60 * 60;
+        let day = 24 * 60 * 60;
+        let t = |id: &str| Track { video_id: id.into(), album_id: None, artist_id: None, title: id.into(), artist: String::new(), album: String::new(), duration: String::new(), link: None, thumb: None };
+        let known = vec![t("old"), t("hot"), t("night"), t("meh")];
+        let mut notes = Notes::default();
+        notes.tracks.insert("old".into(), Score { points: 40.0, last: now - 45 * day, plays: 9, week: 0, buckets: [0; 4] });
+        notes.tracks.insert("hot".into(), Score { points: 10.0, last: now - day, plays: 6, week: 0, buckets: [0, 6, 0, 0] });
+        notes.tracks.insert("night".into(), Score { points: 3.0, last: now - 2 * day, plays: 3, week: 0, buckets: [0, 0, 0, 3] });
+        notes.tracks.insert("meh".into(), Score { points: 1.0, last: now - 40 * day, plays: 1, week: 0, buckets: [1, 0, 0, 0] });
+        let ids = |v: Vec<Track>| v.into_iter().map(|t| t.video_id).collect::<Vec<_>>();
+        assert_eq!(ids(notes.smart(Smart::Forgotten, &known, now, 10)), ["old"]);
+        assert_eq!(ids(notes.smart(Smart::OnRepeat, &known, now, 10)), ["hot", "night"]);
+        assert_eq!(ids(notes.smart(Smart::LateNight, &known, now, 10)), ["night"]);
+        assert_eq!(Smart::from_key("late"), Some(Smart::LateNight));
     }
 }

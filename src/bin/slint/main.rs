@@ -1610,6 +1610,10 @@ fn show_playlists(st: &Shared) {
         cards.push(Card { key: "p:liked".into(), title: tr("Liked songs").into(), sub: format!("{} {}", s.liked_tracks.len(), tr("songs")).into(), cover: liked_cover });
         cards.push(Card { key: "p:history".into(), title: tr("History").into(), sub: SharedString::new(), cover: Image::default() });
     }
+    // Smart playlists (RaM points): no account needed.
+    for kind in rymplayer::ram_points::Smart::ALL {
+        cards.push(Card { key: format!("p:smart:{}", kind.key()).into(), title: tr_any(kind.name()).into(), sub: tr_any(kind.about()).into(), cover: Image::default() });
+    }
     let lists = s.playlists.clone();
     for (i, p) in lists.iter().enumerate() {
         let img = cover(&mut s, p.thumb.as_ref(), CARD_PX);
@@ -3018,6 +3022,15 @@ fn open_card(st: &Shared, key: &str) {
     st.borrow_mut().peers.played_here();
     if key == "p:local" {
         open_local(st);
+        return;
+    }
+    if let Some(kind) = key.strip_prefix("p:smart:").and_then(rymplayer::ram_points::Smart::from_key) {
+        let songs = rymplayer::ram_points::smart_list(kind, &rymplayer::recent::tracks(), 100);
+        if songs.is_empty() {
+            toast(st, tr("Nothing here yet: play more and it fills itself"));
+            return;
+        }
+        open_list(st, tr_any(kind.name()), async move { Ok(songs) });
         return;
     }
     if let Some(rest) = key.strip_prefix("p:") {

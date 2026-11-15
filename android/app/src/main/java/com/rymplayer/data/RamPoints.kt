@@ -394,6 +394,35 @@ object RamPoints {
         return 1f + 0.3f * buckets[Math.floorMod(now, 4)] / total
     }
 
+    /** Smart playlists (the same as the PC's ram_points::Smart): made from RaM points, they change by themselves. */
+    enum class Smart(val key: String, val title: String, val about: String) {
+        Forgotten("forgotten", "Forgotten favorites", "Songs you love that you haven't played in a month"),
+        OnRepeat("repeat", "On repeat", "What you've played most these two weeks"),
+        LateNight("late", "Late night", "What you play after midnight"),
+    }
+
+    /** A smart playlist's songs (named from [known], songs played here), the first [n]. */
+    fun smartList(ctx: Context, key: String, known: List<Track>, n: Int = 100): List<Track> =
+        Smart.entries.firstOrNull { it.key == key }?.let { smart(load(ctx), it, known, System.currentTimeMillis(), n) }.orEmpty()
+
+    fun smart(notes: Notes, kind: Smart, known: List<Track>, now: Long, n: Int): List<Track> {
+        val byId = known.associateBy { it.videoId }
+        val month = 30L * 24 * 60 * 60 * 1000
+        return notes.tracks.entries.asSequence()
+            .filter { it.key !in notes.hidden }
+            .mapNotNull { (id, s) ->
+                val t = byId[id] ?: return@mapNotNull null
+                val ago = now - s.last
+                val rank = when (kind) {
+                    Smart.Forgotten -> s.points.takeIf { it > 5f && ago > month }
+                    Smart.OnRepeat -> (s.plays + s.points / 1000f).takeIf { ago < month / 2 && s.plays >= 2 }
+                    Smart.LateNight -> (s.buckets[3] + s.points / 1000f).takeIf { s.buckets[3] > 0 }
+                } ?: return@mapNotNull null
+                t to rank
+            }
+            .sortedByDescending { it.second }.take(n).map { it.first }.toList()
+    }
+
     /** "RyM Rewind", this month in one card (the same as the PC's ram_points::Rewind). */
     data class Rewind(val topArtist: String?, val lateNight: Track?, val hours: Float, val mood: Int?)
 
