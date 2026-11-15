@@ -489,6 +489,23 @@ fun SettingsPage(vm: AppViewModel) {
                     colors = itemColors,
                 )
             }
+            Section("RyM huB") {
+                SwitchRow(Icons.Default.Forum, tr("Share what I play in RyM huB"), tr("Each song you play shows in the now-playing room of RyM huB, RyM's Discord server"), vm.hubShare) { vm.toggleHubShare() }
+                if (vm.hubShare) {
+                    var editName by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                    TapRow(Icons.Default.Forum, tr("Name shown there"), tr("Empty: no name, just the song"), vm.hubName.ifEmpty { tr("None") }) { editName = true }
+                    if (editName) {
+                        var typed by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(vm.hubName) }
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { editName = false },
+                            title = { Text(tr("Name shown there")) },
+                            text = { OutlinedTextField(typed, { typed = it.take(32) }, singleLine = true) },
+                            confirmButton = { TextButton({ vm.chooseHubName(typed); editName = false }) { Text(tr("Save")) } },
+                            dismissButton = { TextButton({ vm.chooseHubName(""); editName = false }) { Text(tr("Clear")) } },
+                        )
+                    }
+                }
+            }
             Section(tr("Community")) {
                 TapRow(Icons.Default.Forum, tr("Join the Discord"), tr("RyM huB: news, help, and songs to share, in Arabic and English")) { open("https://discord.gg/MruRQzuSrd") }
                 Divider()

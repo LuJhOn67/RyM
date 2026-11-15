@@ -176,6 +176,8 @@ struct State {
     preview_paused: bool,
     /// Lyric cards: the lines picked (up to 3).
     picked: Vec<usize>,
+    /// The song last shared in RyM huB.
+    shared: String,
     /// The liked songs: the whole list at the start and once a day, else the first page.
     likes_reading: rymplayer::likes::Reading,
     /// yt-dlp, ejs and Node as found (the settings).
@@ -579,6 +581,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         preview_req: 0,
         preview_paused: false,
         picked: Vec::new(),
+        shared: String::new(),
         likes_reading: Default::default(),
         ytdlp_status: String::new(),
         crossfade_for: 0,
@@ -1763,6 +1766,8 @@ fn fill_settings(st: &Shared) {
         head("Discord"),
         switch("discord", "Show on Discord", "What you play on your Discord profile; it works as it is, or put your own application id below", c.discord),
         field("discord-id", "Application id", "", &c.discord_app_id),
+        switch("hub-share", "Share what I play in RyM huB", "Each song you play shows in the now-playing room of RyM huB, RyM's Discord server", c.hub_share),
+        field("hub-name", "Name shown there", "Empty: no name, just the song", &c.hub_name),
         head("Last.fm"),
         field("lastfm-key", "API key", "", &c.lastfm_key),
         field("lastfm-secret", "Shared secret", "", &c.lastfm_secret),
@@ -1860,6 +1865,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "seamless" => c.cross_ears = on,
             "announce" => c.link_announce = on,
             "link-auto" => c.link_auto = on,
+            "hub-share" => c.hub_share = on,
             "headphones" => c.headphones_prompt = on,
             "remote" => c.remote_control = on,
             "gapless" => c.gapless = on,
@@ -2131,6 +2137,7 @@ fn set_text(st: &Shared, id: &str, text: &str) {
             }
         }
         "discord-id" => c.discord_app_id = text,
+        "hub-name" => c.hub_name = text.trim().chars().take(32).collect(),
         "lastfm-key" => c.lastfm_key = text,
         "lastfm-secret" => c.lastfm_secret = text,
         "ram-reset-date" => {
@@ -4831,6 +4838,25 @@ fn set_update_text(st: &Shared, text: impl Into<String>) {
     fill_settings(st);
 }
 
+/// RyM huB's "now playing" (Settings > Discord, off unless turned on), once per song.
+fn hub_share(st: &Shared) {
+    let (vid, name) = {
+        let mut s = st.borrow_mut();
+        let Some(t) = s.q.now().cloned() else { return };
+        if !s.config.hub_share || !rymplayer::is_youtube(&t.video_id) || s.shared == t.video_id {
+            return;
+        }
+        s.shared = t.video_id.clone();
+        (t.video_id, s.config.hub_name.clone())
+    };
+    post(async move {
+        if let Err(e) = rymplayer::discord::share_now_playing(vid, name).await {
+            log(&format!("RyM huB: {e}"));
+        }
+        Ev::Done
+    });
+}
+
 /// Last.fm: the song is "now playing", and its listening starts counting.
 fn lastfm_start(st: &Shared) {
     let mut s = st.borrow_mut();
@@ -5299,6 +5325,7 @@ fn handle(st: &Shared, ev: Ev) {
                     }
                     prefetch_next(st);
                     lastfm_start(st);
+                    hub_share(st);
                     let (ask, limit) = {
                         let mut s = st.borrow_mut();
                         let sponsor = s.config.sponsorblock;

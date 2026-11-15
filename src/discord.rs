@@ -18,6 +18,35 @@ const PLAY_PAGE: &str = "https://lujhon67.github.io/RyM/play/";
 
 /// "Play this song": RyM's play page for the song, with its name (kept short: Discord allows 512
 /// characters a button link).
+/// Where RyM huB's "now playing" relay is: read from RyM's site, so it can move without an update.
+const HUB_INFO: &str = "https://lujhon67.github.io/RyM/hub.json";
+
+fn http() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().expect("http client"))
+}
+
+/// The relay's address (looked up once a run; None while RyM huB has none).
+async fn hub_address() -> Option<String> {
+    static KNOWN: std::sync::OnceLock<tokio::sync::Mutex<Option<Option<String>>>> = std::sync::OnceLock::new();
+    let mut known = KNOWN.get_or_init(Default::default).lock().await;
+    if known.is_none() {
+        let found = async { http().get(HUB_INFO).send().await.ok()?.json::<serde_json::Value>().await.ok() }.await;
+        let address = found.and_then(|v| v["now_playing"].as_str().map(str::to_string)).filter(|a| a.starts_with("https://"));
+        *known = Some(address);
+    }
+    known.clone().flatten()
+}
+
+/// RyM huB's "now playing": the song's YouTube id (and the listener's name, if set) to the relay,
+/// which posts it in the Discord room (its webhook stays on the relay, never in the apps).
+pub async fn share_now_playing(video_id: String, name: String) -> anyhow::Result<()> {
+    let Some(address) = hub_address().await else { return Ok(()) };
+    let body = serde_json::json!({ "video_id": video_id, "name": name.trim() });
+    http().post(address).json(&body).send().await?;
+    Ok(())
+}
+
 fn play_link(video_id: &str, title: &str, artist: &str) -> String {
     let name: String = format!("{title} - {artist}").chars().take(120).collect();
     url::Url::parse_with_params(PLAY_PAGE, &[("v", video_id), ("t", name.as_str())]).map(String::from).unwrap_or_else(|_| format!("{PLAY_PAGE}?v={video_id}"))

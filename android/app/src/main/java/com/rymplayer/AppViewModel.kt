@@ -142,6 +142,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (cookie != null) start(cookie) else signedIn = false
         player.onTrackChanged = ::loadLyrics
         followLyrics()
+        feedHub()
         player.likedSongs = { likedTracks }
         // What was playing last time, paused where it was left.
         player.restoreSession()
@@ -1271,6 +1272,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * new lyrics start it over. It starts once the view model is fully made (on the next turn of
      * the main thread): started at once from init, it set [lyricLine] before that existed.
      */
+    /** RyM huB (Discord): what plays shows in its now-playing room; off unless turned on. */
+    var hubShare by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("hub_share", false))
+        private set
+
+    /** The name shown with it ("" for none). */
+    var hubName by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("hub_name", "").orEmpty())
+        private set
+
+    fun toggleHubShare() {
+        hubShare = !hubShare
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("hub_share", hubShare).apply()
+    }
+
+    fun chooseHubName(name: String) {
+        hubName = name.trim().take(32)
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putString("hub_name", hubName).apply()
+    }
+
+    /** Each song that starts playing goes to RyM huB's now-playing room (once each, when on). */
+    private fun feedHub() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+        var shared = ""
+        androidx.compose.runtime.snapshotFlow { player.current?.takeIf { player.playing } }.collect { t ->
+            if (t == null || !hubShare || t.videoId == shared || !com.rymplayer.data.isYouTube(t.videoId)) return@collect
+            shared = t.videoId
+            val name = hubName
+            launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.HubShare.share(t.videoId, name) }
+        }
+    }
+
     private fun followLyrics() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
         androidx.compose.runtime.snapshotFlow { listOf(lyrics, player.playing, player.visible, player.seeks, player.current?.videoId, lockLyrics, aodLyrics) }
             .collectLatest {
