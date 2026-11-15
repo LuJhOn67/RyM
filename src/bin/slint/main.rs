@@ -178,6 +178,8 @@ struct State {
     picked: Vec<usize>,
     /// The song last shared in RyM huB.
     shared: String,
+    /// The screen saver opened the lyrics stage (it closes it on the next key or mouse move).
+    saver_on: bool,
     /// The liked songs: the whole list at the start and once a day, else the first page.
     likes_reading: rymplayer::likes::Reading,
     /// yt-dlp, ejs and Node as found (the settings).
@@ -582,6 +584,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         preview_paused: false,
         picked: Vec::new(),
         shared: String::new(),
+        saver_on: false,
         likes_reading: Default::default(),
         ytdlp_status: String::new(),
         crossfade_for: 0,
@@ -1725,6 +1728,7 @@ fn fill_settings(st: &Shared) {
         choice("eq", "Equalizer", t(c.eq_name())),
         choice("mode", "Speed", t(c.mode_name())),
         choice("sleep", "Sleep timer", sleep),
+        choice("saver", "Screen saver", if c.screen_saver_min == 0 { t("Off") } else { format!("{} {}", c.screen_saver_min, t("min idle")) }),
         head("On this device"),
         field("local-folders", "Other music folders", "Besides your Music folder; separate them with ;", &c.local_folders.join("; ")),
         button("local-add", "Add a folder", t("Pick a folder with songs; it joins the list above"), "Add"),
@@ -1961,6 +1965,13 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let name = names[cycle(at, names.len())].clone();
             set_colors(st, &name);
             return;
+        }
+        "saver" => {
+            const STEPS: [u32; 5] = [0, 3, 5, 10, 15];
+            let mut s = st.borrow_mut();
+            let at = STEPS.iter().position(|m| *m == s.config.screen_saver_min).unwrap_or(0);
+            s.config.screen_saver_min = STEPS[cycle(at, STEPS.len())];
+            s.config.save();
         }
         "seek-step" => {
             const STEPS: [u32; 4] = [5, 10, 15, 30];
@@ -3680,6 +3691,7 @@ fn tick(st: &Shared) {
         fill_settings(st);
     }
     watch_output(st);
+    screen_saver(st);
     focus_tick(st);
     preview_tick(st);
     media_sync(st);
@@ -4294,6 +4306,52 @@ fn focus_tick(st: &Shared) {
             a.set_focus_text(text);
         }
     });
+}
+
+/// Seconds since the last key press or mouse move anywhere on the computer (Windows; None elsewhere).
+fn idle_secs() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct LastInput {
+            size: u32,
+            time: u32,
+        }
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn GetLastInputInfo(info: *mut LastInput) -> i32;
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetTickCount() -> u32;
+        }
+        let mut info = LastInput { size: std::mem::size_of::<LastInput>() as u32, time: 0 };
+        // SAFETY: plain Win32 calls with a struct of the size they expect.
+        let (ok, now) = unsafe { (GetLastInputInfo(&mut info), GetTickCount()) };
+        (ok != 0).then(|| u64::from(now.wrapping_sub(info.time)) / 1000)
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+/// Screen saver: idle long enough with music playing, the lyrics stage fills the screen; a key or
+/// the mouse, and it goes (only the stage it opened).
+fn screen_saver(st: &Shared) {
+    let (minutes, playing, on) = {
+        let s = st.borrow();
+        (s.config.screen_saver_min, s.audio.as_ref().is_some_and(Audio::is_playing), s.saver_on)
+    };
+    if minutes == 0 && !on {
+        return;
+    }
+    let Some(idle) = idle_secs() else { return };
+    if !on && playing && idle >= u64::from(minutes) * 60 {
+        st.borrow_mut().saver_on = true;
+        with_app(st, |a| a.set_stage(true));
+    } else if on && idle < 2 {
+        st.borrow_mut().saver_on = false;
+        with_app(st, |a| a.set_stage(false));
+    }
 }
 
 /// Headphones or Bluetooth just connected with nothing playing: ask what to play.

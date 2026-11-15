@@ -111,6 +111,8 @@ fn arabic(en: &str) -> Option<&'static str> {
         "Speed and pitch" => "السرعة وطبقة الصوت",
         "Sleep timer" => "مؤقت النوم",
         "Menu" => "القائمة",
+        "Screen saver" => "شاشة التوقف",
+        "min idle" => "دقيقة بدون حركة",
         "hours this year" => "ساعة هالسنة",
         "Top artist of the year" => "فنان السنة",
         "Most played song" => "أكثر أغنية انسمعت",

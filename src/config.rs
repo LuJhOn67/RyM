@@ -135,6 +135,10 @@ pub struct Config {
     /// The ← → keys skip this many seconds (5 to 30).
     #[serde(default = "seek_step")]
     pub seek_step: u32,
+    /// Screen saver: after this many idle minutes with music playing, the lyrics stage fills the
+    /// screen (0: off).
+    #[serde(default)]
+    pub screen_saver_min: u32,
     /// Windows 11's glass behind the window: 0 off, 1 Mica (the wallpaper's colors), 2 Acrylic
     /// (what's behind the window, blurred).
     #[serde(default)]
@@ -372,6 +376,7 @@ impl Default for Config {
             eq_by_device: Default::default(),
             accent_from_cover: false,
             seek_step: seek_step(),
+            screen_saver_min: 0,
             window_glass: 0,
             prefer_lossless: false,
             fps_cap: fps_cap(),
