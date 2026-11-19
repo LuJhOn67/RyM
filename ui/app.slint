@@ -3161,6 +3161,134 @@ export component FloatWindow inherits Window {
     }
 }
 
+// Text with a soft shadow under it, readable on any wallpaper.
+component DeskText inherits Rectangle {
+    in property <string> text;
+    in property <length> size: 14px;
+    in property <int> weight: 400;
+    in property <color> ink: #ffffff;
+    height: t.preferred-height;
+    Text { x: 1px; y: 1px; width: parent.width; text: root.text; font-size: root.size; font-weight: root.weight; color: #000000a0; overflow: elide; }
+    t := Text { width: parent.width; text: root.text; font-size: root.size; font-weight: root.weight; color: root.ink; overflow: elide; }
+}
+
+// A small round button of the desktop widget.
+component DeskButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> on;
+    callback clicked();
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    background: on ? #ffffff55 : (ta.has-hover ? #ffffff40 : #ffffff22);
+    border-width: 1px;
+    border-color: #ffffff30;
+    Image { width: 15px; height: 15px; source: root.icon; colorize: #ffffff; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// The desktop widget: Now playing and the songs after it, on the wallpaper, under the other
+// windows. Refresh (a new Up next), brightness, lock in place, close.
+export component DeskWindow inherits Window {
+    title: "RyM widget";
+    icon: @image-url("../assets/icons/rym-slint.png");
+    width: 530px;
+    height: 330px;
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Roboto";
+    in property <string> song;
+    in property <string> artist;
+    in property <image> cover;
+    in property <bool> playing;
+    in property <[Song]> next;
+    // 0 bright, 1 dimmer, 2 faint.
+    in property <int> dim;
+    in property <bool> locked;
+    callback refresh();
+    callback brightness();
+    callback lock();
+    callback close-widget();
+    callback drag(length, length);
+    callback play-pause();
+    property <float> glow: dim == 0 ? 1 : (dim == 1 ? 0.7 : 0.45);
+    // Drag it anywhere (unless locked); a double click plays or pauses.
+    TouchArea {
+        moved => {
+            if (self.pressed && !root.locked) {
+                root.drag(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+            }
+        }
+        double-clicked => { root.play-pause(); }
+    }
+    // The album cover, big and round, beside the list (like a moon on the wallpaper).
+    Rectangle {
+        x: 8px;
+        y: (parent.height - self.height) / 2 + 14px;
+        width: 190px;
+        height: 190px;
+        opacity: root.glow;
+        border-radius: self.width / 2;
+        drop-shadow-blur: 26px;
+        drop-shadow-color: #000000b0;
+        background: #00000040;
+        clip: true;
+        Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; }
+        // A soft light from the top left, a shade at the bottom right.
+        Rectangle { background: @radial-gradient(circle, #ffffff20 0%, #00000000 55%, #00000060 100%); }
+    }
+    VerticalLayout {
+        x: 210px;
+        width: parent.width - 210px;
+        padding: 12px;
+        spacing: 10px;
+        opacity: root.glow;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            DeskButton { icon: @image-url("icons/refresh-linear.svg"); clicked => { root.refresh(); } }
+            DeskButton { icon: @image-url("icons/moon-sleep-linear.svg"); clicked => { root.brightness(); } }
+            DeskButton { icon: @image-url("icons/lock-linear.svg"); on: root.locked; clicked => { root.lock(); } }
+            DeskButton { icon: @image-url("icons/close-circle-linear.svg"); clicked => { root.close-widget(); } }
+        }
+        DeskText { text: "NOW PLAYING"; size: 10px; weight: 700; ink: #ffffffb0; }
+        HorizontalLayout {
+            spacing: 10px;
+            Rectangle {
+                width: 46px;
+                height: 46px;
+                border-radius: 5px;
+                clip: true;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #00000080;
+                Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                DeskText { text: root.song; size: 19px; weight: 800; }
+                DeskText { text: root.artist; size: 12px; weight: 600; ink: #ffffffc8; }
+            }
+        }
+        for s[i] in root.next: HorizontalLayout {
+            spacing: 10px;
+            opacity: max(0.35, 1 - i * 0.16);
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                border-radius: 4px;
+                clip: true;
+                Image { width: 100%; height: 100%; source: s.cover; image-fit: ImageFit.cover; }
+            }
+            VerticalLayout {
+                alignment: center;
+                DeskText { text: s.title; size: 14px; weight: 800; }
+                DeskText { text: s.artist; size: 11px; ink: #ffffffb0; }
+            }
+        }
+    }
+}
+
 // A song as a picture to share: the cover, the song, a line of its lyrics, and RyM.
 export component ShareWindow inherits Window {
     title: "RyM — share";

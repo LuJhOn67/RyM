@@ -40,6 +40,8 @@ const QUEUE_SHOWN: usize = 60;
 enum Ev {
     /// The folder picked in the system's folder window (None: closed without one).
     FolderPicked(Option<std::path::PathBuf>),
+    /// Settings > App icon: the picture picked (None: closed without one).
+    IconPicked(Option<std::path::PathBuf>),
     Auth(bool, anyhow::Result<Api>),
     Account(anyhow::Result<Account>),
     Avatar(anyhow::Result<Vec<u8>>),
@@ -282,6 +284,9 @@ struct State {
     media_sent: Option<(String, bool)>,
     /// The floating lyrics, and what they show; the share picture's window.
     float: Option<FloatWindow>,
+    /// The desktop widget, and the songs it shows (to set them only when they change).
+    desk: Option<DeskWindow>,
+    desk_shown: String,
     float_shown: (String, String),
     share: Option<ShareWindow>,
     /// Sleep timer: when the music stops (or at the end of the song).
@@ -480,6 +485,11 @@ fn main() {
         ui.window().on_close_requested(move || close_requested(&st));
     }
     let _ = ui.show();
+    // The icon picked in the settings, if any.
+    let icon = st.borrow().config.gui_icon.clone();
+    if icon.is_some() {
+        set_app_icon(&ui, icon.as_deref());
+    }
     // Where it was and how big, made to fit this screen (a 1080p laptop at 150% couldn't hold
     // the window's own size, so it looked like full screen).
     place_window(&ui, st.borrow().config.window);
@@ -677,6 +687,8 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
         vlc: None,
         title_dark: None,
         float: None,
+        desk: None,
+        desk_shown: String::new(),
         float_shown: (String::new(), String::new()),
         share: None,
         sleep: None,
@@ -1259,6 +1271,10 @@ fn start(st: &Shared) {
         let st2 = st.clone();
         slint::Timer::single_shot(Duration::from_millis(800), move || show_float(&st2, true));
     }
+    if st.borrow().config.desk_widget {
+        let st2 = st.clone();
+        slint::Timer::single_shot(Duration::from_millis(900), move || show_desk(&st2, true));
+    }
     // The window needs to be on screen before Windows' media controls can take its handle.
     let st2 = st.clone();
     slint::Timer::single_shot(Duration::from_millis(1500), move || start_media_controls(&st2));
@@ -1754,6 +1770,12 @@ fn fill_settings(st: &Shared) {
         switch("translate", "Translate Japanese lyrics", "English under each Japanese line", c.lyrics_translation),
         switch("romaji", "Romaji", "Japanese lines in Latin letters under them", c.romaji),
         switch("float", "Floating lyrics", "The sung line in a small window above the others", c.lyrics_overlay),
+        choice("app-icon", "App icon", match icon_slot(c.gui_icon.as_deref()) {
+            Some(i) => t(APP_ICONS[i].1),
+            None => c.gui_icon.as_deref().and_then(|p| std::path::Path::new(p).file_name()).map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+        }),
+        button("app-icon-file", "Your own picture", t("A picture from this PC as the app's icon"), "Choose"),
+        switch("desk-widget", "Desktop widget", "Now playing and what's next on the wallpaper, under the windows", c.desk_widget),
         head("Suggestions (RaM points)"),
         choice("only-kind", "Only this kind", only),
         choice("discovery", "Familiar or new", t(rymplayer::ram_points::DISCOVERY_NAMES[c.discovery.min(4) as usize])),
@@ -1897,6 +1919,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
             "translate" => c.lyrics_translation = on,
             "romaji" => c.romaji = on,
             "float" => c.lyrics_overlay = on,
+            "desk-widget" => c.desk_widget = on,
             "alarm" => c.alarm_on = on,
             "seamless" => c.cross_ears = on,
             "announce" => c.link_announce = on,
@@ -1939,6 +1962,7 @@ fn set_toggle(st: &Shared, id: &str, on: bool) {
     match id {
         "arabic" => toast(st, if on { "أعد تشغيل RyM حتى تتغيّر اللغة" } else { "Restart RyM to change the language" }),
         "float" => show_float(st, on),
+        "desk-widget" => show_desk(st, on),
         "accent" if on => {
             st.borrow_mut().art_for.clear();
             show_now(st);
@@ -2082,6 +2106,24 @@ fn choose(st: &Shared, id: &str, step: i32) {
             s.config.download_best = !s.config.download_best;
             stream::download_best(s.config.download_best);
             s.config.save();
+        }
+        "app-icon" => {
+            // Freak, Pear, RyM logo (a picture of your own comes back to the first).
+            let next = {
+                let s = st.borrow();
+                let at = icon_slot(s.config.gui_icon.as_deref()).map_or(0, |i| cycle(i, APP_ICONS.len()));
+                if icon_slot(s.config.gui_icon.as_deref()).is_none() { 0 } else { at }
+            };
+            let id = (next > 0).then(|| APP_ICONS[next].0.to_string());
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                set_app_icon(&ui, id.as_deref().or(Some(APP_ICONS[0].0)));
+            }
+            {
+                let mut s = st.borrow_mut();
+                s.config.gui_icon = id;
+                s.config.save();
+            }
+            toast(st, &format!("{}: {}", tr("App icon"), tr_any(APP_ICONS[next].1)));
         }
         "volume-max" => {
             const MAX: [f32; 4] = [1.0, 1.5, 2.0, 3.0];
@@ -2602,6 +2644,10 @@ fn press(st: &Shared, id: &str) {
         return;
     }
     match id {
+        "app-icon-file" => {
+            let title = tr("App icon").to_string();
+            std::thread::spawn(move || send(Ev::IconPicked(rfd::FileDialog::new().set_title(title).add_filter("Pictures", &["png", "jpg", "jpeg", "ico", "bmp", "webp"]).pick_file())));
+        }
         "keys-reset" => {
             {
                 let mut s = st.borrow_mut();
@@ -3810,6 +3856,7 @@ fn tick(st: &Shared) {
     preview_tick(st);
     media_sync(st);
     mini_sync(st);
+    desk_sync(st);
     extras(st);
     scheduled_reset(st);
     animations(st);
@@ -4260,6 +4307,178 @@ fn show_float(st: &Shared, on: bool) {
     let mut s = st.borrow_mut();
     s.float_shown = (String::new(), String::new());
     s.float = Some(w);
+}
+
+/// The icons that come with RyM (Settings > App icon): their name in the settings and picture.
+const APP_ICONS: [(&str, &str, &[u8]); 3] = [
+    ("freak", "Freak", include_bytes!("../../../assets/icons/rym-slint.png")),
+    ("pear", "Pear", include_bytes!("../../../assets/icons/rym-pear.png")),
+    ("logo", "RyM logo", include_bytes!("../../../assets/icons/rym-logo.png")),
+];
+
+/// The icon saved in the settings: one of [`APP_ICONS`] by its id, or a picture's path (None:
+/// the first, Freak).
+fn icon_slot(saved: Option<&str>) -> Option<usize> {
+    match saved {
+        None => Some(0),
+        Some(s) => APP_ICONS.iter().position(|i| i.0 == s),
+    }
+}
+
+/// The window's icon (the taskbar shows it too): one of RyM's ([`APP_ICONS`] by id; None: Freak)
+/// or a picture's path. False when the picture can't be read.
+fn set_app_icon(ui: &AppWindow, choice: Option<&str>) -> bool {
+    use slint::winit_030::WinitWindowAccessor;
+    let img = match icon_slot(choice) {
+        Some(i) => image::load_from_memory(APP_ICONS[i].2).ok(),
+        None => image::open(choice.unwrap_or_default()).ok(),
+    };
+    let Some(img) = img else { return false };
+    let img = img.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3).to_rgba8();
+    let (w, h) = img.dimensions();
+    let Ok(icon) = slint::winit_030::winit::window::Icon::from_rgba(img.into_raw(), w, h) else { return false };
+    ui.window().with_winit_window(|win| win.set_window_icon(Some(icon)));
+    true
+}
+
+/// The desktop widget: Now playing and the songs after it, on the wallpaper (under every window,
+/// out of the taskbar). Dragged anywhere (unless locked), where it was next time.
+fn show_desk(st: &Shared, on: bool) {
+    if !on {
+        let old = st.borrow_mut().desk.take();
+        if let Some(w) = old {
+            let p = w.window().position();
+            st.borrow_mut().config.desk_place = Some((p.x, p.y));
+            st.borrow().config.save();
+            let _ = w.hide();
+        }
+        return;
+    }
+    if st.borrow().desk.is_some() {
+        return;
+    }
+    let Ok(w) = DeskWindow::new() else { return };
+    let (place, dim, locked) = {
+        let c = &st.borrow().config;
+        (c.desk_place, c.desk_dim, c.desk_locked)
+    };
+    w.set_dim(dim as i32);
+    w.set_locked(locked);
+    {
+        let weak = w.as_weak();
+        let st = st.clone();
+        w.on_drag(move |dx, dy| {
+            if let Some(w) = weak.upgrade() {
+                let p = w.window().position();
+                let scale = w.window().scale_factor();
+                let to = slint::PhysicalPosition::new(p.x + (dx * scale) as i32, p.y + (dy * scale) as i32);
+                w.window().set_position(to);
+                st.borrow_mut().config.desk_place = Some((to.x, to.y));
+            }
+        });
+    }
+    {
+        let st = st.clone();
+        w.on_close_widget(move || {
+            let st = st.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || set_toggle(&st, "desk-widget", false));
+        });
+    }
+    {
+        let (st, weak) = (st.clone(), w.as_weak());
+        w.on_brightness(move || {
+            let dim = {
+                let mut s = st.borrow_mut();
+                s.config.desk_dim = (s.config.desk_dim + 1) % 3;
+                s.config.save();
+                s.config.desk_dim
+            };
+            if let Some(w) = weak.upgrade() {
+                w.set_dim(dim as i32);
+            }
+        });
+    }
+    {
+        let (st, weak) = (st.clone(), w.as_weak());
+        w.on_lock(move || {
+            let locked = {
+                let mut s = st.borrow_mut();
+                s.config.desk_locked = !s.config.desk_locked;
+                s.config.save();
+                s.config.desk_locked
+            };
+            if let Some(w) = weak.upgrade() {
+                w.set_locked(locked);
+            }
+            toast(&st, tr(if locked { "Widget locked in place" } else { "Widget can be moved" }));
+        });
+    }
+    {
+        let st = st.clone();
+        w.on_refresh(move || {
+            // A new Up next from the playing song.
+            let (seed, api) = {
+                let s = st.borrow();
+                (s.q.now().cloned(), s.api.clone())
+            };
+            if let (Some(seed), Some(api)) = (seed, api) {
+                post(async move { Ev::NewDirection(core::new_direction(api, seed).await) });
+            }
+        });
+    }
+    {
+        let st = st.clone();
+        w.on_play_pause(move || with_app(&st, |a| a.invoke_toggle_play()));
+    }
+    let _ = w.show();
+    {
+        use slint::winit_030::WinitWindowAccessor;
+        w.window().with_winit_window(|win| {
+            // Under the other windows, like a part of the wallpaper, and not in the taskbar.
+            win.set_window_level(slint::winit_030::winit::window::WindowLevel::AlwaysOnBottom);
+            #[cfg(windows)]
+            {
+                use slint::winit_030::winit::platform::windows::WindowExtWindows;
+                win.set_skip_taskbar(true);
+            }
+        });
+    }
+    match place {
+        Some((x, y)) => w.window().set_position(slint::PhysicalPosition::new(x, y)),
+        None => {
+            // First time: the top right of the screen.
+            use slint::winit_030::WinitWindowAccessor;
+            let spot = w.window().with_winit_window(|win| win.current_monitor().map(|m| (m.position().x + m.size().width as i32, m.position().y)));
+            if let Some(Some((right, top))) = spot {
+                let width = w.window().size().width as i32;
+                w.window().set_position(slint::PhysicalPosition::new(right - width - 40, top + 60));
+            }
+        }
+    }
+    let mut s = st.borrow_mut();
+    s.desk_shown.clear();
+    s.desk = Some(w);
+}
+
+/// The widget shows the playing song and the next four (set only when they change).
+fn desk_sync(st: &Shared) {
+    let Ok(mut s) = st.try_borrow_mut() else { return };
+    let (Some(desk), Some(ui)) = (&s.desk, s.ui.upgrade()) else { return };
+    let app = ui.global::<App>();
+    if desk.get_playing() != app.get_playing() {
+        desk.set_playing(app.get_playing());
+    }
+    let queue = app.get_queue();
+    let next: Vec<Song> = (0..queue.row_count().min(4)).filter_map(|i| queue.row_data(i)).collect();
+    let sign = format!("{}|{}|{}|{}", app.get_title(), empty(&app.get_cover()), next.iter().map(|n| n.title.as_str()).collect::<Vec<_>>().join("|"), next.iter().filter(|n| !empty(&n.cover)).count());
+    if s.desk_shown == sign {
+        return;
+    }
+    desk.set_song(if app.get_has_song() { app.get_title() } else { tr("Nothing playing").into() });
+    desk.set_artist(app.get_artist());
+    desk.set_cover(app.get_cover());
+    desk.set_next(ModelRc::from(Rc::new(VecModel::from(next))));
+    s.desk_shown = sign;
 }
 
 // ---------------------------------------------------------------- Preview Drop, focus, headphones
@@ -5403,6 +5622,18 @@ fn handle(st: &Shared, ev: Ev) {
             fill_settings(st);
         }
         Ev::FolderPicked(None) => {}
+        Ev::IconPicked(Some(path)) => {
+            let ok = st.borrow().ui.upgrade().is_some_and(|ui| set_app_icon(&ui, path.to_str()));
+            if ok {
+                st.borrow_mut().config.gui_icon = Some(path.to_string_lossy().into_owned());
+                st.borrow().config.save();
+                toast(st, tr("App icon changed"));
+            } else {
+                toast(st, tr("That picture can't be an icon"));
+            }
+            fill_settings(st);
+        }
+        Ev::IconPicked(None) => {}
         Ev::List(id, result) => {
             if st.borrow().list_id != id {
                 return;
@@ -6235,6 +6466,44 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
         LyricLine { rtl: false, text: "二人だけの空が広がる夜に".into(), tr: "".into(), ro: "".into(), state: 0, ..Default::default() },
         LyricLine { rtl: true, text: "يا حسين يا مظلوم".into(), tr: "".into(), ro: "".into(), state: 0, ..Default::default() },
     ]))));
+    // "desk": the desktop widget alone, over a night-sky wallpaper.
+    if extras.iter().any(|e| e == "desk") {
+        let d = DeskWindow::new().expect("widget");
+        d.set_song("Golden Hour".into());
+        d.set_artist("Nora Vale".into());
+        d.set_cover(to_image(art(70, 60, 170)));
+        d.set_playing(true);
+        let song = |t: &str, a: &str, c: Image| Song { key: "q:1".into(), title: t.into(), artist: a.into(), cover: c, liked: false, playing: false, video: false, why: SharedString::new() };
+        d.set_next(ModelRc::from(Rc::new(VecModel::from(vec![
+            song("Paper Moons", "The Lanterns", swatch(40, 90, 120)),
+            song("Neon Rain", "Kairo", swatch(200, 20, 30)),
+            song("Slow Tide", "Mira Sol", swatch(120, 120, 120)),
+            song("ليل بغداد", "فرقة النخيل", swatch(60, 110, 70)),
+        ]))));
+        d.show().expect("show");
+        let (dw, dh) = (530u32, 330u32);
+        window.set_size(slint::PhysicalSize::new(dw, dh));
+        let mut buf = vec![PremultipliedRgbaColor::default(); (dw * dh) as usize];
+        for _ in 0..3 {
+            CLOCK.fetch_add(1000, std::sync::atomic::Ordering::Relaxed);
+            slint::platform::update_timers_and_animations();
+            window.request_redraw();
+            window.draw_if_needed(|r| {
+                r.render(&mut buf, dw as usize);
+            });
+        }
+        let mut img = image::RgbaImage::new(dw, dh);
+        for (i, p) in buf.iter().enumerate() {
+            let (x, y) = (i as u32 % dw, i as u32 / dw);
+            // The wallpaper: a dark blue night, the widget drawn over it (premultiplied colors).
+            let (br, bg, bb) = (8.0 + y as f32 * 0.05, 12.0 + y as f32 * 0.04, 28.0 + y as f32 * 0.08);
+            let a = 1.0 - p.alpha as f32 / 255.0;
+            img.put_pixel(x, y, image::Rgba([(p.red as f32 + br * a) as u8, (p.green as f32 + bg * a) as u8, (p.blue as f32 + bb * a) as u8, 255]));
+        }
+        img.save(out).expect("png");
+        println!("saved {out}");
+        return;
+    }
     ui.show().expect("show");
     window.set_size(slint::PhysicalSize::new(w, h));
     let mut buf = vec![PremultipliedRgbaColor::default(); (w * h) as usize];

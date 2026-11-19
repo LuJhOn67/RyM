@@ -267,6 +267,12 @@ pub struct Config {
     /// RyM Slint's window when it was closed: where and how big (physical pixels, not maximized),
     /// and whether it was maximized.
     pub window: Option<WindowPlace>,
+    /// The desktop widget (Now playing and what's next, on the wallpaper): on, where it sits,
+    /// how bright (0 to 2) and whether it's locked in place.
+    pub desk_widget: bool,
+    pub desk_place: Option<(i32, i32)>,
+    pub desk_dim: u8,
+    pub desk_locked: bool,
     /// Shortcuts changed in the settings: action id -> key (see `shortcuts`).
     pub shortcuts: std::collections::HashMap<String, String>,
     /// The phone can control this computer's music (play, pause, skip, seek, volume).
@@ -476,6 +482,10 @@ impl Default for Config {
             talk_speed: 1.0,
             volume_max: 1.0,
             window: None,
+            desk_widget: false,
+            desk_place: None,
+            desk_dim: 0,
+            desk_locked: false,
             shortcuts: Default::default(),
             remote_control: true,
         }
