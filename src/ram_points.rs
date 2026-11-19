@@ -833,6 +833,30 @@ pub fn only_kind() -> Option<Kind> {
     Kind::from_name(&crate::config::Config::load().only_kind)
 }
 
+/// YouTube's home-page items kept to `kinds`. YouTube puts like with like on a shelf, so a shelf
+/// mostly of another kind goes whole (its songs nothing tells about are of that kind too). With
+/// "Only this kind" (`strict`), a song nothing tells about stays only on a shelf of the kind,
+/// or when the kind is songs.
+pub fn keep_kinds(notes: &Notes, items: Vec<Track>, kinds: &[Kind], strict: bool) -> Vec<Track> {
+    let mut shelf_counts: HashMap<String, (usize, usize)> = HashMap::new();
+    for t in &items {
+        if let Some(k) = notes.kind_of(t) {
+            let e = shelf_counts.entry(t.album.clone()).or_default();
+            if kinds.contains(&k) { e.0 += 1 } else { e.1 += 1 }
+        }
+    }
+    let other_shelf = |album: &str| shelf_counts.get(album).is_some_and(|(fit, other)| *other >= 2 && *other * 3 >= (*fit + *other));
+    let fit_shelf = |album: &str| shelf_counts.get(album).is_some_and(|(fit, other)| *fit >= 2 && *fit * 3 >= 2 * (*fit + *other));
+    items
+        .into_iter()
+        .filter(|t| match notes.kind_of(t) {
+            Some(k) => kinds.contains(&k),
+            None if other_shelf(&t.album) => false,
+            None => !strict || kinds.contains(&Kind::Songs) || fit_shelf(&t.album),
+        })
+        .collect()
+}
+
 /// The kind of a song by its artist and words, with what's learned (for the menus).
 pub fn kind_of_track(t: &Track) -> Kind {
     Notes::load().kind_of(t).unwrap_or(Kind::Songs)
@@ -1446,6 +1470,32 @@ pub fn for_you(notes: &Notes, cands: &[Candidate], kind: Kind, n: usize, skip: &
         scored.push(Scored { t: t.clone(), points, artist, liked: c.liked });
     }
     order(scored, n, 5, Some(3))
+}
+
+#[cfg(test)]
+mod keep_kinds_tests {
+    use super::*;
+
+    fn t(id: &str, title: &str, artist: &str, shelf: &str) -> Track {
+        Track { video_id: id.into(), title: title.into(), artist: artist.into(), album: shelf.into(), duration: String::new(), thumb: None, album_id: None, artist_id: None, link: None }
+    }
+
+    #[test]
+    fn a_husseini_shelf_goes_whole_for_songs() {
+        let notes = Notes::default();
+        let items = vec![
+            t("a", "لطمية يا حسين", "باسم الكربلائي", "Mixed for you"),
+            t("b", "نعي", "رادود", "Mixed for you"),
+            // Nothing tells about this one, but its shelf is Husseini.
+            t("c", "سلام عليك", "Unknown reciter", "Mixed for you"),
+            t("d", "Blue Hair", "TV Girl", "Quick picks"),
+            t("e", "بشرة خير", "حسين الجسمي", "Quick picks"),
+        ];
+        let kept: Vec<String> = keep_kinds(&notes, items.clone(), &[Kind::Songs], true).into_iter().map(|t| t.video_id).collect();
+        assert_eq!(kept, ["d", "e"]);
+        let kept: Vec<String> = keep_kinds(&notes, items, &[Kind::Husseini], true).into_iter().map(|t| t.video_id).collect();
+        assert_eq!(kept, ["a", "b", "c"]);
+    }
 }
 
 #[cfg(test)]

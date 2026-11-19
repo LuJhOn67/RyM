@@ -714,6 +714,29 @@ object RamPoints {
         prefs(ctx).edit().putString("only_kind", kind?.name).apply()
     }
 
+    /**
+     * YouTube's home-page items kept to [kinds] (the same as the PC's `keep_kinds`). YouTube puts
+     * like with like on a shelf, so a shelf mostly of another kind goes whole. With "Only this
+     * kind" ([strict]), a song nothing tells about stays only on a shelf of the kind, or when the
+     * kind is songs.
+     */
+    fun keepKinds(notes: Notes, items: List<Track>, kinds: Collection<Kind>, strict: Boolean): List<Track> {
+        val counts = HashMap<String, IntArray>()
+        for (t in items) {
+            val k = notes.kindOf(t) ?: continue
+            val c = counts.getOrPut(t.album) { IntArray(2) }
+            if (k in kinds) c[0]++ else c[1]++
+        }
+        fun otherShelf(album: String) = counts[album]?.let { (fit, other) -> other >= 2 && other * 3 >= fit + other } ?: false
+        fun fitShelf(album: String) = counts[album]?.let { (fit, other) -> fit >= 2 && fit * 3 >= 2 * (fit + other) } ?: false
+        return items.filter { t ->
+            when (val k = notes.kindOf(t)) {
+                null -> !otherShelf(t.album) && (!strict || Kind.Songs in kinds || fitShelf(t.album))
+                else -> k in kinds
+            }
+        }
+    }
+
     private class Scored(val t: Track, val points: Int, val artist: String, val liked: Boolean)
 
     /** The best first, [n] at most: the same artist as the last song loses 20 points (8 for the one before), a liked song only after [likedEvery] others, [perArtist] songs per artist. */

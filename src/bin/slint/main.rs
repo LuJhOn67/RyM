@@ -2238,6 +2238,17 @@ fn choose(st: &Shared, id: &str, step: i32) {
             let at = names.iter().position(|n| *n == s.config.only_kind).unwrap_or(0);
             s.config.only_kind = names[cycle(at, names.len())].to_string();
             s.config.save();
+            drop(s);
+            // For you is made again for it (it kept the old page, every kind, for half an hour): a
+            // moment after the last click, so going through the kinds asks once.
+            KIND_CLICK.with(|c| c.set(c.get() + 1));
+            let click = KIND_CLICK.with(std::cell::Cell::get);
+            let st = st.clone();
+            slint::Timer::single_shot(Duration::from_millis(1200), move || {
+                if KIND_CLICK.with(std::cell::Cell::get) == click {
+                    refresh_home(&st);
+                }
+            });
         }
         _ => {
             let mut s = st.borrow_mut();
@@ -3834,6 +3845,8 @@ fn toggle_playback(st: &Shared) {
 }
 
 thread_local! {
+    /// "Only this kind" clicks: For you is made again after the last one.
+    static KIND_CLICK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// Songs that couldn't be played one after another (skipped on their own up to three).
     static FAILED_IN_ROW: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }

@@ -228,4 +228,18 @@ class RamPointsTest {
         assertEquals(0, r.mood)
         assertEquals("adele", r.topArtist)
     }
+
+    @Test
+    fun aHusseiniShelfGoesWholeForSongs() {
+        val items = listOf(
+            Track("a", "لطمية يا حسين", "باسم الكربلائي", album = "Mixed for you"),
+            Track("b", "نعي", "رادود", album = "Mixed for you"),
+            Track("c", "سلام عليك", "Unknown reciter", album = "Mixed for you"),
+            Track("d", "Blue Hair", "TV Girl", album = "Quick picks"),
+            Track("e", "بشرة خير", "حسين الجسمي", album = "Quick picks"),
+        )
+        val notes = RamPoints.Notes()
+        assertEquals(listOf("d", "e"), RamPoints.keepKinds(notes, items, listOf(RamPoints.Kind.Songs), true).map { it.videoId })
+        assertEquals(listOf("a", "b", "c"), RamPoints.keepKinds(notes, items, listOf(RamPoints.Kind.Husseini), true).map { it.videoId })
+    }
 }

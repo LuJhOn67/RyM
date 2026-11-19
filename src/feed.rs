@@ -130,7 +130,8 @@ pub async fn refresh(api: Api) -> Result<Refreshed> {
         cands.extend(Candidate::from_radio(radio, kind, 6));
     }
     // YouTube's own home-page songs and shelves: only the page's kinds.
-    let arranged: Vec<Track> = arranged.into_iter().filter(|t| notes.kind_of(t).is_none_or(|k| kinds.contains(&k))).collect();
+    let only = ram_points::only_kind();
+    let arranged = ram_points::keep_kinds(&notes, arranged, &kinds, only.is_some());
     cands.extend(arranged.iter().filter(|t| t.link.is_none()).map(|t| Candidate { track: t.clone(), base: 14, radio_kind: None, liked: false }));
     cands.extend(familiar(&liked_list, &mut memory).into_iter().take(60).map(|t| Candidate { track: t, base: 4, radio_kind: None, liked: true }));
 
@@ -142,6 +143,8 @@ pub async fn refresh(api: Api) -> Result<Refreshed> {
         .cloned()
         .chain(recent.iter().cloned())
         .filter(|t| t.link.is_none() && seen_row.insert(t.video_id.clone()))
+        // "Only this kind": the songs played of other kinds aren't shown either.
+        .filter(|t| only.is_none_or(|k| notes.kind_of(t).unwrap_or(Kind::Songs) == k))
         .take(RECENT_ROW)
         .map(|t| Track { album: RECENTLY_PLAYED.into(), ..t })
         .collect();
@@ -223,7 +226,7 @@ pub async fn more(api: Api, mut c: Cursor) -> Result<Paged> {
         notes.learn(k, seed, radio);
         cands.extend(Candidate::from_radio(radio, k, 10));
     }
-    let page_items: Vec<Track> = page.as_ref().map(|p| p.tracks.iter().filter(|t| notes.kind_of(t).is_none_or(|k| k == kind)).cloned().collect()).unwrap_or_default();
+    let page_items: Vec<Track> = page.as_ref().map(|p| ram_points::keep_kinds(&notes, p.tracks.clone(), &[kind], ram_points::only_kind().is_some())).unwrap_or_default();
     cands.extend(page_items.iter().filter(|t| t.link.is_none()).map(|t| Candidate { track: t.clone(), base: 14, radio_kind: None, liked: false }));
     cands.extend(familiar(&c.liked, &mut memory).into_iter().take(60).map(|t| Candidate { track: t, base: 4, radio_kind: None, liked: true }));
     let known: HashSet<String> = c.liked.iter().chain(c.history.iter()).chain(recent.iter()).map(|t| t.video_id.clone()).collect();

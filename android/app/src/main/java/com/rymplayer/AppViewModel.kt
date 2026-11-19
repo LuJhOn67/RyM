@@ -274,7 +274,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val all = listOf<com.rymplayer.data.RamPoints.Kind?>(null) + com.rymplayer.data.RamPoints.Kind.entries
         onlyKind = all[Math.floorMod(all.indexOf(onlyKind) + step, all.size)]
         com.rymplayer.data.RamPoints.setOnlyKind(getApplication(), onlyKind)
+        // For you is made again for it (it kept the old page, every kind, for half an hour): a
+        // moment after the last tap, so going through the kinds asks once.
+        kindReload?.cancel()
+        kindReload = viewModelScope.launch {
+            kotlinx.coroutines.delay(1200)
+            homeJob?.cancel()
+            homeLoading = false
+            loadHome()
+        }
     }
+    private var kindReload: kotlinx.coroutines.Job? = null
 
     /** The user says this song's artist is of [kind] (RaM points keeps it). */
     /** "Recommend more" on a song (RaM points). */
@@ -1131,10 +1141,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         cands += com.rymplayer.data.RamPoints.fromRadio(radio, kind, 6)
                     }
                     // YouTube's own home-page songs and shelves: only the page's kinds.
-                    val fitting = arranged.filter { t -> notes.kindOf(t)?.let { it in kinds } ?: true }
+                    val only = com.rymplayer.data.RamPoints.onlyKind(ctx)
+                    val fitting = com.rymplayer.data.RamPoints.keepKinds(notes, arranged, kinds, only != null)
                     fitting.filter { it.link == null }.forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 14, null, false) }
                     (Recent.favourites(ctx, 40) + likedList.orEmpty().take(150)).shuffled().take(60).forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 4, null, true) }
-                    val recentRow = recent.take(20).map { it.copy(album = FeedMemory.RECENTLY_PLAYED) }
+                    // "Only this kind": the songs played of other kinds aren't shown either.
+                    val recentRow = recent.filter { t -> only == null || (notes.kindOf(t) ?: com.rymplayer.data.RamPoints.Kind.Songs) == only }
+                        .take(20).map { it.copy(album = FeedMemory.RECENTLY_PLAYED) }
                     val skip = (recentRow.map { it.videoId } + freshSeeds).toMutableSet()
                     val topArtists = Recent.favourites(ctx, 40).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
                     val shown = FeedMemory.shownLookup(ctx)
@@ -1214,7 +1227,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         cands += com.rymplayer.data.RamPoints.fromRadio(radio, kind, 10)
                     }
                     val next = page.await()
-                    val pageItems = next?.tracks.orEmpty().filter { t -> (notes.kindOf(t) ?: c.kind) == c.kind }
+                    val pageItems = com.rymplayer.data.RamPoints.keepKinds(notes, next?.tracks.orEmpty(), listOf(c.kind), com.rymplayer.data.RamPoints.onlyKind(ctx) != null)
                     pageItems.filter { it.link == null }.forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 14, null, false) }
                     (Recent.favourites(ctx, 40) + c.liked.take(150)).shuffled().take(60).forEach { cands += com.rymplayer.data.RamPoints.Candidate(it, 4, null, true) }
                     val topArtists = Recent.favourites(ctx, 40).map { com.rymplayer.data.Radio.firstArtist(it.artist) }.filter { it.isNotEmpty() }.toSet()
