@@ -3,7 +3,7 @@ package com.rymplayer.data
 import org.json.JSONObject
 
 /**
- * Color themes: the same 11 built-in looks as RyM on the PC, and the user's own as JSON (the
+ * Color themes: 9 built-in looks (the PC's, without Tactical Beige, Cyber HUD and Manga Ink), and the user's own as JSON (the
  * same file as the PC's `themes.rs`: `name`, colors as `#rrggbb` or `#rrggbbaa`, `style`,
  * `round`, `glow`, `cover_border`, `glass`, `dot_clock`, `vu`). Missing fields take the
  * defaults; unknown ones are ignored.
@@ -53,14 +53,11 @@ object Themes {
     val presets: List<Theme> = listOf(
         t("OLED Black", true, listOf("#000000", "#0b0b0b", "#ffffff", "#9a9a9a", "#e6e6e6", "#00e5ff", "#7cf9ff", "#262626", "#1f1f1f"), "plain", 1f).copy(glow = true, coverBorder = true),
         t("Frosted Glass", true, listOf("#141826", "#ffffff1c", "#ffffff", "#d3d9ea", "#f2f4fa", "#9ad0ff", "#d4ecff", "#ffffff40", "#ffffff33"), "glass", 1f).copy(glass = 0.55f),
-        t("Tactical Beige", false, listOf("#dad4bb", "#cdc8b0", "#4e4b42", "#6b675b", "#4e4b42", "#4e4b42", "#8a8574", "#b5af98", "#4e4b4299"), "grid", 0f),
         t("Stellar Neon", true, listOf("#070b1a", "#0e1530", "#e8f6ff", "#8fa3c7", "#bfefff", "#00e1ff", "#ffc857", "#1c2a4d", "#00e1ff40"), "stars", 0.8f).copy(glow = true),
         t("Dot Matrix", true, listOf("#000000", "#111111", "#f2f2f2", "#8c8c8c", "#f2f2f2", "#d71921", "#ff5a60", "#2a2a2a", "#2a2a2a"), "dots", 1f).copy(dotClock = true),
         t("Hi-Fi Rack", true, listOf("#1a1b1d", "#2a2c2f", "#e9e4d8", "#a39d90", "#d8d2c4", "#ffb000", "#ffd27a", "#3a3c40", "#45484d"), "metal", 0.35f).copy(vu = true),
-        t("Cyber HUD", true, listOf("#0a0a12", "#14141f", "#f5f5f5", "#9aa0b4", "#00f0ff", "#fcee09", "#00f0ff", "#23233a", "#00f0ff55"), "hud", 0f).copy(glow = true, cut = true),
         t("Lo-Fi Rain", true, listOf("#1a1530", "#251e42", "#f3e9ff", "#b3a6d6", "#e8dcff", "#ffb347", "#ffd59a", "#3a2f63", "#4a3d7a80"), "rain", 1f),
         t("Aqua Glass", false, listOf("#dff6ff", "#ffffffb0", "#073b4c", "#2f6f80", "#0b6e8a", "#00b894", "#48dbfb", "#a8e6f0", "#ffffffcc"), "aqua", 1f).copy(glass = 0.35f),
-        t("Manga Ink", false, listOf("#ffffff", "#f2f2f2", "#000000", "#333333", "#000000", "#000000", "#555555", "#cccccc", "#000000"), "halftone", 0f),
         t("Tactical Olive", true, listOf("#1d2117", "#2a2f22", "#d9dcc6", "#9aa08a", "#c8cdb0", "#8fbf3f", "#c3e86a", "#3b4230", "#5b6448"), "scanlines", 0.3f),
         // Sadness and guilt: an abyssal slate night, cold mist, dried crimson, ash, darkened edges, a slow heartbeat, colorless covers.
         t("Ashen Remorse", true, listOf("#0b0d12", "#14171f", "#c3c8cf", "#5c6b73", "#8e9aa3", "#8c2d38", "#b0606a", "#232833", "#2a303c"), "ash", 0.6f)

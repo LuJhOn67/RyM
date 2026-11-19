@@ -491,6 +491,8 @@ fn main() {
     if !set_app_icon(&ui, icon.as_deref()) {
         set_app_icon(&ui, None);
     }
+    // The desktop shortcut follows the icon (when it's there; the program moved, say).
+    desktop_icon(icon.as_deref(), false);
     windows_font(&ui);
     // The layouts' right panel: its width as last dragged.
     ui.global::<App>().set_panel_width(st.borrow().config.panel_width.clamp(240.0, 720.0));
@@ -2148,6 +2150,7 @@ fn choose(st: &Shared, id: &str, step: i32) {
             if let Some(ui) = st.borrow().ui.upgrade() {
                 set_app_icon(&ui, id.as_deref().or(Some(APP_ICONS[0].0)));
             }
+            desktop_icon(id.as_deref(), true);
             {
                 let mut s = st.borrow_mut();
                 s.config.gui_icon = id;
@@ -4445,6 +4448,56 @@ fn set_app_icon(ui: &AppWindow, choice: Option<&str>) -> bool {
     true
 }
 
+/// Windows: the icon on the desktop. The .exe's own icon can't change, so a "RyM" shortcut on the
+/// desktop carries the icon picked (made when an icon is picked; kept up to date after, when it's
+/// there). Each icon gets its own .ico file, so Explorer shows the new one at once.
+fn desktop_icon(choice: Option<&str>, create: bool) {
+    if !cfg!(windows) {
+        return;
+    }
+    let choice = choice.map(str::to_string);
+    std::thread::spawn(move || {
+        let img = match icon_slot(choice.as_deref()) {
+            Some(i) => image::load_from_memory(APP_ICONS[i].2).ok(),
+            None => image::open(choice.as_deref().unwrap_or_default()).ok(),
+        };
+        let (Some(img), Some(dirs), Ok(exe)) = (img, directories::UserDirs::new(), std::env::current_exe()) else { return };
+        let Some(desktop) = dirs.desktop_dir() else { return };
+        let link = desktop.join("RyM.lnk");
+        if !create && !link.exists() {
+            return;
+        }
+        let img = img.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3);
+        let dir = rymplayer::data_dir().join("icons");
+        let _ = std::fs::create_dir_all(&dir);
+        let name = choice.as_deref().map_or("freak".to_string(), |c| format!("{:x}", c.bytes().fold(0u64, |h, b| h.wrapping_mul(131).wrapping_add(b as u64))));
+        let ico = dir.join(format!("app-{name}.ico"));
+        if img.save_with_format(&ico, image::ImageFormat::Ico).is_err() {
+            return;
+        }
+        let q = |p: &std::path::Path| p.display().to_string().replace('\'', "''");
+        let script = format!(
+            "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.IconLocation = '{},0'; $s.Description = 'RyM'; $s.Save()",
+            q(&link),
+            q(&exe),
+            q(exe.parent().unwrap_or(std::path::Path::new("."))),
+            q(&ico)
+        );
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        match cmd.output() {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => log(&format!("desktop icon: {}", String::from_utf8_lossy(&o.stderr).trim())),
+            Err(e) => log(&format!("desktop icon: {e}")),
+        }
+    });
+}
+
 /// The desktop widget: Now playing and the songs after it, on the wallpaper (under every window,
 /// out of the taskbar). Dragged anywhere (unless locked), where it was next time.
 fn show_desk(st: &Shared, on: bool) {
@@ -5777,6 +5830,9 @@ fn handle(st: &Shared, ev: Ev) {
         Ev::FolderPicked(None) => {}
         Ev::IconPicked(Some(path)) => {
             let ok = st.borrow().ui.upgrade().is_some_and(|ui| set_app_icon(&ui, path.to_str()));
+            if ok {
+                desktop_icon(path.to_str(), true);
+            }
             if ok {
                 st.borrow_mut().config.gui_icon = Some(path.to_string_lossy().into_owned());
                 st.borrow().config.save();

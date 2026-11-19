@@ -7,8 +7,10 @@ import org.junit.Test
 
 class ThemesTest {
     @Test
-    fun elevenPresetsWithGoodColors() {
-        assertEquals(12, Themes.presets.size)
+    fun ninePresetsWithGoodColors() {
+        // Tactical Beige, Cyber HUD and Manga Ink were taken off the phone.
+        assertEquals(9, Themes.presets.size)
+        for (gone in listOf("Tactical Beige", "Cyber HUD", "Manga Ink")) assertEquals(null, Themes.preset(gone))
         val remorse = Themes.preset("Remorse")!!
         assertTrue(remorse.muted && remorse.vignette && remorse.heartbeat && remorse.style == "ash")
         assertEquals("#8c2d38", remorse.accent)
@@ -32,8 +34,8 @@ class ThemesTest {
         assertEquals("#343345", t.bg)
         assertEquals(1f, t.round, 0f)
         assertTrue(t.coverBorder && t.dotClock && !t.dark)
-        val back = Themes.fromJson(Themes.preset("Cyber HUD")!!.toJson())
-        assertEquals(Themes.preset("Cyber HUD"), back)
+        val back = Themes.fromJson(Themes.preset("Ashen Remorse")!!.toJson())
+        assertEquals(Themes.preset("Ashen Remorse"), back)
         val bad = runCatching { Themes.fromJson("""{"bg":"red"}""") }.exceptionOrNull()
         assertTrue(bad?.message.orEmpty().contains("bg"))
     }
