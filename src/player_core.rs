@@ -522,3 +522,27 @@ mod focus_tests {
         assert!(is_personal_output("سماعات الرأس"));
     }
 }
+
+/// The rain's wind at `t` seconds, as a share of the fall speed: it turns slowly from one side to
+/// the other (about a minute and a half for a full turn), so the rain doesn't lean one way.
+pub fn wind(t: f32) -> f32 {
+    0.05 * (t * 0.07).sin() + 0.015 * (t * 0.23).sin()
+}
+
+/// Drop `i`'s own small lean (±1% of the fall speed), always the same for that drop.
+pub fn lean(i: usize) -> f32 {
+    ((i * 37 % 17) as f32 / 16.0 - 0.5) * 0.02
+}
+
+#[cfg(test)]
+mod wind_tests {
+    #[test]
+    fn the_wind_turns_both_ways() {
+        let blows: Vec<f32> = (0..2000).map(|i| super::wind(i as f32 * 0.1)).collect();
+        assert!(blows.iter().any(|w| *w > 0.03) && blows.iter().any(|w| *w < -0.03), "both sides");
+        let mean = blows.iter().sum::<f32>() / blows.len() as f32;
+        assert!(mean.abs() < 0.02, "no side wins: {mean}");
+        let leans: Vec<f32> = (0..75).map(super::lean).collect();
+        assert!(leans.iter().any(|l| *l > 0.0) && leans.iter().any(|l| *l < 0.0));
+    }
+}

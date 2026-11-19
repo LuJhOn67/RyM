@@ -223,7 +223,11 @@ fun FallingParticles(style: String, color: Color, playing: Boolean, bass: Float)
                     val y0 = pool[o + 1]
                     if (life < 0f) {
                         // A drop: the bass makes it fall faster; ash drifts from side to side.
-                        val vx = if (ash) kotlin.math.sin(t * 0.8f + i) * 12f * density else pool[o + 2]
+                        // Rain: a wind that turns slowly (left, straight, right) and each drop a
+                        // little its own way, so it doesn't all lean one side (as on the PC).
+                        val wind = 0.05f * kotlin.math.sin(t * 0.07f) + 0.015f * kotlin.math.sin(t * 0.23f)
+                        val vx = if (ash) kotlin.math.sin(t * 0.8f + i) * 12f * density + wind * w * 0.02f
+                        else ((wind + ((i * 37 % 17) / 16f - 0.5f) * 0.02f) * fall).also { pool[o + 2] = it }
                         pool[o] += vx * dt
                         pool[o + 1] += pool[o + 3] * (1f + b * if (ash) 0.5f else 0.8f) * dt
                         val y = pool[o + 1]
@@ -244,7 +248,8 @@ fun FallingParticles(style: String, color: Color, playing: Boolean, bass: Float)
                             }
                         }
                         if (hit || y > h) {
-                            pool[o] = rnd.nextFloat() * w
+                            // Across the whole width and a little past it.
+                            pool[o] = rnd.nextFloat() * w * 1.2f - w * 0.1f
                             pool[o + 1] = -rnd.nextFloat() * h * 0.15f
                         }
                     } else {

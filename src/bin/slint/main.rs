@@ -2394,7 +2394,15 @@ fn rain_step(s: &mut State, ash: bool, size: (f32, f32), bar_top: Option<f32>, d
         }
         let y0 = s.rain[o + 1];
         if life < 0.0 {
-            let vx = if ash { (t * 0.8 + i as f32).sin() * 12.0 } else { s.rain[o + 2] };
+            // Rain: a wind that turns slowly (left, straight, right) and each drop a little its own
+            // way, so it doesn't all lean one side; ash drifts from side to side.
+            let vx = if ash {
+                (t * 0.8 + i as f32).sin() * 12.0 + rymplayer::player_core::wind(t) * w * 0.02
+            } else {
+                let v = (rymplayer::player_core::wind(t) + rymplayer::player_core::lean(i)) * fall;
+                s.rain[o + 2] = v;
+                v
+            };
             s.rain[o] += vx * dt;
             s.rain[o + 1] += s.rain[o + 3] * (1.0 + b * if ash { 0.5 } else { 0.8 }) * dt;
             let (x, y) = (s.rain[o], s.rain[o + 1]);
@@ -2417,7 +2425,8 @@ fn rain_step(s: &mut State, ash: bool, size: (f32, f32), bar_top: Option<f32>, d
                 }
             }
             if hit || y > h {
-                s.rain[o] = rand() * w;
+                // Across the whole width and a little past it (a slanted fall leaves no empty edge).
+                s.rain[o] = rand() * w * 1.2 - w * 0.1;
                 s.rain[o + 1] = -rand() * h * 0.15;
             }
         } else {
