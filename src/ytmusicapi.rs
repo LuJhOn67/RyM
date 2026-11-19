@@ -120,6 +120,45 @@ where
     }
 }
 
+/// Like [`hybrid`], for searches: in Auto both engines are asked at once and the first answer
+/// with results is taken (the built-in one answers in about 0.5 s, ytmusicapi in 1 to 2.5 s); a
+/// first answer without results waits for the other.
+pub async fn fastest<T: Found, N, B>(what: &str, new: N, builtin: B) -> Result<T>
+where
+    N: Future<Output = Result<T>>,
+    B: Future<Output = Result<T>>,
+{
+    match engine() {
+        Engine::Builtin => builtin.await,
+        Engine::YtMusicApi => new.await,
+        Engine::Auto => {
+            tokio::pin!(new);
+            tokio::pin!(builtin);
+            tokio::select! {
+                first = &mut builtin => match first {
+                    Ok(v) if v.found() => Ok(v),
+                    first => match new.await {
+                        Ok(v) if v.found() => Ok(v),
+                        Ok(v) => first.or(Ok(v)),
+                        Err(e) => {
+                            note_failure(what, &e);
+                            first
+                        }
+                    },
+                },
+                first = &mut new => match first {
+                    Ok(v) if v.found() => Ok(v),
+                    Ok(_) => builtin.await,
+                    Err(e) => {
+                        note_failure(what, &e);
+                        builtin.await
+                    }
+                },
+            }
+        }
+    }
+}
+
 /// The last fallback, for the settings ("search: TypeError: ... → built-in").
 static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 

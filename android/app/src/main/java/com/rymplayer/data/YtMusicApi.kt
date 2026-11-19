@@ -1,5 +1,6 @@
 package com.rymplayer.data
 
+import kotlinx.coroutines.async
 import android.content.Context
 import java.io.BufferedWriter
 import java.io.File
@@ -56,6 +57,33 @@ object YtMusicApi {
     }
 
     /** Runs [new] (ytmusicapi) and/or [builtin] as the engine setting says. */
+    /**
+     * Like [hybrid], for searches: in Auto both engines are asked at once and the first answer with
+     * results is taken (the built-in one is about twice as fast); a first answer without results
+     * waits for the other. The same as the PC's.
+     */
+    suspend fun <T> fastest(what: String, found: (T) -> Boolean, new: suspend () -> T, builtin: suspend () -> T): T = when (engine) {
+        Engine.Builtin -> builtin()
+        Engine.YtMusicApi -> new()
+        Engine.Auto -> kotlinx.coroutines.coroutineScope {
+            val b = async { runCatching { builtin() } }
+            val n = async { runCatching { new() } }
+            val (first, other) = kotlinx.coroutines.selects.select<Pair<Result<T>, kotlinx.coroutines.Deferred<Result<T>>>> {
+                b.onAwait { it to n }
+                n.onAwait { it to b }
+            }
+            val got = first.getOrNull()
+            if (got != null && found(got)) {
+                other.cancel()
+                got
+            } else {
+                first.exceptionOrNull()?.takeIf { other === b }?.let { e -> lastFailure = "$what: ${e.message}" }
+                val second = other.await()
+                second.getOrNull()?.takeIf(found) ?: got ?: second.getOrThrow()
+            }
+        }
+    }
+
     suspend fun <T> hybrid(what: String, found: (T) -> Boolean, new: suspend () -> T, builtin: suspend () -> T): T = when (engine) {
         Engine.Builtin -> builtin()
         Engine.YtMusicApi -> new()

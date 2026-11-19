@@ -139,7 +139,7 @@ class MusicApi(private val cookie: String?) {
      * (songs that are only on YouTube, not on YouTube Music), each once. Both asked at once; one
      * failing still gives the other.
      */
-    suspend fun searchPaged(q: String): Paged = YtMusicApi.hybrid("search", { it.tracks.isNotEmpty() }, {
+    suspend fun searchPaged(q: String): Paged = YtMusicApi.fastest("search", { it.tracks.isNotEmpty() }, {
         kotlinx.coroutines.coroutineScope {
             val songs = async { YtMusicApi.search(q, "songs", cookie) }
             val videos = async { runCatching { YtMusicApi.search(q, "videos", cookie) }.getOrDefault(emptyList()) }
@@ -278,7 +278,7 @@ class MusicApi(private val cookie: String?) {
     }
 
     suspend fun search(q: String): List<Track> =
-        YtMusicApi.hybrid("search", { it.isNotEmpty() }, { YtMusicApi.search(q, "songs", cookie) }) { builtinSearch(q) }
+        YtMusicApi.fastest("search", { it.isNotEmpty() }, { YtMusicApi.search(q, "songs", cookie) }) { builtinSearch(q) }
 
     suspend fun builtinSearch(q: String): List<Track> =
         songRows(post("search", buildJsonObject { put("query", q); put("params", SONGS_FILTER) }))

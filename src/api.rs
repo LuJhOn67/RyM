@@ -130,7 +130,7 @@ impl Api {
 
     pub async fn search(self, query: String) -> Result<Vec<Track>> {
         let cookie = self.cookie();
-        crate::ytmusicapi::hybrid("search", crate::ytmusicapi::search(query.clone(), "songs", cookie), || self.builtin_search(query)).await
+        crate::ytmusicapi::fastest("search", crate::ytmusicapi::search(query.clone(), "songs", cookie), self.builtin_search(query)).await
     }
 
     /// The built-in engine's search (ytmapi-rs over InnerTube).
@@ -292,7 +292,7 @@ impl Api {
             tracks.extend(found);
             Ok(Paged { tracks, more: None })
         };
-        crate::ytmusicapi::hybrid("search", new, || self.builtin_search_paged(query)).await
+        crate::ytmusicapi::fastest("search", new, self.builtin_search_paged(query)).await
     }
 
     /// The built-in engine's search results, with their next pages.
@@ -1409,5 +1409,26 @@ mod artist_search_tests {
         }
         assert!(api.clone().artist_named("linkin park".into()).await.unwrap().is_some());
         assert!(api.artist_named("numb".into()).await.unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod search_speed_tests {
+    /// Where a search's time goes: `cargo test --release --lib search_speed -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn search_speed() {
+        let api = super::Api::guest().await.unwrap();
+        for q in ["queen bohemian rhapsody", "daft punk", "باسم الكربلائي"] {
+            let t = std::time::Instant::now();
+            let n = crate::ytmusicapi::search(q.to_string(), "songs", None).await.map(|v| v.len());
+            println!("ytmusicapi {q}: {:?} in {} ms", n.as_ref().ok(), t.elapsed().as_millis());
+            let t = std::time::Instant::now();
+            let n = api.clone().builtin_search(q.to_string()).await.map(|v| v.len());
+            println!("built-in   {q}: {:?} in {} ms", n.as_ref().ok(), t.elapsed().as_millis());
+            let t = std::time::Instant::now();
+            let n = api.clone().search_paged(q.to_string()).await.map(|p| p.tracks.len());
+            println!("RyM's page {q}: {:?} in {} ms", n.as_ref().ok(), t.elapsed().as_millis());
+        }
     }
 }
