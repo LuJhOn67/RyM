@@ -295,6 +295,7 @@ object Streams {
         val answer: JsonObject = YoutubeStreamHelper.getVisionOsPlayerResponse(country, english, videoId, cpn)
         val status = answer.getObject("playabilityStatus")
         check(status.getString("status") == "OK") { status.getString("reason") ?: status.getString("status") ?: "not playable" }
+        check(!answer.getObject("videoDetails").getBoolean("isLive")) { LIVE }
         val formats = answer.getObject("streamingData").getArray("adaptiveFormats")
         val rank = rank()
         val best = (0 until formats.size).map { formats.getObject(it) }
@@ -309,6 +310,9 @@ object Streams {
     }
 
     private const val MUSIC_VERSION = "1.20260707.12.00"
+
+    /** A live broadcast never ends, so it isn't played as a song. */
+    const val LIVE = "a live stream (RyM plays songs, not live broadcasts)"
 
     /**
      * YouTube Music's own web player with your account: Premium gets the 256 kbps Opus stream
@@ -351,6 +355,7 @@ object Streams {
         }
         val status = answer.optJSONObject("playabilityStatus")
         check(status?.optString("status") == "OK") { status?.optString("reason")?.ifEmpty { null } ?: status?.optString("status") ?: "not playable" }
+        check(answer.optJSONObject("videoDetails")?.optBoolean("isLive") != true) { LIVE }
         val formats = answer.optJSONObject("streamingData")?.optJSONArray("adaptiveFormats") ?: error("no streams")
         val rank = rank()
         val best = (0 until formats.length()).map { formats.getJSONObject(it) }

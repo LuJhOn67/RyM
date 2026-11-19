@@ -491,6 +491,16 @@ fn main() {
     if !set_app_icon(&ui, icon.as_deref()) {
         set_app_icon(&ui, None);
     }
+    // The layouts' right panel: its width as last dragged.
+    ui.global::<App>().set_panel_width(st.borrow().config.panel_width.clamp(240.0, 720.0));
+    {
+        let st = st.clone();
+        ui.global::<App>().on_panel_resized(move |w| {
+            let mut s = st.borrow_mut();
+            s.config.panel_width = w.clamp(240.0, 720.0);
+            s.config.save();
+        });
+    }
     // Where it was and how big, made to fit this screen (a 1080p laptop at 150% couldn't hold
     // the window's own size, so it looked like full screen).
     place_window(&ui, st.borrow().config.window);

@@ -278,6 +278,9 @@ pub struct Config {
     pub desk_cd_only: bool,
     pub desk_size: u32,
     pub desk_side: String,
+    /// The width of the right panel (Up next / lyrics) in the RyM Flow and RyM Side layouts,
+    /// dragged by its edge.
+    pub panel_width: f32,
     /// RyM Slint's buttons: 1, 1.2 or 1.4 times their size (they never shrink below 1 when the
     /// window's size is made smaller).
     pub button_size: f32,
@@ -497,6 +500,7 @@ impl Default for Config {
             desk_cd_only: true,
             desk_size: 220,
             desk_side: "right".into(),
+            panel_width: 340.0,
             button_size: 1.0,
             shortcuts: Default::default(),
             remote_control: true,

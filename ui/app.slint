@@ -274,6 +274,9 @@ export global App {
     // The app's icon as picked in the settings (Freak, Pear, RyM logo or a picture), for the logo
     // in the layouts' bars.
     in property <image> app-icon;
+    // The layouts' right panel width (dragged by its edge; saved when let go).
+    in-out property <float> panel-width: 340;
+    callback panel-resized(float);
     // A button on the notice ("Undo"), empty for none; it calls undo-remove.
     in property <string> toast-action;
     callback undo-remove();
@@ -3181,7 +3184,7 @@ component ShellLayout inherits Rectangle {
     property <length> top-h: side ? 0px : 64px * Ui.k;
     property <length> bar-h: 84px * Ui.k;
     property <length> side-w: side ? 280px * Ui.k : 0px;
-    property <length> panel-w: (panel && !top && App.page != 0) || (side && App.page == 0 && false) ? 340px * Ui.k : 0px;
+    property <length> panel-w: panel && !top && App.page != 0 ? clamp(App.panel-width, 240, 720) * 1px * Ui.k : 0px;
     background: side ? #000000 : Theme.bg;
     pure function mx(x: length, w: length) -> length {
         return Ui.rtl ? root.width - x - w : x;
@@ -3213,6 +3216,40 @@ component ShellLayout inherits Rectangle {
         width: root.panel-w;
         height: content.height;
         big-song: root.side;
+    }
+    // The panel's inner edge: drag it to make the lyrics / Up next wider or narrower.
+    if root.panel-w > 0: Rectangle {
+        property <length> edge: Ui.rtl ? root.gap + (root.side ? 0px : 8px * Ui.k) + root.panel-w :parent.width - root.panel-w - root.gap - (root.side ? 0px : 8px * Ui.k);
+        x: self.edge - self.width / 2;
+        y: content.y;
+        width: 10px * Ui.k;
+        height: content.height;
+        Rectangle {
+            width: 3px * Ui.k;
+            height: 48px * Ui.k;
+            border-radius: 2px * Ui.k;
+            background: Theme.dim;
+            opacity: drag.has-hover || drag.pressed ? 0.8 : 0;
+            animate opacity { duration: 120ms; }
+        }
+        drag := TouchArea {
+            mouse-cursor: ew-resize;
+            moved => {
+                if self.pressed {
+                    let d = (self.mouse-x - self.pressed-x) / 1px / Ui.k;
+                    App.panel-width = clamp(App.panel-width + (Ui.rtl ? d : -d), 240, min(720, root.width / 1px / Ui.k * 0.5));
+                }
+            }
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.up {
+                    App.panel-resized(App.panel-width);
+                }
+            }
+            double-clicked => {
+                App.panel-width = 340;
+                App.panel-resized(340);
+            }
+        }
     }
     ShellBar {
         y: parent.height - self.height;
