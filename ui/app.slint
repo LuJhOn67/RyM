@@ -111,6 +111,8 @@ export global Theme {
     in-out property <Pal> p;
     out property <bool> dark: custom ? p.dark : true;
     out property <bool> wide: index == 2 || index == 3;
+    // RyM Flow (4), RyM Top (5), RyM Side (6): the simple layouts (see ShellLayout).
+    out property <bool> shell: index >= 4 && index <= 6;
     // RyM Noir: the Wide layout as rounded panels on a black frame, the player floating at the
     // bottom, green accents.
     out property <bool> noir: !custom && index == 3;
@@ -143,15 +145,15 @@ export global Theme {
     // The accent from the playing song's cover (Settings), when on.
     in-out property <bool> cover-accent: false;
     in-out property <color> cover-color: #ea814a;
-    out property <color> bg: custom ? p.bg : (index == 3 ? #111111 : (index == 2 ? #0f0f0f : #343345));
-    out property <color> raised: custom ? p.raised : (index == 3 ? #202020 : (index == 2 ? #272727 : #3d3c50));
-    out property <color> text: custom ? p.text : (index == 3 ? #e0e0e0 : (index == 2 ? #f1f1f1 : #ffffff));
-    out property <color> dim: custom ? p.dim : (index == 3 ? #898989 : (index == 2 ? #aaaaaa : #c6c6c6));
-    out property <color> faint: custom ? p.dim : (index == 3 ? #898989 : (index == 2 ? #9a9a9a : #d5d5d5));
-    out property <color> icon: custom ? p.icon : (index == 3 ? #e0e0e0 : (index == 2 ? #f1f1f1 : #e4e3e3));
-    out property <color> handle: custom ? p.dim.with-alpha(0.7) : (index == 3 ? #535353 : (index == 2 ? #717171 : #666477));
-    out property <color> accent: cover-accent ? cover-color : (custom ? p.accent : (index == 3 ? #1ed760 : (index == 2 ? #ff4e45 : #ea814a)));
-    out property <color> bar: custom ? p.bar : (index == 3 ? #4d4d4d : (index == 2 ? #3f3f3f : #d9d9d9));
+    out property <color> bg: custom ? p.bg : (index >= 4 ? #0f0f0f : (index == 3 ? #111111 : (index == 2 ? #0f0f0f : #343345)));
+    out property <color> raised: custom ? p.raised : (index >= 4 ? #1c1c1c : (index == 3 ? #202020 : (index == 2 ? #272727 : #3d3c50)));
+    out property <color> text: custom ? p.text : (index >= 4 ? #ffffff : (index == 3 ? #e0e0e0 : (index == 2 ? #f1f1f1 : #ffffff)));
+    out property <color> dim: custom ? p.dim : (index >= 4 ? #aaaaaa : (index == 3 ? #898989 : (index == 2 ? #aaaaaa : #c6c6c6)));
+    out property <color> faint: custom ? p.dim : (index >= 4 ? #8f8f8f : (index == 3 ? #898989 : (index == 2 ? #9a9a9a : #d5d5d5)));
+    out property <color> icon: custom ? p.icon : (index >= 4 ? #ffffff : (index == 3 ? #e0e0e0 : (index == 2 ? #f1f1f1 : #e4e3e3)));
+    out property <color> handle: custom ? p.dim.with-alpha(0.7) : (index >= 4 ? #5a5a5a : (index == 3 ? #535353 : (index == 2 ? #717171 : #666477)));
+    out property <color> accent: cover-accent ? cover-color : (custom ? p.accent : index >= 4 ? #ff5533 : (index == 3 ? #1ed760 : (index == 2 ? #ff4e45 : #ea814a)));
+    out property <color> bar: custom ? p.bar : (index >= 4 ? #3a3a3a : (index == 3 ? #4d4d4d : (index == 2 ? #3f3f3f : #d9d9d9)));
     out property <color> border: cover-border ? cover-color.with-alpha(0.85) : (custom ? p.border : (index == 3 ? #2a2a2a : (index == 2 ? #3f3f3f : #666477.with-alpha(0.5))));
     out property <color> hover: dark ? #ffffff14 : #0000000d;
     out property <color> wave-from: cover-accent ? cover-color.brighter(0.5) : (custom ? p.accent2 : (index == 3 ? #5ff08f : (index == 2 ? #ff8a80 : #f9d19e)));
@@ -1995,6 +1997,32 @@ component LibraryPage inherits Page {
     }
 }
 
+// Quick picks on Home (the three layouts): the first shelf's cards as tiles, two rows of four.
+component QuickPicks inherits Rectangle {
+    in property <[Card]> cards;
+    property <int> cols: 4;
+    property <length> gap: 10px * Ui.k;
+    property <length> tile-w: (root.width - (root.cols - 1) * root.gap) / root.cols;
+    property <length> tile-h: 64px * Ui.k;
+    height: (min(2, ceil(min(8, root.cards.length) / root.cols))) * (root.tile-h + root.gap);
+    for c[i] in root.cards: Rectangle {
+        visible: i < 8;
+        x: Ui.rtl ? root.width - (mod(i, root.cols) + 1) * (root.tile-w + root.gap) + root.gap : mod(i, root.cols) * (root.tile-w + root.gap);
+        y: floor(i / root.cols) * (root.tile-h + root.gap);
+        width: root.tile-w;
+        height: root.tile-h;
+        border-radius: 6px * Ui.k;
+        background: ta.has-hover ? #ffffff26 : #ffffff14;
+        clip: true;
+        HorizontalLayout {
+            spacing: 12px * Ui.k;
+            Cover { width: root.tile-h; height: root.tile-h; radius: 0; source: c.cover; }
+            Text { text: c.title; font-size: 14px * Ui.k; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-alignment: Ui.start; }
+        }
+        ta := TouchArea { mouse-cursor: pointer; clicked => { App.open-card(c.key); } }
+    }
+}
+
 component HomePage inherits Page {
     content-height: col.preferred-height;
     near-end => { App.more(); }
@@ -2022,6 +2050,7 @@ component HomePage inherits Page {
             color: Theme.dim;
             horizontal-alignment: Ui.start;
         }
+        if Theme.shell && App.home.length > 0: QuickPicks { cards: App.home[0].cards; }
         for shelf in App.home: VerticalLayout {
             spacing: 6px * Ui.k;
             Header { title: shelf.title; }
@@ -2800,6 +2829,396 @@ component WideLayout inherits Rectangle {
     if !Theme.noir && App.page != 0: BottomBar { y: parent.height - self.height; width: parent.width; }
 }
 
+// ---------------------------------------------------------------- RyM Flow, RyM Top, RyM Side
+// Three simple layouts on one dark look: RyM Flow (tabs on top, quick picks, the player along
+// the bottom, Up next / lyrics in a panel on the right that opens and closes), RyM Top (tabs on
+// top, the page across the whole width, a big Now playing page), RyM Side (the library on the
+// left, the page in the middle, Now playing and Up next on the right). The pages themselves
+// (home, search, library, settings...) are the app's own.
+
+// A tab of the top bar: its word, the chosen one bright and underlined.
+component ShellTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+    width: label.preferred-width + 28px * Ui.k;
+    label := Text {
+        text: root.text;
+        font-size: 16px * Ui.k;
+        font-weight: root.on ? 700 : 500;
+        color: root.on ? Theme.text : (ta.has-hover ? Theme.text : Theme.dim);
+    }
+    if root.on: Rectangle {
+        y: parent.height - 3px * Ui.k;
+        x: 14px * Ui.k;
+        width: parent.width - 28px * Ui.k;
+        height: 3px * Ui.k;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// The top bar (RyM Flow, RyM Top): RyM, the tabs, the search box, the account.
+component ShellTop inherits Rectangle {
+    height: 64px * Ui.k;
+    background: Theme.bg;
+    HorizontalLayout {
+        padding-left: 22px * Ui.k;
+        padding-right: 22px * Ui.k;
+        spacing: 10px * Ui.k;
+        HorizontalLayout {
+            spacing: 4px * Ui.k;
+            alignment: start;
+            Rectangle {
+                width: 30px * Ui.k;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle { width: 26px * Ui.k; height: 26px * Ui.k; border-radius: 13px * Ui.k; background: Theme.accent; Image { width: 14px * Ui.k; height: 14px * Ui.k; source: @image-url("icons/play-bold.svg"); colorize: #ffffff; } }
+                }
+            }
+            Text { text: "RyM"; font-size: 22px * Ui.k; font-weight: 800; color: Theme.text; vertical-alignment: center; }
+            Rectangle { width: 24px * Ui.k; }
+            ShellTab { text: App.tr("Home"); on: App.page == 3; clicked => { App.go(3); } }
+            ShellTab { text: App.tr("Now playing"); on: App.page == 0; clicked => { App.go(0); } }
+            ShellTab { text: App.tr("Library"); on: App.page == 2 || App.page == 5; clicked => { App.go(2); } }
+            ShellTab { text: App.tr("Your stats"); on: App.page == 6; clicked => { App.go(6); } }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout {
+            alignment: center;
+            SearchBox { width: min(420px * Ui.k, root.width * 0.3); height: 40px * Ui.k; }
+        }
+        VerticalLayout { alignment: center; Icon { size: 36px * Ui.k; tint: App.page == 4 ? Theme.accent : Theme.dim; source: @image-url("icons/settings-bold.svg"); clicked => { App.go(4); } } }
+        VerticalLayout { alignment: center; Account { width: 34px * Ui.k; height: 34px * Ui.k; } }
+    }
+}
+
+// A line of the side list: an icon and a word, the chosen one bright.
+component ShellSideItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+    height: 44px * Ui.k;
+    border-radius: 6px * Ui.k;
+    background: ta.has-hover ? #ffffff10 : transparent;
+    HorizontalLayout {
+        padding-left: 14px * Ui.k;
+        padding-right: 14px * Ui.k;
+        spacing: 16px * Ui.k;
+        VerticalLayout { alignment: center; Image { width: 24px * Ui.k; height: 24px * Ui.k; source: root.icon; colorize: root.on ? Theme.text : Theme.dim; } }
+        Text { text: root.text; font-size: 15px * Ui.k; font-weight: 700; color: root.on ? Theme.text : Theme.dim; vertical-alignment: center; overflow: elide; horizontal-alignment: Ui.start; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// The library on the left (RyM Side): the pages, then the playlists with their covers.
+component ShellSide inherits Rectangle {
+    VerticalLayout {
+        spacing: 8px * Ui.k;
+        Rectangle {
+            height: nav.preferred-height;
+            border-radius: 8px * Ui.k;
+            background: #121212;
+            nav := VerticalLayout {
+                padding: 8px * Ui.k;
+                HorizontalLayout {
+                    padding-left: 14px * Ui.k;
+                    padding-top: 8px * Ui.k;
+                    padding-bottom: 8px * Ui.k;
+                    spacing: 8px * Ui.k;
+                    Rectangle { width: 22px * Ui.k; height: 22px * Ui.k; border-radius: 11px * Ui.k; background: Theme.accent; Image { width: 12px * Ui.k; height: 12px * Ui.k; source: @image-url("icons/play-bold.svg"); colorize: #ffffff; } }
+                    Text { text: "RyM"; font-size: 20px * Ui.k; font-weight: 800; color: Theme.text; vertical-alignment: center; }
+                }
+                ShellSideItem { icon: @image-url("icons/home-2-bold.svg"); text: App.tr("Home"); on: App.page == 3; clicked => { App.go(3); } }
+                ShellSideItem { icon: @image-url("icons/nav-search.svg"); text: App.tr("Search"); on: App.page == 1; clicked => { App.go(1); } }
+                ShellSideItem { icon: @image-url("icons/nav-play.svg"); text: App.tr("Now playing"); on: App.page == 0; clicked => { App.go(0); } }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 8px * Ui.k;
+            background: #121212;
+            VerticalLayout {
+                padding: 8px * Ui.k;
+                spacing: 2px * Ui.k;
+                ShellSideItem { icon: @image-url("icons/nav-library.svg"); text: App.tr("Library"); on: App.page == 2 || App.page == 5; clicked => { App.go(2); } }
+                Flickable {
+                    vertical-stretch: 1;
+                    content-height: lists.preferred-height;
+                    lists := VerticalLayout {
+                        alignment: start;
+                        for p in App.playlists: Rectangle {
+                            height: 60px * Ui.k;
+                            border-radius: 6px * Ui.k;
+                            background: pa.has-hover ? #ffffff10 : transparent;
+                            HorizontalLayout {
+                                padding: 8px * Ui.k;
+                                spacing: 12px * Ui.k;
+                                Cover { width: 44px * Ui.k; height: 44px * Ui.k; radius: 4px * Ui.k; source: p.cover; }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px * Ui.k;
+                                    Text { text: p.title; font-size: 14px * Ui.k; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+                                    Text { text: p.sub; font-size: 12px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+                                }
+                            }
+                            pa := TouchArea { mouse-cursor: pointer; clicked => { App.open-card(p.key); } }
+                        }
+                    }
+                }
+                ShellSideItem { icon: @image-url("icons/chart-2-bold.svg"); text: App.tr("Your stats"); on: App.page == 6; clicked => { App.go(6); } }
+                ShellSideItem { icon: @image-url("icons/settings-bold.svg"); text: App.tr("Settings"); on: App.page == 4; clicked => { App.go(4); } }
+            }
+        }
+    }
+}
+
+// The player along the bottom: the song on one side, the controls and the progress in the
+// middle, lyrics / Up next / volume on the other.
+component ShellBar inherits Rectangle {
+    in-out property <bool> panel;
+    in property <bool> can-panel: true;
+    height: 84px * Ui.k;
+    background: Theme.index == 6 ? #000000 : #181818;
+    property <float> done: App.duration > 0 ? App.position / App.duration : 0;
+    property <length> side: root.width * 0.3;
+    // The song.
+    HorizontalLayout {
+        x: Ui.rtl ? root.width - root.side - 14px * Ui.k : 14px * Ui.k;
+        width: root.side;
+        spacing: 12px * Ui.k;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            Cover { width: 56px * Ui.k; height: 56px * Ui.k; radius: 5px * Ui.k; source: App.cover; TouchArea { mouse-cursor: pointer; clicked => { App.go(0); } } }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px * Ui.k;
+            max-width: root.side - 120px * Ui.k;
+            Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 15px * Ui.k; font-weight: 600; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: App.artist; font-size: 13px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+        }
+        VerticalLayout { alignment: center; Icon { size: 32px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: App.liked ? Theme.accent : Theme.dim; clicked => { App.like-now(); } } }
+    }
+    // The controls and the progress.
+    VerticalLayout {
+        x: (root.width - self.width) / 2;
+        width: min(560px * Ui.k, root.width - 2 * root.side);
+        alignment: center;
+        spacing: 4px * Ui.k;
+        HorizontalLayout {
+            alignment: center;
+            spacing: 16px * Ui.k;
+            VerticalLayout { alignment: center; Icon { size: 30px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one || App.repeat-all ? Theme.accent : Theme.dim; clicked => { App.repeat(); } } }
+            VerticalLayout { alignment: center; Icon { size: 34px * Ui.k; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } } }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 40px * Ui.k * Ui.btn;
+                    height: self.width;
+                    border-radius: self.width / 2;
+                    background: pp.has-hover ? #ffffff : #f0f0f0;
+                    Image { width: parent.width * 0.48; height: self.width; source: App.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold.svg"); colorize: #000000; }
+                    pp := TouchArea { mouse-cursor: pointer; clicked => { App.toggle-play(); } }
+                }
+            }
+            VerticalLayout { alignment: center; Icon { size: 34px * Ui.k; source: @image-url("icons/next.svg"); clicked => { App.next(); } } }
+            VerticalLayout { alignment: center; SpeedButton { size: 30px * Ui.k; } }
+        }
+        HorizontalLayout {
+            spacing: 8px * Ui.k;
+            Text { text: App.pos-text; font-size: 12px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 14px * Ui.k;
+                Rectangle {
+                    height: 4px * Ui.k;
+                    border-radius: 2px * Ui.k;
+                    background: #4d4d4d;
+                    Rectangle {
+                        x: Ui.rtl ? parent.width * (1 - root.done) : 0;
+                        width: parent.width * root.done;
+                        border-radius: 2px * Ui.k;
+                        background: seek.has-hover ? Theme.accent : #ffffff;
+                    }
+                }
+                seek := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { App.seek(max(0, min(1, (Ui.rtl ? self.width - self.mouse-x : self.mouse-x) / self.width)) * App.duration); }
+                }
+            }
+            Text { text: App.len-text; font-size: 12px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+        }
+    }
+    // Lyrics, Up next, volume.
+    HorizontalLayout {
+        x: Ui.rtl ? 14px * Ui.k : root.width - root.side - 14px * Ui.k;
+        width: root.side;
+        spacing: 6px * Ui.k;
+        alignment: end;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                size: 32px * Ui.k;
+                tint: App.show-lyrics ? Theme.accent : Theme.dim;
+                source: @image-url("icons/text-square-bold.svg");
+                clicked => {
+                    App.show-lyrics = !App.show-lyrics;
+                    if (root.can-panel) { root.panel = true; } else { App.go(0); }
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                size: 32px * Ui.k;
+                tint: root.panel && !App.show-lyrics ? Theme.accent : Theme.dim;
+                source: @image-url("icons/playlist.svg");
+                clicked => {
+                    if (root.can-panel) {
+                        if (root.panel && App.show-lyrics) { App.show-lyrics = false; } else { root.panel = !root.panel; App.show-lyrics = false; }
+                    } else {
+                        App.show-lyrics = false;
+                        App.go(0);
+                    }
+                }
+            }
+        }
+        VerticalLayout { alignment: center; FlatVolume { width: 110px * Ui.k; } }
+    }
+}
+
+// The panel on the right (RyM Flow, RyM Side): the lyrics, or Up next; RyM Side shows the
+// playing song big on top.
+component ShellPanel inherits Rectangle {
+    in property <bool> big-song;
+    border-radius: 8px * Ui.k;
+    background: #121212;
+    clip: true;
+    VerticalLayout {
+        padding: 14px * Ui.k;
+        spacing: 10px * Ui.k;
+        Text { text: App.show-lyrics ? App.tr("Lyrics") : App.tr("Up next"); font-size: 18px * Ui.k; font-weight: 800; color: Theme.text; horizontal-alignment: Ui.start; }
+        if root.big-song && !App.show-lyrics: VerticalLayout {
+            alignment: start;
+            vertical-stretch: 0;
+            spacing: 8px * Ui.k;
+            Cover { width: root.width - 28px * Ui.k; height: self.width; radius: 8px * Ui.k; source: App.cover; NowMenu { } }
+            Text { text: App.title; font-size: 20px * Ui.k; font-weight: 800; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: App.artist; font-size: 14px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+            Rectangle { height: 6px * Ui.k; }
+        }
+        if App.show-lyrics: Lyrics { vertical-stretch: 1; }
+        if !App.show-lyrics: Flickable {
+            vertical-stretch: 1;
+            content-height: rows.preferred-height;
+            rows := VerticalLayout {
+                alignment: start;
+                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
+                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 44px * Ui.k; title-size: 14px * Ui.k; }
+            }
+        }
+    }
+}
+
+// Now playing: the cover big on the song's blurred colors; on the right Up next or the lyrics
+// (RyM Top), or the lyrics alone (the others have Up next in their panel).
+component ShellNow inherits Rectangle {
+    in property <bool> tabs;
+    clip: true;
+    Image { width: 100%; height: 100%; source: App.backdrop; image-fit: cover; opacity: 0.35; }
+    property <length> pad: 40px * Ui.k;
+    property <length> art: min(root.height - 2 * root.pad, (root.width - 3 * root.pad) * 0.5);
+    Cover {
+        x: Ui.rtl ? root.width - root.pad - self.width : root.pad;
+        y: (root.height - self.height) / 2;
+        width: root.art;
+        height: root.art;
+        radius: 10px * Ui.k;
+        source: App.cover;
+        drop-shadow-blur: 40px * Ui.k;
+        drop-shadow-color: #000000a0;
+        NowMenu { }
+    }
+    VerticalLayout {
+        x: Ui.rtl ? root.pad : root.art + 2 * root.pad;
+        y: root.pad;
+        width: root.width - root.art - 3 * root.pad;
+        height: root.height - 2 * root.pad;
+        spacing: 10px * Ui.k;
+        Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 30px * Ui.k; font-weight: 800; color: Theme.text; wrap: word-wrap; horizontal-alignment: Ui.start; }
+        Text { text: App.artist; font-size: 16px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
+        if root.tabs: HorizontalLayout {
+            alignment: start;
+            spacing: 4px * Ui.k;
+            ShellTab { height: 40px * Ui.k; text: App.tr("Up next"); on: !App.show-lyrics; clicked => { App.show-lyrics = false; } }
+            ShellTab { height: 40px * Ui.k; text: App.tr("Lyrics"); on: App.show-lyrics; clicked => { App.show-lyrics = true; } }
+        }
+        if !root.tabs || App.show-lyrics: Lyrics { vertical-stretch: 1; }
+        if root.tabs && !App.show-lyrics: Flickable {
+            vertical-stretch: 1;
+            content-height: rows.preferred-height;
+            rows := VerticalLayout {
+                alignment: start;
+                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
+                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 52px * Ui.k; title-size: 15px * Ui.k; }
+            }
+        }
+    }
+}
+
+component ShellLayout inherits Rectangle {
+    property <bool> side: Theme.index == 6;
+    property <bool> top: Theme.index == 5;
+    in-out property <bool> panel: true;
+    property <length> gap: side ? 8px * Ui.k : 0px;
+    property <length> top-h: side ? 0px : 64px * Ui.k;
+    property <length> bar-h: 84px * Ui.k;
+    property <length> side-w: side ? 280px * Ui.k : 0px;
+    property <length> panel-w: (panel && !top && App.page != 0) || (side && App.page == 0 && false) ? 340px * Ui.k : 0px;
+    background: side ? #000000 : Theme.bg;
+    pure function mx(x: length, w: length) -> length {
+        return Ui.rtl ? root.width - x - w : x;
+    }
+    if !root.side: ShellTop { x: 0; y: 0; width: parent.width; }
+    if root.side: ShellSide {
+        x: root.mx(root.gap, root.side-w - root.gap);
+        y: root.gap;
+        width: root.side-w - root.gap;
+        height: parent.height - root.bar-h - 2 * root.gap;
+    }
+    content := Rectangle {
+        property <length> left: root.side ? root.side-w + root.gap : 0px;
+        property <length> right: root.panel-w > 0 ? root.panel-w + 2 * root.gap + (root.side ? 0px : 8px * Ui.k) : root.gap;
+        x: root.mx(self.left, self.width);
+        y: root.side ? root.gap : root.top-h;
+        width: parent.width - self.left - self.right;
+        height: parent.height - self.y - root.bar-h - root.gap;
+        background: root.side ? #121212 : transparent;
+        border-radius: root.side ? 8px * Ui.k : 0px;
+        clip: true;
+        if App.page == 0: ShellNow { width: 100%; height: 100%; tabs: root.top || root.panel-w == 0; }
+        // The page with room around it.
+        if App.page != 0: Pages { x: 20px * Ui.k; width: parent.width - 28px * Ui.k; height: 100%; }
+    }
+    if root.panel-w > 0: ShellPanel {
+        x: root.mx(parent.width - root.panel-w - root.gap - (root.side ? 0px : 8px * Ui.k), root.panel-w);
+        y: content.y;
+        width: root.panel-w;
+        height: content.height;
+        big-song: root.side;
+    }
+    ShellBar {
+        y: parent.height - self.height;
+        width: parent.width;
+        panel <=> root.panel;
+        can-panel: !root.top;
+    }
+}
+
 // ---------------------------------------------------------------- the windows
 
 export component AppWindow inherits Window {
@@ -2837,7 +3256,7 @@ export component AppWindow inherits Window {
         width: 100%;
         height: 100%;
     }
-    if !Theme.wide: Rectangle {
+    if !Theme.wide && !Theme.shell: Rectangle {
         NowPlaying {
             x: Ui.rtl ? root.width - self.width : 0;
             y: 0;
@@ -2857,6 +3276,7 @@ export component AppWindow inherits Window {
         }
     }
     if Theme.wide: WideLayout { width: 100%; height: 100%; }
+    if Theme.shell: ShellLayout { width: 100%; height: 100%; }
     if App.stage && App.has-song: Stage { width: 100%; height: 100%; }
     // The X: close, or keep playing in the background (by the clock), and maybe remember it.
     if App.close-ask: Rectangle {
