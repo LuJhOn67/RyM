@@ -273,6 +273,9 @@ pub struct Config {
     pub desk_place: Option<(i32, i32)>,
     pub desk_dim: u8,
     pub desk_locked: bool,
+    /// RyM Slint's buttons: 1, 1.2 or 1.4 times their size (they never shrink below 1 when the
+    /// window's size is made smaller).
+    pub button_size: f32,
     /// Shortcuts changed in the settings: action id -> key (see `shortcuts`).
     pub shortcuts: std::collections::HashMap<String, String>,
     /// The phone can control this computer's music (play, pause, skip, seek, volume).
@@ -486,6 +489,7 @@ impl Default for Config {
             desk_place: None,
             desk_dim: 0,
             desk_locked: false,
+            button_size: 1.0,
             shortcuts: Default::default(),
             remote_control: true,
         }

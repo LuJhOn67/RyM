@@ -39,6 +39,12 @@ pub fn videos_dir() -> PathBuf {
 /// Downloads a link from YouTube or any site yt-dlp knows: the video (best up to 1080p, MP4 when
 /// it can) or just the sound. Returns the saved file.
 pub async fn download(url: &str, video: bool) -> Result<PathBuf> {
+    download_at(url, video.then_some(1080)).await
+}
+
+/// A video at most `height` pixels tall (merged into one .mp4), or the sound only with None.
+pub async fn download_at(url: &str, height: Option<u32>) -> Result<PathBuf> {
+    let video = height.is_some();
     let url = url.trim();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(anyhow!("not a link: {url}"));
@@ -47,7 +53,8 @@ pub async fn download(url: &str, video: bool) -> Result<PathBuf> {
     tokio::fs::create_dir_all(&dir).await?;
     let mut cmd = ytdlp()?;
     if video {
-        cmd.args(["-f", "bv*[height<=1080]+ba/b", "--merge-output-format", "mp4"]);
+        let h = height.unwrap_or(1080);
+        cmd.args(["-f", &format!("bv*[height<={h}]+ba/b[height<={h}]/b"), "--merge-output-format", "mp4"]);
     } else {
         cmd.args(["-f", "ba/b", "-x"]);
     }

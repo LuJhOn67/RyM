@@ -94,12 +94,12 @@ object YtDlp {
      * video (picture and sound in one file, best up to 1080p) or just the sound. Blocking; returns
      * the file in the app's cache, ready to be published.
      */
-    fun downloadAny(ctx: Context, url: String, video: Boolean, cookie: String?): File {
+    fun downloadAny(ctx: Context, url: String, video: Boolean, cookie: String?, height: Int = 1080): File {
         prepare(ctx)
         val dir = File(ctx.cacheDir, "ytdlp-any").apply { deleteRecursively(); mkdirs() }
         val request = YoutubeDLRequest(url.trim()).apply {
             // One file without joining (the app has no ffmpeg): the best already-joined video, or the sound.
-            addOption("-f", if (video) "b[height<=1080][ext=mp4]/b[height<=1080]/b" else "ba[ext=m4a]/ba/b")
+            addOption("-f", if (video) "b[height<=$height][ext=mp4]/b[height<=$height]/b" else "ba[ext=m4a]/ba/b")
             addOption("--no-playlist")
             addOption("--no-part")
             addOption("--restrict-filenames")

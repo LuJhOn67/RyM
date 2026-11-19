@@ -342,6 +342,12 @@ pub async fn fetch(video_id: String) -> Result<PathBuf> {
 
 /// Saves a song as a file in the Music folder: `Music\RymPlayer\Artist - Title.ext`.
 pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<PathBuf> {
+    save_to_music_as(video_id, artist, title, DOWNLOAD_BEST.load(Ordering::Relaxed)).await
+}
+
+/// Like [`save_to_music`], fast (`best` false: the file playback uses) or at the best quality
+/// (yt-dlp), as picked for this one download.
+pub async fn save_to_music_as(video_id: &str, artist: &str, title: &str, best: bool) -> Result<PathBuf> {
     // Already a file here: copying it onto itself would empty it.
     if let Some(p) = crate::local::path_of(video_id) {
         return Ok(p);
@@ -349,7 +355,7 @@ pub async fn save_to_music(video_id: &str, artist: &str, title: &str) -> Result<
     let dir = music_dir();
     tokio::fs::create_dir_all(&dir).await?;
     let name = file_name(artist, title);
-    if !DOWNLOAD_BEST.load(Ordering::Relaxed) || crate::soundcloud::is_soundcloud(video_id) {
+    if !best || crate::soundcloud::is_soundcloud(video_id) {
         // Fast: the same file playback uses (in seconds, about 160 kbps).
         let src = fetch(video_id.to_string()).await?;
         let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("webm");

@@ -292,8 +292,33 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var pick by remember(t.videoId) { mutableStateOf(false) }
     var kinds by remember(t.videoId) { mutableStateOf(false) }
+    var askDownload by remember(t.videoId) { mutableStateOf(false) }
     if (pick) {
         SaveToPlaylist(vm, t) { pick = false; onDismiss() }
+        return
+    }
+    // "Download": what to download, and only that.
+    if (askDownload) {
+        val video = vm.hasVideo && com.rymplayer.data.isYouTube(t.videoId)
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { askDownload = false; onDismiss() },
+            title = { Text(tr("What to download?")) },
+            text = {
+                Column {
+                    val choice = @Composable { label: String, go: () -> Unit ->
+                        Text(label, fontSize = 16.sp, modifier = Modifier.fillMaxWidth().clickable { askDownload = false; onDismiss(); go() }.padding(vertical = 14.dp))
+                    }
+                    choice(tr("Song (fast, about 160 kbps)")) { vm.download(t, best = false) }
+                    choice(tr("Song (best quality)")) { vm.download(t, best = true) }
+                    if (video) {
+                        choice(tr("Video (720p)")) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true, 720) }
+                        choice(tr("Video (1080p)")) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true, 1080) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { androidx.compose.material3.TextButton({ askDownload = false; onDismiss() }) { Text(tr("Cancel")) } },
+        )
         return
     }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppColorsSheet, contentColor = MaterialTheme.colorScheme.onBackground) {
@@ -340,7 +365,15 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
                 )
             }
         }
-        item(tr("Download"), Icons.Default.Download) { vm.download(t) }()
+        if (com.rymplayer.data.LocalSongs.isLocal(t.videoId)) item(tr("Download"), Icons.Default.Download) { vm.download(t) }()
+        else Row(
+            Modifier.fillMaxWidth().clickable { askDownload = true }.padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Download, null, tint = Dim)
+            Spacer(Modifier.width(20.dp))
+            Text(tr("Download"), fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
+        }
         if (com.rymplayer.playback.Vlc.installed(LocalContext.current) && com.rymplayer.data.isYouTube(t.videoId)) {
             item(tr("Open in VLC"), Icons.Default.PlayArrow) { vm.openInVlc(t) }()
         }
@@ -362,7 +395,6 @@ fun SongSheet(vm: AppViewModel, m: MenuFor, onDismiss: () -> Unit) {
         item(tr("Share"), Icons.Default.Share) { shareSong(context, t) }()
         if (vm.hasVideo && youtube) {
             item(tr("Watch video"), Icons.Default.PlayArrow) { vm.watchVideo(t) }()
-            item(tr("Download video"), Icons.Default.Download) { vm.downloadLink("https://www.youtube.com/watch?v=${t.videoId}", true) }()
         }
         if (queueIndex != null && queueIndex != vm.player.index) {
             item(tr("Remove from queue"), Icons.Default.MoreVert) { vm.player.take(queueIndex, tr("Removed from the queue")) }()

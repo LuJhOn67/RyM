@@ -845,11 +845,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Video plugin: downloads a link from YouTube or any site, as a video or just the sound. */
-    fun downloadLink(url: String, asVideo: Boolean) = viewModelScope.launch {
+    fun downloadLink(url: String, asVideo: Boolean, height: Int = 1080) = viewModelScope.launch {
+        if (waitsForWifi()) return@launch
         status = "${tr("Downloading")} $url"
         status = runCatching {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val file = com.rymplayer.data.YtDlp.downloadAny(getApplication(), url, asVideo, com.rymplayer.data.SecureCookie.read(prefs))
+                val file = com.rymplayer.data.YtDlp.downloadAny(getApplication(), url, asVideo, com.rymplayer.data.SecureCookie.read(prefs), height)
                 "${tr("Saved to")} ${Downloads.publish(getApplication(), file, asVideo)}"
             }
         }.getOrElse { "${tr("Download failed")}: ${it.message}" }
@@ -1622,19 +1623,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Saves a song to Music/RymPlayer; it plays from there afterwards. */
-    fun download(t: Track) = if (com.rymplayer.data.LocalSongs.isLocal(t.videoId)) {
+    /** Saves the song: fast (the file playback uses) or at its best (yt-dlp), as picked; null: the setting. */
+    fun download(t: Track, best: Boolean? = null) = if (com.rymplayer.data.LocalSongs.isLocal(t.videoId)) {
         status = tr("This song is already on your device")
         null
-    } else downloadOnline(t)
+    } else downloadOnline(t, best ?: downloadBest)
 
-    private fun downloadOnline(t: Track) = viewModelScope.launch {
+    private fun downloadOnline(t: Track, best: Boolean) = viewModelScope.launch {
         if (waitsForWifi()) return@launch
-        launch(kotlinx.coroutines.Dispatchers.IO) { com.rymplayer.data.RamPoints.loved(getApplication(), t, com.rymplayer.data.RamPoints.Love.Download) }
+        // Nothing in a download may close the app: every error ends as a message.
+        launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { com.rymplayer.data.RamPoints.loved(getApplication(), t, com.rymplayer.data.RamPoints.Love.Download) } }
         status = "${tr("Downloading")} \"${t.title}\"..."
-        status = runCatching { Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), downloadBest) }.fold({ tr("Saved to Music/RymPlayer") }, {
-            android.util.Log.w("RyM", "download of ${t.videoId} failed", it)
-            "${tr("Download failed")}: ${it.message ?: it.javaClass.simpleName}"
-        })
+        status = try {
+            Downloads.save(getApplication(), t, com.rymplayer.data.SecureCookie.read(prefs), best)
+            tr("Saved to") + " " + Downloads.folderName(getApplication())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            android.util.Log.w("RyM", "download of ${t.videoId} failed", e)
+            "${tr("Download failed")}: ${e.message ?: e.javaClass.simpleName}"
+        }
     }
 
     /** The artist's page (every song, then albums and singles); found by name when the song lacks the id. */

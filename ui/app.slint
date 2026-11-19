@@ -162,6 +162,10 @@ export global Theme {
 export global Ui {
     in-out property <float> k: 1;
     in-out property <float> zoom: 0.85;
+    // Settings > Button size (1, 1.2 or 1.4). With the window made smaller than normal (zoom
+    // under 0.85) the buttons stay their normal size: they don't shrink with the rest.
+    in-out property <float> button: 1;
+    out property <float> btn: button * max(1, 0.85 / max(0.3, zoom));
     in-out property <bool> rtl: false;
     out property <TextHorizontalAlignment> start: rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
 }
@@ -360,8 +364,8 @@ component Icon inherits Rectangle {
     in property <color> tint: Theme.icon;
     in property <string> tip;
     callback clicked();
-    width: size;
-    height: size;
+    width: size * Ui.btn;
+    height: size * Ui.btn;
     background: area.has-hover ? Theme.hover : transparent;
     border-radius: (size / 4) * Theme.round;
     Image {
@@ -657,7 +661,6 @@ component SongRow inherits Rectangle {
             }
             MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", root.song.key); } }
             MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", root.song.key); } }
-            MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", root.song.key); } }
             MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", root.song.key); } }
             MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", root.song.key); } }
             MenuItem { title: root.song.liked ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", root.song.key); } }
@@ -670,7 +673,13 @@ component SongRow inherits Rectangle {
                 MenuItem { title: App.tr("Nasheeds"); activated => { App.menu("kind:Nasheeds", root.song.key); } }
                 MenuItem { title: App.tr("Talks"); activated => { App.menu("kind:Talks", root.song.key); } }
             }
-            MenuItem { title: App.tr("Download"); activated => { App.menu("download", root.song.key); } }
+            Menu {
+                title: App.tr("Download");
+                MenuItem { title: App.tr("Song (fast, about 160 kbps)"); activated => { App.menu("download-fast", root.song.key); } }
+                MenuItem { title: App.tr("Song (best quality)"); activated => { App.menu("download-best", root.song.key); } }
+                MenuItem { title: App.tr("Video (720p)"); enabled: App.has-video; activated => { App.menu("video-dl-720", root.song.key); } }
+                MenuItem { title: App.tr("Video (1080p)"); enabled: App.has-video; activated => { App.menu("video-dl-1080", root.song.key); } }
+            }
             MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", root.song.key); } }
             MenuItem { title: App.tr("Remove from queue"); enabled: root.in-queue; activated => { App.menu("remove", root.song.key); } }
         }
@@ -768,7 +777,6 @@ component NowMenu inherits ContextMenuArea {
         }
         MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", "now"); } }
         MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", "now"); } }
-        MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", "now"); } }
         MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", "now"); } }
         MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", "now"); } }
         MenuItem { title: App.liked ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", "now"); } }
@@ -781,7 +789,13 @@ component NowMenu inherits ContextMenuArea {
             MenuItem { title: App.tr("Nasheeds"); activated => { App.menu("kind:Nasheeds", "now"); } }
             MenuItem { title: App.tr("Talks"); activated => { App.menu("kind:Talks", "now"); } }
         }
-        MenuItem { title: App.tr("Download"); activated => { App.menu("download", "now"); } }
+        Menu {
+            title: App.tr("Download");
+            MenuItem { title: App.tr("Song (fast, about 160 kbps)"); activated => { App.menu("download-fast", "now"); } }
+            MenuItem { title: App.tr("Song (best quality)"); activated => { App.menu("download-best", "now"); } }
+            MenuItem { title: App.tr("Video (720p)"); enabled: App.has-video; activated => { App.menu("video-dl-720", "now"); } }
+            MenuItem { title: App.tr("Video (1080p)"); enabled: App.has-video; activated => { App.menu("video-dl-1080", "now"); } }
+        }
         MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", "now"); } }
     }
 }
@@ -821,7 +835,6 @@ component CardItem inherits VerticalLayout {
                 }
                 MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", root.card.key); } }
                 MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", root.card.key); } }
-                MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", root.card.key); } }
                 MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", root.card.key); } }
                 MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", root.card.key); } }
                 MenuItem { title: false ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", root.card.key); } }
@@ -834,7 +847,13 @@ component CardItem inherits VerticalLayout {
                     MenuItem { title: App.tr("Nasheeds"); activated => { App.menu("kind:Nasheeds", root.card.key); } }
                     MenuItem { title: App.tr("Talks"); activated => { App.menu("kind:Talks", root.card.key); } }
                 }
-                MenuItem { title: App.tr("Download"); activated => { App.menu("download", root.card.key); } }
+                Menu {
+                    title: App.tr("Download");
+                    MenuItem { title: App.tr("Song (fast, about 160 kbps)"); activated => { App.menu("download-fast", root.card.key); } }
+                    MenuItem { title: App.tr("Song (best quality)"); activated => { App.menu("download-best", root.card.key); } }
+                    MenuItem { title: App.tr("Video (720p)"); enabled: App.has-video; activated => { App.menu("video-dl-720", root.card.key); } }
+                    MenuItem { title: App.tr("Video (1080p)"); enabled: App.has-video; activated => { App.menu("video-dl-1080", root.card.key); } }
+                }
                 MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", root.card.key); } }
             }
         }
@@ -2337,7 +2356,6 @@ component UpNextSide inherits Page {
                     }
                     MenuItem { title: App.tr("Go to album"); activated => { App.menu("album", c.key); } }
                     MenuItem { title: App.tr("Watch video"); enabled: App.has-video; activated => { App.menu("video", c.key); } }
-                    MenuItem { title: App.tr("Download video"); enabled: App.has-video; activated => { App.menu("video-dl", c.key); } }
                     MenuItem { title: App.tr("Recommend more"); activated => { App.menu("more", c.key); } }
                     MenuItem { title: App.tr("Don't recommend"); activated => { App.menu("less", c.key); } }
                     MenuItem { title: false ? App.tr("Remove from liked songs") : App.tr("Add to liked songs"); activated => { App.menu("like", c.key); } }
@@ -2350,7 +2368,13 @@ component UpNextSide inherits Page {
                         MenuItem { title: App.tr("Nasheeds"); activated => { App.menu("kind:Nasheeds", c.key); } }
                         MenuItem { title: App.tr("Talks"); activated => { App.menu("kind:Talks", c.key); } }
                     }
-                    MenuItem { title: App.tr("Download"); activated => { App.menu("download", c.key); } }
+                    Menu {
+                        title: App.tr("Download");
+                        MenuItem { title: App.tr("Song (fast, about 160 kbps)"); activated => { App.menu("download-fast", c.key); } }
+                        MenuItem { title: App.tr("Song (best quality)"); activated => { App.menu("download-best", c.key); } }
+                        MenuItem { title: App.tr("Video (720p)"); enabled: App.has-video; activated => { App.menu("video-dl-720", c.key); } }
+                        MenuItem { title: App.tr("Video (1080p)"); enabled: App.has-video; activated => { App.menu("video-dl-1080", c.key); } }
+                    }
                     MenuItem { title: App.tr("Copy link"); activated => { App.menu("share", c.key); } }
                 }
             }

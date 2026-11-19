@@ -569,6 +569,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     app.set_volume_max(config.volume_max.clamp(1.0, 3.0));
     app.set_lyrics_size(config.lyrics_font.clamp(14, 48) as i32);
     ui.global::<Ui>().set_zoom(config.ui_zoom.clamp(0.5, 1.5));
+    ui.global::<Ui>().set_button(config.button_size.clamp(1.0, 1.4));
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("")))));
     app.on_tr(|s| tr_any(&s).into());
 
@@ -1821,6 +1822,7 @@ fn fill_settings(st: &Shared) {
         choice("source", "Audio source", t(c.source.label())),
         choice("quality", "Download quality", t(if c.download_best { "Best (yt-dlp)" } else { "Fast" })),
         choice("connections", "Download connections", c.download_connections.to_string()),
+        choice("button-size", "Button size", t(match (c.button_size * 10.0).round() as i32 { 14 => "Biggest", 12 => "Bigger", _ => "Normal" })),
         choice("volume-max", "Volume up to", format!("{}%", (c.volume_max.clamp(1.0, 3.0) * 100.0).round())),
         choice("talk-speed", "Long talks' speed", format!("{}×", c.talk_speed)),
         choice("cache", "Keep played songs up to", if c.cache_limit_gb == 0 { t("No limit") } else { format!("{} GB", c.cache_limit_gb) }),
@@ -2137,6 +2139,19 @@ fn choose(st: &Shared, id: &str, step: i32) {
                 s.config.save();
             }
             toast(st, &format!("{}: {}", tr("App icon"), tr_any(APP_ICONS[next].1)));
+        }
+        "button-size" => {
+            const SIZES: [f32; 3] = [1.0, 1.2, 1.4];
+            let size = {
+                let mut s = st.borrow_mut();
+                let at = SIZES.iter().position(|v| (*v - s.config.button_size).abs() < 0.01).unwrap_or(0);
+                s.config.button_size = SIZES[cycle(at, SIZES.len())];
+                s.config.save();
+                s.config.button_size
+            };
+            if let Some(ui) = st.borrow().ui.upgrade() {
+                ui.global::<Ui>().set_button(size);
+            }
         }
         "volume-max" => {
             const MAX: [f32; 4] = [1.0, 1.5, 2.0, 3.0];
@@ -3337,10 +3352,12 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
                 Ev::VideoLinks(t, links)
             });
         }
-        "video-dl" => {
+        // A video, at the height picked (only that one file).
+        "video-dl" | "video-dl-1080" | "video-dl-720" => {
             let url = rymplayer::video::watch_url(&t.video_id);
-            toast(st, &format!("{} {}", tr("Downloading"), t.title));
-            post(async move { Ev::Downloaded(rymplayer::video::download(&url, true).await) });
+            let height = if action == "video-dl-720" { 720 } else { 1080 };
+            toast(st, &format!("{} {} ({height}p)", tr("Downloading"), t.title));
+            post(async move { Ev::Downloaded(rymplayer::video::download_at(&url, Some(height)).await) });
         }
         a if a.starts_with("save:") => {
             let (api, list) = {
@@ -3379,10 +3396,16 @@ fn song_menu(st: &Shared, action: &str, key: &str) {
         }
         "like" => toggle_like(st, &t),
         "artist" => go_artist(st, &t),
-        "download" => {
+        // The song, fast (the file playback uses) or at its best (yt-dlp): only the one picked.
+        "download" | "download-fast" | "download-best" => {
             rymplayer::ram_points::loved(t.clone(), rymplayer::ram_points::Love::Download);
+            let best = match action {
+                "download-best" => true,
+                "download-fast" => false,
+                _ => st.borrow().config.download_best,
+            };
             toast(st, &format!("{} \"{}\"…", tr("Downloading"), t.title));
-            post(async move { Ev::Downloaded(stream::save_to_music(&t.video_id, &t.artist, &t.title).await) });
+            post(async move { Ev::Downloaded(stream::save_to_music_as(&t.video_id, &t.artist, &t.title, best).await) });
         }
         "share" => {
             let link = rymplayer::queue::share_link(&t);
