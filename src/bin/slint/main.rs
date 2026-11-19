@@ -480,6 +480,9 @@ fn main() {
         ui.window().on_close_requested(move || close_requested(&st));
     }
     let _ = ui.show();
+    // Where it was and how big, made to fit this screen (a 1080p laptop at 150% couldn't hold
+    // the window's own size, so it looked like full screen).
+    place_window(&ui, st.borrow().config.window);
     // Windows 11's glass, once the window exists (`--glass mica|acrylic` tries it for one run).
     let glass = match args.iter().position(|a| a == "--glass").and_then(|i| args.get(i + 1)).map(String::as_str) {
         Some("mica") => 1,
@@ -5096,7 +5099,47 @@ fn close_requested(st: &Shared) -> slint::CloseRequestResponse {
     }
 }
 
+/// Puts the window where it was (fitted to the screen it's on), maximized if it was.
+fn place_window(ui: &AppWindow, saved: Option<rymplayer::config::WindowPlace>) {
+    use slint::winit_030::WinitWindowAccessor;
+    let screen = ui.window().with_winit_window(|w| {
+        let m = w.current_monitor().or_else(|| w.primary_monitor())?;
+        let (p, s) = (m.position(), m.size());
+        Some((p.x, p.y, s.width, s.height))
+    });
+    let Some(Some(screen)) = screen else { return };
+    let now = ui.window().size();
+    let p = rymplayer::config::fit_window(saved, (now.width, now.height), screen);
+    ui.window().set_size(slint::PhysicalSize::new(p.w, p.h));
+    ui.window().set_position(slint::PhysicalPosition::new(p.x, p.y));
+    if p.maximized {
+        ui.window().set_maximized(true);
+    }
+}
+
+/// Keeps the window's place for next time (its size before maximizing, and whether it was).
+fn save_window(st: &Shared) {
+    let Some(ui) = st.borrow().ui.upgrade() else { return };
+    let w = ui.window();
+    if !w.is_visible() || w.is_minimized() {
+        return;
+    }
+    let maximized = w.is_maximized();
+    let mut s = st.borrow_mut();
+    let mut place = s.config.window.unwrap_or(rymplayer::config::WindowPlace { x: 0, y: 0, w: 0, h: 0, maximized });
+    place.maximized = maximized;
+    if !maximized {
+        let (pos, size) = (w.position(), w.size());
+        place = rymplayer::config::WindowPlace { x: pos.x, y: pos.y, w: size.width, h: size.height, maximized: false };
+    }
+    if place.w >= 200 && place.h >= 150 && s.config.window != Some(place) {
+        s.config.window = Some(place);
+        s.config.save();
+    }
+}
+
 fn to_tray(st: &Shared) {
+    save_window(st);
     start_tray(st);
     IN_TRAY.with(|t| t.set(true));
     let window = st.borrow().ui.upgrade();
@@ -5118,6 +5161,7 @@ fn show_window(st: &Shared) {
 }
 
 fn quit(st: &Shared) {
+    save_window(st);
     save_session(st);
     rymplayer::stats::flush();
     let (mini, float) = {

@@ -26,6 +26,59 @@ pub enum BarPlace {
     Top,
 }
 
+/// A window's place on the screen (see `Config::window`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowPlace {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub maximized: bool,
+}
+
+/// `place` (or none yet) on a screen at (`sx`, `sy`) of `sw` x `sh`: kept when it fits, made to fit
+/// otherwise (at most the screen, at least 640 x 480, and on it). With none: `want` (the
+/// window's own size), shrunk to 90% of the screen when it's bigger, in the middle.
+pub fn fit_window(place: Option<WindowPlace>, want: (u32, u32), (sx, sy, sw, sh): (i32, i32, u32, u32)) -> WindowPlace {
+    let (max_w, max_h) = ((sw as f32 * 0.95) as u32, (sh as f32 * 0.92) as u32);
+    let fit = |w: u32, h: u32| (w.clamp(640.min(max_w), max_w.max(1)), h.clamp(480.min(max_h), max_h.max(1)));
+    match place {
+        Some(p) => {
+            let (w, h) = fit(p.w, p.h);
+            // At least a good part of the title bar on the screen.
+            let x = p.x.clamp(sx - w as i32 + 120, sx + sw as i32 - 120);
+            let y = p.y.clamp(sy, sy + sh as i32 - 60);
+            WindowPlace { x, y, w, h, maximized: p.maximized }
+        }
+        None => {
+            let (w, h) = if want.0 > max_w || want.1 > max_h {
+                fit((sw as f32 * 0.9) as u32, (sh as f32 * 0.85) as u32)
+            } else {
+                want
+            };
+            WindowPlace { x: sx + (sw as i32 - w as i32) / 2, y: sy + (sh as i32 - h as i32) / 3, w, h, maximized: false }
+        }
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+    fn the_window_fits_the_screen() {
+        // A 1080p laptop at 150%: 1360 x 870 logical is 2040 x 1305 pixels, bigger than the screen.
+        let first = fit_window(None, (2040, 1305), (0, 0, 1920, 1080));
+        assert!(first.w <= 1824 && first.h <= 993 && first.x >= 0 && first.y >= 0, "{first:?}");
+        // A saved place that fits stays.
+        let p = WindowPlace { x: 100, y: 80, w: 1200, h: 800, maximized: false };
+        assert_eq!(fit_window(Some(p), (2040, 1305), (0, 0, 1920, 1080)), p);
+        // One from a bigger screen, or off it, comes back on.
+        let big = fit_window(Some(WindowPlace { x: 3000, y: -50, w: 2500, h: 1400, maximized: true }), (0, 0), (0, 0, 1920, 1080));
+        assert!(big.w <= 1824 && big.h <= 993 && big.x <= 1800 && big.y >= 0 && big.maximized, "{big:?}");
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -211,6 +264,9 @@ pub struct Config {
     pub talk_speed: f32,
     /// How far the volume slider goes: 1 (100%), 1.5, 2 or 3 (above 100% the limiter holds it in).
     pub volume_max: f32,
+    /// RyM Slint's window when it was closed: where and how big (physical pixels, not maximized),
+    /// and whether it was maximized.
+    pub window: Option<WindowPlace>,
     /// Shortcuts changed in the settings: action id -> key (see `shortcuts`).
     pub shortcuts: std::collections::HashMap<String, String>,
     /// The phone can control this computer's music (play, pause, skip, seek, volume).
@@ -419,6 +475,7 @@ impl Default for Config {
             cache_limit_gb: 5,
             talk_speed: 1.0,
             volume_max: 1.0,
+            window: None,
             shortcuts: Default::default(),
             remote_control: true,
         }
