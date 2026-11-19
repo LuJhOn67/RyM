@@ -80,13 +80,25 @@ pub fn version_key(s: &str) -> Vec<u32> {
     if key.is_empty() {
         return key;
     }
+    // "7.5.4-1" (Cargo's way of writing 7.5.4.1): the fourth number.
+    if key.len() == 3
+        && let Some(n) = s[core.len()..].strip_prefix('-').and_then(|n| n.parse::<u32>().ok())
+    {
+        key.push(n);
+    }
     key.resize(4.max(key.len()), 0);
     key.push(rev_of(&s[core.len()..]).unwrap_or(u32::MAX));
     key
 }
 
-/// The version as shown: "7.5.0-rev.1" -> "7.5 Rev 1", "7.4.5" stays.
+/// The version as shown: "7.5.0-rev.1" -> "7.5 Rev 1", "7.5.4-1" -> "7.5.4.1", "7.4.5" stays.
 pub fn shown_version(v: &str) -> String {
+    if let Some((base, n)) = v.split_once('-')
+        && !n.is_empty()
+        && n.bytes().all(|b| b.is_ascii_digit())
+    {
+        return format!("{base}.{n}");
+    }
     match rev_of(v) {
         Some(r) => {
             let mut parts: Vec<u32> = parse_version(v);
@@ -400,6 +412,8 @@ mod tests {
         assert!(!newer("7.5.0-rev.1", "7.5-rev1") && !newer("7.4.4.2", "7.4.5") && newer("7.4.4.2", "7.4.4.1"));
         assert_eq!(shown_version("7.5.0-rev.1"), "7.5 Rev 1");
         assert_eq!(shown_version("7.4.5"), "7.4.5");
+        assert_eq!(shown_version("7.5.4-1"), "7.5.4.1");
+        assert!(newer("7.5.4.1", "7.5.4") && !newer("7.5.4.1", "7.5.4-1") && !newer("7.5.4-1", "7.5.4.1") && newer("7.5.5", "7.5.4-1"));
         assert_eq!(parse_version("v6.7"), vec![6, 7]);
         assert_eq!(parse_version("6.7.0"), vec![6, 7]);
         assert_eq!(parse_version("v0.7.0-preview"), vec![0, 7]);
