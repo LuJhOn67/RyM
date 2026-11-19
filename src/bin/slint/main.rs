@@ -5346,6 +5346,12 @@ fn lastfm_start(st: &Shared) {
 
 /// The window's X: close RyM, hide it in the tray (the music goes on), or ask which.
 fn close_requested(st: &Shared) -> slint::CloseRequestResponse {
+    // The desktop widget is on: the window goes, RyM stays by the clock, so the widget (and the
+    // music) stay on the desktop with the app closed.
+    if st.borrow().config.desk_widget && st.borrow().desk.is_some() {
+        to_tray(st);
+        return slint::CloseRequestResponse::HideWindow;
+    }
     let action = st.borrow().config.close_action.clone();
     match action.as_str() {
         "quit" => {
