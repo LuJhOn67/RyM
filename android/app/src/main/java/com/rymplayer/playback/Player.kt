@@ -674,7 +674,10 @@ class Player(private val context: Context, private val scope: CoroutineScope) {
         pc = n
         // RaM points sync with the PC (at most every half hour).
         val ctx = context
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { Link.syncPoints(ctx, n.ip, n.port) } }
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { Link.syncPoints(ctx, n.ip, n.port) }
+            runCatching { Link.syncTalks(ctx, n.ip, n.port) }
+        }
         if (n.playing && n.videoId.isNotEmpty()) pcNote = PcNote(n.ip, n.port, n.device, n.videoId, n.at)
         if (playAlong) follow(n)
     }

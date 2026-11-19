@@ -89,6 +89,18 @@ object Link {
         call(ip, port, "GET", "/points")?.let { com.rymplayer.data.RamPoints.mergeScores(ctx, it) }
     }
 
+    /** When the PC's talk places were last fetched (at most once a minute). */
+    @Volatile private var talksAt = 0L
+
+    /** Long talks: where each was stopped on the PC, merged here (the newer wins), so a talk
+     *  goes on here from the same second. Blocking. */
+    fun syncTalks(ctx: android.content.Context, ip: String, port: Int) {
+        val now = System.currentTimeMillis()
+        if (now - talksAt < 60 * 1000L) return
+        talksAt = now
+        call(ip, port, "GET", "/talks")?.let { com.rymplayer.data.TalkPlace.merge(ctx, it) }
+    }
+
     /** The same key as the PC's for one account: a hash, so the notes don't carry its name. */
     fun accountKey(name: String, handle: String): String =
         MessageDigest.getInstance("SHA-256").digest("rym-link|$name|$handle".toByteArray()).take(8).joinToString("") { "%02x".format(it) }
@@ -163,6 +175,8 @@ object Link {
                             method == "GET" && target.startsWith("/state") -> (state()?.let { 200 to it.toString() } ?: (404 to "{}"))
                             // RaM points sync: this phone's song points.
                             method == "GET" && target.startsWith("/points") -> appContext?.let { 200 to com.rymplayer.data.RamPoints.exportScores(it) } ?: (404 to "{}")
+                            // Long talks: where each was stopped here, to go on there on the PC.
+                            method == "GET" && target.startsWith("/talks") -> appContext?.let { 200 to com.rymplayer.data.TalkPlace.export(it) } ?: (404 to "{}")
                             // Mix Tastes: this phone's top songs by RaM points.
                             method == "GET" && target.startsWith("/top") -> appContext?.let { 200 to topJson(it) } ?: (404 to "{}")
                             method == "POST" && target.startsWith("/pause") -> {

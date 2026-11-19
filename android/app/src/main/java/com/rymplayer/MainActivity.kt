@@ -30,6 +30,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -168,6 +169,14 @@ fun RymApp(vm: AppViewModel) {
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(tr("Open report opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise."))
+                    Text(tr("No GitHub account? Share sends it with any app (WhatsApp, Telegram, email), or Copy it to paste anywhere."), modifier = Modifier.padding(top = 6.dp))
+                    Row(Modifier.padding(top = 6.dp)) {
+                        androidx.compose.material3.TextButton({ com.rymplayer.data.CrashReport.share(ctx, report) }) { Text(tr("Share")) }
+                        androidx.compose.material3.TextButton({
+                            com.rymplayer.data.CrashReport.copy(ctx, report)
+                            android.widget.Toast.makeText(ctx, tr("Copied"), android.widget.Toast.LENGTH_SHORT).show()
+                        }) { Text(tr("Copy")) }
+                    }
                     Text(report, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
                 }
             },

@@ -36,7 +36,10 @@ object TalkPlace {
         if (!isLong(seconds) || id.isEmpty()) return
         val p = prefs(ctx)
         if (at >= seconds - EDGE_SECS) {
-            if (p.contains(id)) p.edit().remove(id).apply()
+            // Kept as "from the top" (not removed), so the PC hears it was finished too.
+            if ((place(ctx, id, seconds) ?: 0f) > 0f) {
+                p.edit().putString(id, JSONObject().put("at", 0.0).put("when", System.currentTimeMillis()).toString()).apply()
+            }
             written = id to at
             return
         }
@@ -51,5 +54,41 @@ object TalkPlace {
                 .take(all.size - KEPT).forEach { e.remove(it.key) }
         }
         e.apply()
+    }
+
+    /** Every place kept, for the PC of the same account (`GET /talks`): `{"id": [second, when]}`,
+     *  the time in seconds like the PC's. */
+    fun export(ctx: Context): String {
+        val out = JSONObject()
+        for ((id, v) in prefs(ctx).all) {
+            val o = runCatching { JSONObject(v as String) }.getOrNull() ?: continue
+            out.put(id, org.json.JSONArray().put(o.optDouble("at", 0.0)).put(o.optLong("when", 0L) / 1000))
+        }
+        return out.toString()
+    }
+
+    /** The PC's places merged in (the newer one of each talk wins, a finished one too); checked
+     *  like an import. How many changed. */
+    @Synchronized
+    fun merge(ctx: Context, text: String): Int {
+        val theirs = runCatching { JSONObject(text) }.getOrNull() ?: return 0
+        val p = prefs(ctx)
+        val e = p.edit()
+        val latest = System.currentTimeMillis() + 24 * 60 * 60 * 1000L
+        var changed = 0
+        for (id in theirs.keys()) {
+            val a = theirs.optJSONArray(id) ?: continue
+            val at = a.optDouble(0, -1.0)
+            val whenMs = a.optLong(1, 0L) * 1000
+            val okId = id.isNotEmpty() && id.length <= 64 && id.all { it.isLetterOrDigit() && it.code < 128 || it in "-_.:" }
+            if (!okId || at.isNaN() || at < 0 || at > 24 * 3600 || whenMs > latest) continue
+            val mine = runCatching { JSONObject(p.getString(id, "") ?: "").getLong("when") }.getOrDefault(-1L)
+            if (whenMs > mine) {
+                e.putString(id, JSONObject().put("at", at).put("when", whenMs).toString())
+                changed++
+            }
+        }
+        if (changed > 0) e.apply()
+        return changed
     }
 }

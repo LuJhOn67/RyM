@@ -205,6 +205,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "What you play on your Discord profile; it works as it is, or put your own application id below" => "ما تسمعه يظهر على حسابك في Discord؛ يعمل كما هو، أو ضع معرّف تطبيقك تحت",
         "RyM closed unexpectedly last time" => "RyM انسدّ فجأة آخر مرة",
         "OK opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise." => "«موافق» يفتح صفحة Issue على GitHub معبّأة بهذا التقرير، وإنت ترسله بنفسك. ما ينرسل شي غير هيچ.",
+        "OK opens a GitHub issue with this report filled in, and you send it yourself. It's also copied: no GitHub account? Paste it to us anywhere. Nothing is sent otherwise." => "«موافق» يفتح صفحة Issue على GitHub معبّأة بهذا التقرير، وإنت ترسله بنفسك. وينّسخ هم: ما عندك حساب GitHub؟ الصگه ودزه إلنا وين ما تريد. ما ينرسل شي غير هيچ.",
         "Open report" => "افتح التقرير",
         "Network & Parsers" => "الشبكة والمحلّلات",
         "Song finder" => "محرّك البحث عن الأغاني",

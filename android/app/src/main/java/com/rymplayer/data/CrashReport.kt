@@ -35,8 +35,56 @@ object CrashReport {
         }
     }
 
-    /** The report of the last crash, if one is waiting. */
-    fun pending(ctx: Context): String? = file(ctx).takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() }
+    /** The report of the last crash, if one is waiting (from the watcher, or from Android's own
+     *  record of how the app last ended). */
+    fun pending(ctx: Context): String? {
+        file(ctx).takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() }?.let { report ->
+            // Android noted the same crash: not offered a second time.
+            runCatching { fromAndroid(ctx) }
+            return report
+        }
+        return runCatching { fromAndroid(ctx) }.getOrNull()
+    }
+
+    /**
+     * Crashes the watcher can't see (in native code, or the app frozen until Android closed it, an
+     * "ANR"): Android 11 and newer keep why the app last ended. Each ending is offered once.
+     */
+    private fun fromAndroid(ctx: Context): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val am = ctx.getSystemService(android.app.ActivityManager::class.java) ?: return null
+        val last = am.getHistoricalProcessExitReasons(ctx.packageName, 0, 1).firstOrNull() ?: return null
+        val prefs = ctx.getSharedPreferences("crash", Context.MODE_PRIVATE)
+        if (last.timestamp <= prefs.getLong("seen", 0)) return null
+        prefs.edit().putLong("seen", last.timestamp).apply()
+        val what = when (last.reason) {
+            android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "a crash in native code"
+            android.app.ApplicationExitInfo.REASON_ANR -> "frozen, closed by Android (ANR)"
+            android.app.ApplicationExitInfo.REASON_CRASH -> "a crash"
+            android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "failed to start"
+            else -> return null
+        }
+        val version = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull()
+        // What Android kept: the native crash's or the frozen threads' trace (its top part).
+        val trace = runCatching { last.traceInputStream?.bufferedReader()?.useLines { it.take(60).joinToString("\n") } }.getOrNull().orEmpty()
+        return "App: RyM for Android $version\nSystem: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}\n" +
+            "What: $what${last.description?.let { " ($it)" }.orEmpty()}\nWhen: ${last.timestamp / 1000} (seconds since 1970)\nMemory: ${last.pss / 1024} MB\n\n$trace"
+    }
+
+    /** The report sent with any app (WhatsApp, Telegram, email...): no GitHub account needed. */
+    fun share(ctx: Context, report: String) {
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(android.content.Intent.EXTRA_SUBJECT, "RyM crash report")
+            .putExtra(android.content.Intent.EXTRA_TEXT, report.take(20000))
+        runCatching { ctx.startActivity(android.content.Intent.createChooser(send, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    /** The report copied, to paste anywhere. */
+    fun copy(ctx: Context, report: String) {
+        val cm = ctx.getSystemService(android.content.ClipboardManager::class.java) ?: return
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("RyM crash report", report))
+    }
 
     /** The waiting report is dealt with (sent or not): it isn't offered again. */
     fun dismiss(ctx: Context) {

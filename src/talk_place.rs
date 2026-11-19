@@ -78,7 +78,9 @@ pub fn note(video_id: &str, at: f32, seconds: f32) {
     let near_end = at >= seconds - EDGE_SECS;
     let moved = s.written.as_ref().is_none_or(|(id, was)| id != video_id || (at - was).abs() >= 10.0);
     if near_end {
-        if s.map.remove(video_id).is_some() {
+        // Kept as "from the top" (not removed), so the phone hears it was finished too.
+        if s.map.get(video_id).is_some_and(|v| v.0 > 0.0) {
+            s.map.insert(video_id.to_string(), (0.0, crate::updates::now()));
             save(&mut s);
         }
         s.written = Some((video_id.to_string(), at));
@@ -89,8 +91,57 @@ pub fn note(video_id: &str, at: f32, seconds: f32) {
     }
 }
 
+/// Every place kept, for the phone of the same account (`GET /talks`): `{"id": [second, when]}`.
+pub fn export() -> String {
+    let Ok(mut s) = STORE.lock() else { return "{}".into() };
+    ready(&mut s);
+    serde_json::to_string(&s.map).unwrap_or_else(|_| "{}".into())
+}
+
+/// The phone's places merged in (the newer one of each talk wins, a finished one too): a talk
+/// stopped on the phone goes on here from the same second. How many changed. Checked like an
+/// import: odd ids, seconds and times are left out.
+pub fn merge(text: &str) -> usize {
+    let Ok(theirs) = serde_json::from_str::<HashMap<String, (f32, u64)>>(text) else { return 0 };
+    let Ok(mut s) = STORE.lock() else { return 0 };
+    ready(&mut s);
+    let latest = crate::updates::now() + 24 * 60 * 60;
+    let mut changed = 0;
+    for (id, (at, when)) in theirs {
+        let ok_id = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:".contains(c));
+        if !ok_id || !at.is_finite() || !(0.0..=24.0 * 3600.0).contains(&at) || when > latest {
+            continue;
+        }
+        if s.map.get(&id).is_none_or(|mine| when > mine.1) {
+            s.map.insert(id, (at, when));
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        save(&mut s);
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn places_move_between_devices() {
+        let long = 50.0 * 60.0;
+        super::note("sync-test1", 700.0, long);
+        let now = crate::updates::now();
+        // The phone went further later; an older phone place doesn't undo this one.
+        let phone = format!(r#"{{"sync-test1": [1500.0, {}], "sync-test2": [300.0, {}], "bad id!": [5.0, 1], "sync-test3": [1e9, 1]}}"#, now + 5, now);
+        assert_eq!(super::merge(&phone), 2);
+        assert_eq!(super::place("sync-test1", long), Some(1500.0));
+        assert_eq!(super::place("sync-test2", long), Some(300.0));
+        assert_eq!(super::merge(&format!(r#"{{"sync-test1": [100.0, {}]}}"#, now - 100)), 0);
+        // Finished on the phone: from the top here too.
+        assert_eq!(super::merge(&format!(r#"{{"sync-test1": [0.0, {}]}}"#, now + 10)), 1);
+        assert_eq!(super::place("sync-test1", long), None);
+        assert!(super::export().contains("sync-test2"));
+    }
+
     #[test]
     fn a_long_talk_starts_where_it_stopped() {
         let long = 45.0 * 60.0;

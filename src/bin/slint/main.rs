@@ -3473,6 +3473,10 @@ fn prompt_done(st: &Shared, ok: bool) {
         st.borrow_mut().prompt_for.clear();
         rymplayer::crash::dismiss();
         if ok && !text.is_empty() {
+            // Copied too: without a GitHub account it can be pasted anywhere (WhatsApp, Telegram...).
+            if let Ok(mut c) = arboard::Clipboard::new() {
+                let _ = c.set_text(text.clone());
+            }
             let _ = rymplayer::updates::open_link(&rymplayer::crash::issue_url(&text));
         }
         return;
@@ -4272,7 +4276,7 @@ fn background_upkeep(st: &Shared) {
     trim_cache(limit, String::new());
     // The last run crashed: the report is offered (the box shows what would be sent).
     if let Some(report) = rymplayer::crash::pending() {
-        ask_text(st, "crash", tr("RyM closed unexpectedly last time"), tr("OK opens a GitHub issue with this report filled in, and you send it yourself. Nothing is sent otherwise."));
+        ask_text(st, "crash", tr("RyM closed unexpectedly last time"), tr("OK opens a GitHub issue with this report filled in, and you send it yourself. It's also copied: no GitHub account? Paste it to us anywhere. Nothing is sent otherwise."));
         with_app(st, |a| a.set_prompt_text(report.into()));
     }
 }
@@ -5585,6 +5589,7 @@ fn heard_peer(st: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr
         st.borrow_mut().last_phone = Some((ip, port, key.clone()));
         post(async move {
             let _ = rymplayer::link::sync_points(ip, port, &key).await;
+            let _ = rymplayer::link::sync_talks(ip, port, &key).await;
             Ev::Done
         });
     }

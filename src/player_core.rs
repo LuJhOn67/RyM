@@ -137,19 +137,36 @@ pub fn shuffled(mut songs: Vec<Track>) -> Vec<Track> {
 pub struct PeerWatch {
     /// The phone song last taken (or asked about): not again.
     seen: Option<(String, String)>,
-    /// The phone took the music lately: none taken back until then (or something played here).
-    quiet_until: Option<Instant>,
+    /// The phone took the music: none taken back while it keeps playing there (it used to come
+    /// back here every half hour), until something is played here or a new listening starts.
+    phone_kept: bool,
+    /// When the phone was last heard playing: a pause of [`NEW_LISTENING`] or more, then music
+    /// again, is a new listening, which may move here again.
+    phone_played_at: Option<Instant>,
 }
+
+/// A phone silent (paused, or RyM closed on it) this long, then playing again: a new listening.
+const NEW_LISTENING: Duration = Duration::from_secs(5 * 60);
 
 impl PeerWatch {
     /// A phone's note: true when its music should move here: Seamless Music on (`on`), the same
     /// account (`key`), the phone playing, this app idle, not taken back from the phone lately,
     /// and not the song already taken.
     pub fn wants(&mut self, note: &crate::link::Announce, key: Option<&str>, idle: bool, on: bool) -> bool {
-        if !on || !idle || note.kind != "phone" || !note.playing || note.video_id.is_empty() || key != Some(note.account.as_str()) {
+        self.wants_at(note, key, idle, on, Instant::now())
+    }
+
+    fn wants_at(&mut self, note: &crate::link::Announce, key: Option<&str>, idle: bool, on: bool, now: Instant) -> bool {
+        if note.kind != "phone" || key != Some(note.account.as_str()) {
             return false;
         }
-        if self.quiet_until.is_some_and(|t| Instant::now() < t) {
+        if note.playing {
+            if self.phone_played_at.is_some_and(|t| now.duration_since(t) >= NEW_LISTENING) {
+                self.phone_kept = false;
+            }
+            self.phone_played_at = Some(now);
+        }
+        if !on || !idle || !note.playing || note.video_id.is_empty() || self.phone_kept {
             return false;
         }
         let seen = (note.device.clone(), note.video_id.clone());
@@ -160,14 +177,15 @@ impl PeerWatch {
         true
     }
 
-    /// The phone took the music from here: it stays there for half an hour.
+    /// The phone took the music from here: it stays there while it plays.
     pub fn phone_took(&mut self) {
-        self.quiet_until = Some(Instant::now() + Duration::from_secs(30 * 60));
+        self.phone_kept = true;
+        self.phone_played_at = Some(Instant::now());
     }
 
     /// Something was played here by hand: the phone's music may move here again.
     pub fn played_here(&mut self) {
-        self.quiet_until = None;
+        self.phone_kept = false;
     }
 }
 
@@ -310,6 +328,22 @@ mod tests {
         assert!(!w.wants(&note("P", "b", "k", true), Some("k"), true, true), "the phone took it lately");
         w.played_here();
         assert!(w.wants(&note("P", "b", "k", true), Some("k"), true, true));
+    }
+
+    #[test]
+    fn the_phone_keeps_the_music_while_it_plays() {
+        let mut w = PeerWatch::default();
+        let t0 = Instant::now();
+        w.phone_took();
+        // An hour of songs on the phone, a note every minute: never taken back (was: half an hour).
+        for m in 1..=60u64 {
+            let at = t0 + Duration::from_secs(m * 60);
+            assert!(!w.wants_at(&note("P", &format!("s{m}"), "k", true), Some("k"), true, true, at), "minute {m}");
+        }
+        // Paused on the phone for ten minutes, then music again: a new listening moves here.
+        let later = t0 + Duration::from_secs(70 * 60);
+        assert!(!w.wants_at(&note("P", "s60", "k", false), Some("k"), true, true, later - Duration::from_secs(5)));
+        assert!(w.wants_at(&note("P", "new", "k", true), Some("k"), true, true, later));
     }
 
     #[test]

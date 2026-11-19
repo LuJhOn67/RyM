@@ -5798,6 +5798,7 @@ fn heard_peer(ui: &Shared, note: rymplayer::link::Announce, ip: std::net::IpAddr
         let port = note.port;
         post(ui, async move {
             let _ = rymplayer::link::sync_points(ip, port, &key).await;
+            let _ = rymplayer::link::sync_talks(ip, port, &key).await;
             Ev::Done
         });
     }
