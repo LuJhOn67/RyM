@@ -259,11 +259,17 @@ pub async fn open(video_id: String) -> Result<Playable> {
         _ => {
             match quick.await {
                 Ok(a) => a,
+                Err(e) if is_live(&e) => return Err(e),
                 Err(e) => start(ytdlp_link(&video_id).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?).await?,
             }
         }
     };
     Ok(Playable::Arriving(arriving))
+}
+
+/// A live broadcast: yt-dlp can't make a song of it either, so it isn't asked (that took 40 s).
+fn is_live(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.to_string().contains(crate::innertube::LIVE))
 }
 
 /// The InnerTube link for a song with the header its stream wants, its file type and length.
@@ -312,6 +318,7 @@ pub async fn link(video_id: &str) -> Result<(String, Vec<(String, String)>)> {
         2 => innertube_link(video_id).await?,
         _ => match innertube_link(video_id).await {
             Ok(l) => l,
+            Err(e) if is_live(&e) => return Err(e),
             Err(e) => ytdlp_link(video_id).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?,
         },
     };
@@ -553,6 +560,7 @@ async fn download(video_id: &str, dir: &Path) -> Result<PathBuf> {
         // InnerTube first (about half a second), yt-dlp when YouTube refuses it.
         _ => match innertube(video_id, dir).await {
             Ok(found) => found,
+            Err(e) if is_live(&e) => return Err(e),
             Err(e) => ytdlp_parallel(video_id, &base).await.map_err(|y| anyhow!("InnerTube: {e}; yt-dlp: {y}"))?,
         },
     };

@@ -621,11 +621,18 @@ async fn player(c: &Client, video_id: &str) -> Result<Audio> {
     Ok(a)
 }
 
+/// What a live broadcast is refused with: its pieces never end, so it isn't a song to play (and
+/// yt-dlp can't give one either, so it isn't asked).
+pub const LIVE: &str = "a live stream (RyM plays songs, not live broadcasts)";
+
 fn check_playable(v: &Value) -> Result<()> {
     let status = v["playabilityStatus"]["status"].as_str().unwrap_or("");
     if status != "OK" {
         let reason = v["playabilityStatus"]["reason"].as_str().unwrap_or(status);
         bail!("{reason}");
+    }
+    if v["videoDetails"]["isLive"].as_bool() == Some(true) {
+        bail!("{LIVE}");
     }
     Ok(())
 }
@@ -717,6 +724,25 @@ mod tests {
         });
         let a = pick(&v, "ua").unwrap();
         assert_eq!((a.itag, a.ext, a.size, a.seconds), (251, "webm", Some(90), Some(200.5)));
+    }
+
+    /// A real 24/7 broadcast (needs the internet).
+    #[tokio::test]
+    #[ignore]
+    async fn a_real_live_stream_is_refused_quickly() {
+        let started = std::time::Instant::now();
+        let e = audio("ieOntTFuqyo").await.unwrap_err().to_string();
+        println!("{e} in {:?}", started.elapsed());
+        assert!(e.contains(LIVE), "{e}");
+    }
+
+    #[test]
+    fn a_live_stream_is_refused() {
+        let v = json!({ "playabilityStatus": { "status": "OK" }, "videoDetails": { "isLive": true, "isLiveContent": true } });
+        assert_eq!(check_playable(&v).unwrap_err().to_string(), LIVE);
+        // A past broadcast plays like any song.
+        let v = json!({ "playabilityStatus": { "status": "OK" }, "videoDetails": { "isLive": false, "isLiveContent": true } });
+        assert!(check_playable(&v).is_ok());
     }
 
     #[test]

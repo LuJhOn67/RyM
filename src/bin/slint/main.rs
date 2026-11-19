@@ -3819,6 +3819,11 @@ fn toggle_playback(st: &Shared) {
     }
 }
 
+thread_local! {
+    /// Songs that couldn't be played one after another (skipped on their own up to three).
+    static FAILED_IN_ROW: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 fn skip(st: &Shared) {
     let (current, len, all) = {
         let s = st.borrow();
@@ -5911,6 +5916,7 @@ fn handle(st: &Shared, ev: Ev) {
             with_app(st, |a| a.set_loading(false));
             match started {
                 Ok(()) => {
+                    FAILED_IN_ROW.with(|c| c.set(0));
                     if long && let Some(at) = resume {
                         toast(st, &format!("{} {}", tr("Going on from"), rymplayer::fmt_time(at)));
                     }
@@ -5937,6 +5943,22 @@ fn handle(st: &Shared, ev: Ev) {
                 Err(e) => {
                     log(&format!("can't play {}: {e}", t.video_id));
                     toast(st, &format!("{} \"{}\": {e}", tr("Can't play"), t.title));
+                    // On to the next one (a live stream, a removed video...), not stuck on this one;
+                    // after three in a row (no internet), it waits.
+                    let row = FAILED_IN_ROW.with(|c| {
+                        c.set(c.get() + 1);
+                        c.get()
+                    });
+                    if row <= 3 {
+                        let st = st.clone();
+                        let vid = t.video_id.clone();
+                        slint::Timer::single_shot(Duration::from_secs(2), move || {
+                            let still = st.borrow().q.now().is_some_and(|n| n.video_id == vid);
+                            if still {
+                                skip(&st);
+                            }
+                        });
+                    }
                 }
             }
         }
