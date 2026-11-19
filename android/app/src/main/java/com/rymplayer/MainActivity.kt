@@ -204,7 +204,8 @@ fun RymApp(vm: AppViewModel) {
 @Composable
 private fun Main(vm: AppViewModel) {
     BackHandler(vm.video != null || vm.recapOpen || vm.storeOpen || vm.settingsOpen || vm.playerOpen || vm.stack.isNotEmpty() || vm.tab != Screen.Home) { vm.back() }
-    val tint = coverColor(vm.player.current?.thumb)
+    // The cover's color behind the player, unless "Background from the cover" is off.
+    val tint = if (vm.coverBackground) coverColor(vm.player.current?.thumb) else androidx.compose.ui.graphics.Color(0xFF2A2A30)
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,

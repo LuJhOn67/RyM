@@ -278,7 +278,7 @@ fun FullPlayer(vm: AppViewModel, coverTint: Color) {
     Box(Modifier.fillMaxSize().background(bg)) {
     // The cover itself, big and soft, across the whole screen (under the bars too), the colors
     // going dark toward the controls.
-    if (colors == null || colors.glass == 0f) {
+    if (vm.coverBackground && (colors == null || colors.glass == 0f)) {
         coil.compose.AsyncImage(
             com.rymplayer.data.thumbSized(t.thumb, 480), null,
             contentScale = androidx.compose.ui.layout.ContentScale.Crop,

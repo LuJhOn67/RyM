@@ -349,6 +349,8 @@ object I18n {
         "More like this" to "راح يطلع أكثر",
         "Won't be suggested" to "ما راح تنقترح",
         "Undo" to "تراجع",
+        "Background from the cover" to "الخلفية من غلاف الأغنية",
+        "The player's background changes with each song's cover; off: one calm dark background" to "خلفية المشغّل تتغيّر ويّا غلاف كل أغنية؛ إذا طفيته: خلفية غامقة وحدة ثابتة",
         "Volume up to" to "الصوت لحد",
         "Louder than the phone's top volume; a limiter keeps it clean · tap to change" to "أعلى من أعلى صوت بالتلفون، ومحدّد يخليه نظيف بلا تشويه · اضغط للتغيير",
         "Download location" to "مكان التنزيل",

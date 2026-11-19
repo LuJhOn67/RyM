@@ -486,6 +486,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var vinyl by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("vinyl", false))
         private set
 
+    /** The player's background follows each song's cover (its colors, and the cover blurred
+     *  behind it); off: one calm dark background. */
+    var coverBackground by mutableStateOf(app.getSharedPreferences("rym", Context.MODE_PRIVATE).getBoolean("cover_bg", true))
+        private set
+
+    fun toggleCoverBackground() {
+        coverBackground = !coverBackground
+        getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("cover_bg", coverBackground).apply()
+    }
+
     fun toggleAurora() {
         aurora = !aurora
         getApplication<Application>().getSharedPreferences("rym", Context.MODE_PRIVATE).edit().putBoolean("aurora", aurora).apply()
