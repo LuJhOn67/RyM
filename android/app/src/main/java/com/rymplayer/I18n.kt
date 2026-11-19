@@ -349,6 +349,7 @@ object I18n {
         "More like this" to "راح يطلع أكثر",
         "Won't be suggested" to "ما راح تنقترح",
         "Undo" to "تراجع",
+        "Tap for controls · double tap to close" to "اضغط للأزرار · ضغطتين للإغلاق",
         "Background from the cover" to "الخلفية من غلاف الأغنية",
         "The player's background changes with each song's cover; off: one calm dark background" to "خلفية المشغّل تتغيّر ويّا غلاف كل أغنية؛ إذا طفيته: خلفية غامقة وحدة ثابتة",
         "Volume up to" to "الصوت لحد",
