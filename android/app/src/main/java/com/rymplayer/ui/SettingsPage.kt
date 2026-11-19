@@ -441,6 +441,11 @@ fun SettingsPage(vm: AppViewModel) {
                 }
                 Divider()
                 SwitchRow(Icons.Default.AutoAwesome, tr("Smart Automix"), tr("Songs blend like a DJ mix: on the fade-out, on the beat, without the basses clashing"), snd.automix) { vm.changeSound(snd.copy(automix = !snd.automix)) }
+                TapRow(Icons.Default.MicOff, tr("Volume up to"), tr("Louder than the phone's top volume; a limiter keeps it clean · tap to change"), "${(snd.boost * 100).toInt()}%") {
+                    val all = listOf(1f, 1.5f, 2f, 3f)
+                    val at = all.indexOfFirst { kotlin.math.abs(it - snd.boost) < 0.01f }
+                    vm.changeSound(snd.copy(boost = all[(at + 1) % all.size]))
+                }
                 SwitchRow(Icons.Default.MicOff, tr("Lyrics on the lock screen"), tr("The sung line under the song's name on the lock screen and in the notification"), vm.lockLyrics) { vm.toggleLockLyrics() }
                 SwitchRow(
                     Icons.Default.Bedtime, tr("Lyrics when the screen is off (AOD)"),

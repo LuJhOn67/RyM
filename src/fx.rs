@@ -57,6 +57,30 @@ impl Default for Settings {
 static SETTINGS: RwLock<Settings> = RwLock::new(Settings { eq: [0.0; 5], normalize: true, skip_silence: true, pitch: 1.0, reverb: 0.0, vocals_off: false });
 static VERSION: AtomicU64 = AtomicU64::new(1);
 
+/// The volume above 100% (1 = none, up to 3), applied just before the soft limiter so a loud
+/// song is held in instead of clipping; the player's own volume stays at most 100%.
+static BOOST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+
+// The tests run side by side: each keeps its own boost.
+#[cfg(test)]
+thread_local! {
+    static TEST_BOOST: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+pub fn set_boost(b: f32) {
+    #[cfg(test)]
+    TEST_BOOST.with(|t| t.set(b.clamp(1.0, 3.0)));
+    #[cfg(not(test))]
+    BOOST.store(b.clamp(1.0, 3.0).to_bits(), Ordering::Relaxed);
+}
+
+pub fn boost() -> f32 {
+    #[cfg(test)]
+    return TEST_BOOST.with(|t| t.get());
+    #[cfg(not(test))]
+    f32::from_bits(BOOST.load(Ordering::Relaxed))
+}
+
 pub fn set(s: Settings) {
     if let Ok(mut cur) = SETTINGS.write()
         && *cur != s {
@@ -370,6 +394,13 @@ impl<S: Source<Item = f32>> Effects<S> {
                 *x *= self.gain;
             }
         }
+        // The volume above 100%, then the soft limiter holds the peaks in.
+        let boost = boost();
+        if boost > 1.0 {
+            for x in &mut self.frame {
+                *x *= boost;
+            }
+        }
         // A soft limiter above 0.8.
         for x in &mut self.frame {
             let m = x.abs();
@@ -435,6 +466,18 @@ mod tests {
 
     fn rms(v: &[f32]) -> f32 {
         (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn louder_than_100_percent_stays_under_the_ceiling() {
+        let plain: Vec<f32> = Effects::new(tone(0.2, 0.0, 2.0)).collect();
+        super::set_boost(3.0);
+        let boosted: Vec<f32> = Effects::new(tone(0.2, 0.0, 2.0)).collect();
+        let loud: Vec<f32> = Effects::new(tone(1.0, 0.0, 2.0)).collect();
+        super::set_boost(1.0);
+        assert!(rms(&boosted) > rms(&plain) * 1.8, "louder: {} vs {}", rms(&boosted), rms(&plain));
+        let peak = loud.iter().fold(0f32, |m, x| m.max(x.abs()));
+        assert!(peak <= 1.0, "held under 1.0 at 300%: {peak}");
     }
 
     #[test]

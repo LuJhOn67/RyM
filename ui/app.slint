@@ -308,6 +308,8 @@ export global App {
     // ← →: back or forward by the step in the settings (seconds; negative goes back).
     callback skip-by(int);
     callback set-volume(float);
+    // How far the volume goes (1 = 100%, up to 3 = 300%); the sliders show volume / volume-max.
+    in property <float> volume-max: 1;
     callback like-now();
     callback repeat();
     callback go(int);
@@ -1081,13 +1083,13 @@ component Volume inherits Rectangle {
     property <length> top: 55px * Ui.k;
     property <length> span: root.height - top;
     Rectangle { x: 18px * Ui.k; y: root.top; width: 4px * Ui.k; height: root.span; border-radius: 2px * Ui.k; background: Theme.bar; }
-    Rectangle { x: 18px * Ui.k; y: root.top + root.span * (1 - App.volume); width: 4px * Ui.k; height: root.span * App.volume; border-radius: 2px * Ui.k; background: Theme.accent; }
+    Rectangle { x: 18px * Ui.k; y: root.top + root.span * (1 - App.volume / App.volume-max); width: 4px * Ui.k; height: root.span * App.volume / App.volume-max; border-radius: 2px * Ui.k; background: Theme.accent; }
     Rectangle {
         width: 16px * Ui.k;
         height: self.width;
         border-radius: (self.width / 2) * Theme.round;
         x: 20px * Ui.k - self.width / 2;
-        y: root.top + root.span * (1 - App.volume) - self.height / 2;
+        y: root.top + root.span * (1 - App.volume / App.volume-max) - self.height / 2;
         background: Theme.handle;
         border-width: 2px * Ui.k;
         border-color: Theme.bar;
@@ -1096,14 +1098,14 @@ component Volume inherits Rectangle {
         y: root.top - 10px;
         height: root.span + 20px;
         mouse-cursor: pointer;
-        clicked => { App.set-volume(max(0, min(1, 1 - (self.mouse-y - 10px) / root.span))); }
+        clicked => { App.set-volume(max(0, min(1, 1 - (self.mouse-y - 10px) / root.span)) * App.volume-max); }
         moved => {
             if (self.pressed) {
-                App.set-volume(max(0, min(1, 1 - (self.mouse-y - 10px) / root.span)));
+                App.set-volume(max(0, min(1, 1 - (self.mouse-y - 10px) / root.span)) * App.volume-max);
             }
         }
         scroll-event(e) => {
-            App.set-volume(max(0, min(1, App.volume + (e.delta-y > 0 ? 0.05 : -0.05))));
+            App.set-volume(max(0, min(App.volume-max, App.volume + (e.delta-y > 0 ? 0.05 : -0.05))));
             accept
         }
     }
@@ -1113,9 +1115,9 @@ component Volume inherits Rectangle {
 component FlatVolume inherits Rectangle {
     height: 30px * Ui.k;
     Rectangle { y: (parent.height - self.height) / 2; height: 4px * Ui.k; border-radius: 2px * Ui.k; background: Theme.bar; }
-    Rectangle { y: (parent.height - self.height) / 2; width: parent.width * App.volume; height: 4px * Ui.k; border-radius: 2px * Ui.k; background: Theme.text; }
+    Rectangle { y: (parent.height - self.height) / 2; width: parent.width * App.volume / App.volume-max; height: 4px * Ui.k; border-radius: 2px * Ui.k; background: Theme.text; }
     Rectangle {
-        x: parent.width * App.volume - self.width / 2;
+        x: parent.width * App.volume / App.volume-max - self.width / 2;
         y: (parent.height - self.height) / 2;
         width: 12px * Ui.k;
         height: self.width;
@@ -1124,10 +1126,10 @@ component FlatVolume inherits Rectangle {
     }
     TouchArea {
         mouse-cursor: pointer;
-        clicked => { App.set-volume(max(0, min(1, self.mouse-x / root.width))); }
+        clicked => { App.set-volume(max(0, min(1, self.mouse-x / root.width)) * App.volume-max); }
         moved => {
             if (self.pressed) {
-                App.set-volume(max(0, min(1, self.mouse-x / root.width)));
+                App.set-volume(max(0, min(1, self.mouse-x / root.width)) * App.volume-max);
             }
         }
     }

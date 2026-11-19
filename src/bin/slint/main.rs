@@ -553,6 +553,7 @@ fn build(ui: &AppWindow, config: Config) -> Shared {
     app.set_lyrics(ModelRc::from(m.lyrics.clone()));
     app.set_settings(ModelRc::from(m.settings.clone()));
     app.set_version(rymplayer::updates::shown_version(rymplayer::VERSION).into());
+    app.set_volume_max(config.volume_max.clamp(1.0, 3.0));
     app.set_lyrics_size(config.lyrics_font.clamp(14, 48) as i32);
     ui.global::<Ui>().set_zoom(config.ui_zoom.clamp(0.5, 1.5));
     app.set_wave(ModelRc::from(Rc::new(VecModel::from(wave_for("")))));
@@ -896,7 +897,7 @@ fn wire(ui: &AppWindow, st: &Shared) {
     {
         let st = st.clone();
         app.on_set_volume(move |v| {
-            let v = v.clamp(0.0, 1.0);
+            let v = v.clamp(0.0, st.borrow().config.volume_max.clamp(1.0, 3.0));
             if let Some(a) = &st.borrow().audio {
                 a.set_volume(v);
             }
@@ -1197,7 +1198,7 @@ fn on_key(st: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
         "previous" => app.invoke_previous(),
         "back" => app.invoke_skip_by(-1),
         "forward" => app.invoke_skip_by(1),
-        "vol-up" => app.invoke_set_volume((app.get_volume() + 0.05).min(1.0)),
+        "vol-up" => app.invoke_set_volume((app.get_volume() + 0.05).min(app.get_volume_max())),
         "vol-down" => app.invoke_set_volume((app.get_volume() - 0.05).max(0.0)),
         "like" => app.invoke_like_now(),
         "repeat" => app.invoke_repeat(),
@@ -1782,6 +1783,7 @@ fn fill_settings(st: &Shared) {
         choice("source", "Audio source", t(c.source.label())),
         choice("quality", "Download quality", t(if c.download_best { "Best (yt-dlp)" } else { "Fast" })),
         choice("connections", "Download connections", c.download_connections.to_string()),
+        choice("volume-max", "Volume up to", format!("{}%", (c.volume_max.clamp(1.0, 3.0) * 100.0).round())),
         choice("talk-speed", "Long talks' speed", format!("{}×", c.talk_speed)),
         choice("cache", "Keep played songs up to", if c.cache_limit_gb == 0 { t("No limit") } else { format!("{} GB", c.cache_limit_gb) }),
         button("cache-clear", "Clear cache", format!("{}: {}", t("Played songs kept on this PC"), stream::size_text(stream::cache_size())), "Clear"),
@@ -2077,6 +2079,21 @@ fn choose(st: &Shared, id: &str, step: i32) {
             s.config.download_best = !s.config.download_best;
             stream::download_best(s.config.download_best);
             s.config.save();
+        }
+        "volume-max" => {
+            const MAX: [f32; 4] = [1.0, 1.5, 2.0, 3.0];
+            let (max, vol) = {
+                let mut s = st.borrow_mut();
+                let at = MAX.iter().position(|m| (*m - s.config.volume_max).abs() < 0.01).unwrap_or(0);
+                s.config.volume_max = MAX[cycle(at, MAX.len())];
+                s.config.save();
+                (s.config.volume_max, s.audio.as_ref().map(|a| a.volume()))
+            };
+            with_app(st, |a| a.set_volume_max(max));
+            // Back under the new top, if it was above it.
+            if let Some(v) = vol.filter(|v| *v > max) {
+                with_app(st, |a| a.invoke_set_volume(v));
+            }
         }
         "talk-speed" => {
             let mut s = st.borrow_mut();

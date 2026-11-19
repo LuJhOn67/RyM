@@ -296,6 +296,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "New direction:" => "اتجاه جديد:",
         "Lyrics timing" => "توقيت الكلمات",
         "Undo" => "تراجع",
+        "Volume up to" => "الصوت لحد",
         "Shortcuts" => "اختصارات الكيبورد",
         "Next song" => "الأغنية الجاية",
         "Previous song" => "الأغنية السابقة",

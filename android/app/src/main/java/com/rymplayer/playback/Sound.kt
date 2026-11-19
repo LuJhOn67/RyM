@@ -52,11 +52,13 @@ object Sound {
         val vocalsOff: Boolean = false,
         /** Long talks' own speed (over 20 minutes, see [com.rymplayer.data.TalkPlace]). */
         val talkSpeed: Float = 1f,
+        /** Louder than the phone's top volume: 1 (none), 1.5, 2 or 3; a limiter holds the peaks in. */
+        val boost: Float = 1f,
     ) {
         val gains: List<Float> get() = if (eqPreset == PRESETS.lastIndex) eqCustom else PRESETS[eqPreset.coerceIn(0, PRESETS.lastIndex)].second.toList()
         val modeName: String get() = MODES.firstOrNull { abs(it.speed - speed) < 0.01f && abs(it.pitch - pitch) < 0.01f }?.name ?: "Custom"
         /** Nothing changes the sound: the phone may decode it in its power-saving audio path. */
-        val untouched: Boolean get() = crossfade == 0 && !automix && !skipSilence && gains.all { it == 0f } && !normalize && speed == 1f && pitch == 1f && !reverb && !vocalsOff
+        val untouched: Boolean get() = crossfade == 0 && !automix && !skipSilence && gains.all { it == 0f } && !normalize && speed == 1f && pitch == 1f && !reverb && !vocalsOff && boost <= 1f
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -76,6 +78,7 @@ object Sound {
             automix = p.getBoolean("automix", false),
             vocalsOff = p.getBoolean("vocals_off", false),
             talkSpeed = p.getFloat("talk_speed", 1f),
+            boost = p.getFloat("boost", 1f),
         )
     }
 
@@ -93,6 +96,7 @@ object Sound {
             putBoolean("automix", s.automix)
             putBoolean("vocals_off", s.vocalsOff)
             putFloat("talk_speed", s.talkSpeed)
+            putFloat("boost", s.boost)
         }.apply()
     }
 
@@ -145,7 +149,9 @@ class SoundEffects(private val exo: ExoPlayer) {
             e.enabled = s.gains.any { it != 0f }
         }.onFailure { android.util.Log.w("RyM", "equalizer", it) }
         runCatching {
-            if (s.normalize) {
+            // Louder than 100%: gain at the input, so the limiter below holds the peaks in.
+            val boostDb = if (s.boost > 1f) 20f * kotlin.math.log10(s.boost) else 0f
+            if (s.normalize || boostDb > 0f) {
                 // Even loudness: a gentle compressor brings loud and quiet songs together, a limiter
                 // catches the peaks.
                 val d = dynamics ?: DynamicsProcessing(0, id, DynamicsProcessing.Config.Builder(
@@ -153,7 +159,7 @@ class SoundEffects(private val exo: ExoPlayer) {
                 ).build()).also { dynamics = it }
                 for (ch in 0 until 2) {
                     val band = d.getMbcBandByChannelIndex(ch, 0)
-                    band.isEnabled = true
+                    band.isEnabled = s.normalize
                     band.attackTime = 20f
                     band.releaseTime = 400f
                     band.ratio = 3f
@@ -167,6 +173,7 @@ class SoundEffects(private val exo: ExoPlayer) {
                     limiter.ratio = 10f
                     d.setLimiterByChannelIndex(ch, limiter)
                 }
+                d.setInputGainAllChannelsTo(boostDb)
                 d.enabled = true
             } else {
                 dynamics?.enabled = false

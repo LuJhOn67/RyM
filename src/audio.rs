@@ -407,12 +407,14 @@ impl Audio {
     }
 
     fn level(&self) -> f32 {
-        // Perceptual curve: the slider is linear, loudness is not.
-        let v = load(&self.volume);
+        // Perceptual curve: the slider is linear, loudness is not. Above 100% the player stays
+        // at full and the rest is the effects' boost (before their limiter, see `fx::boost`).
+        let v = load(&self.volume).min(1.0);
         v * v * load(&self.fade)
     }
 
     fn apply_volume(&self) {
+        crate::fx::set_boost(load(&self.volume).max(1.0));
         if self.fading.is_none() {
             self.player.set_volume(self.level());
         }

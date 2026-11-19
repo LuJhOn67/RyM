@@ -349,6 +349,8 @@ object I18n {
         "More like this" to "راح يطلع أكثر",
         "Won't be suggested" to "ما راح تنقترح",
         "Undo" to "تراجع",
+        "Volume up to" to "الصوت لحد",
+        "Louder than the phone's top volume; a limiter keeps it clean · tap to change" to "أعلى من أعلى صوت بالتلفون، ومحدّد يخليه نظيف بلا تشويه · اضغط للتغيير",
         "Download location" to "مكان التنزيل",
         "Tap to pick a folder (an SD card too)" to "اضغط حتى تختار فولدر (حتى بكارت الذاكرة)",
         "Back to Music/RymPlayer" to "رجّعه لـ Music/RymPlayer",
