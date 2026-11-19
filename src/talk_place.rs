@@ -128,8 +128,10 @@ mod tests {
     #[test]
     fn places_move_between_devices() {
         let long = 50.0 * 60.0;
-        super::note("sync-test1", 700.0, long);
         let now = crate::updates::now();
+        // Kept here earlier (merged, not noted: the noting test runs alongside and shares the
+        // "last written" note).
+        assert_eq!(super::merge(&format!(r#"{{"sync-test1": [700.0, {}]}}"#, now - 50)), 1);
         // The phone went further later; an older phone place doesn't undo this one.
         let phone = format!(r#"{{"sync-test1": [1500.0, {}], "sync-test2": [300.0, {}], "bad id!": [5.0, 1], "sync-test3": [1e9, 1]}}"#, now + 5, now);
         assert_eq!(super::merge(&phone), 2);
