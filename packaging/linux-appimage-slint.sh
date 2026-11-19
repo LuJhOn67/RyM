@@ -22,10 +22,15 @@ Terminal=false
 MimeType=x-scheme-handler/rym;
 EOF
 cp ~/RyM/assets/icons/rym-slint.png rym-slint.png
+# Loaded while it runs (so linuxdeploy doesn't see them): the X11 keyboard libraries. Without
+# them the window can't open on X11 (and on WSL, where Slint uses X11).
+for l in libxkbcommon-x11.so.0 libxcb-xkb.so.1; do ldconfig -p | grep -q "$l " || { echo "missing $l"; exit 1; }; done
 export APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1
 ./linuxdeploy --appdir AppDirSlint \
   --executable ~/RyM/target/release/RyM-Slint \
   --desktop-file rym-slint.desktop --icon-file rym-slint.png \
+  --library "$(ldconfig -p | awk '/libxkbcommon-x11.so.0 /{print $NF; exit}')" \
+  --library "$(ldconfig -p | awk '/libxcb-xkb.so.1 /{print $NF; exit}')" \
   --exclude-library 'libgtk-3*' --exclude-library 'libgdk-3*' --exclude-library 'libwebkit2gtk*' \
   --exclude-library 'libjavascriptcoregtk*' --exclude-library 'libsoup-3*' >/tmp/linuxdeploy-slint.log 2>&1 || { tail -30 /tmp/linuxdeploy-slint.log; exit 1; }
 # The fonts (fontconfig is told about this folder at start).

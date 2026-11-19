@@ -45,11 +45,18 @@ tray-icon = { version = "0.26", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 slint = { version = "1.18.1", optional = true, features = ["renderer-skia", "renderer-software", "software-renderer-systemfonts", "unstable-winit-030"] }
 
+# Linux: the tray icon's library (appindicator) is looked for before the tray is made: without
+# it the tray crate stops the whole program.
+# GTK 3 runs the Linux tray on its own thread (the tray's menu is GTK's; Slint's window isn't).
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = { version = "0.8", optional = true }
+gtk3 = { package = "gtk", version = "0.18", optional = true }
+
 [features]
 default = ["webview"]
 webview = ["dep:wry", "dep:tao"]
 gtk-ui = ["dep:gtk", "dep:souvlaki"]
-slint-ui = ["dep:slint", "dep:slint-build", "dep:souvlaki", "dep:tray-icon", "dep:rfd"]
+slint-ui = ["dep:slint", "dep:slint-build", "dep:souvlaki", "dep:tray-icon", "dep:rfd", "dep:libloading", "dep:gtk3"]
 
 [profile.release]
 # Fast code (the sound effects, the decoding and the drawing run hot), whole-program LTO, no

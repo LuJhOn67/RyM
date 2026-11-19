@@ -329,7 +329,7 @@ struct State {
     /// The title bar follows Windows' dark / light setting (what it was last set to).
     title_dark: Option<bool>,
     /// The icon next to the clock (while RyM runs in the background, its window hidden).
-    tray: Option<tray_icon::TrayIcon>,
+    tray: Option<TrayHandle>,
     /// Likes made on the phone come in every few minutes.
     likes_timer: slint::Timer,
 }
@@ -5512,8 +5512,7 @@ fn close_requested(st: &Shared) -> slint::CloseRequestResponse {
     // The desktop widget is on: the window goes, RyM stays by the clock, so the widget (and the
     // music) stay on the desktop with the app closed.
     if st.borrow().config.desk_widget && st.borrow().desk.is_some() {
-        to_tray(st);
-        return slint::CloseRequestResponse::HideWindow;
+        return to_tray_close(st);
     }
     let action = st.borrow().config.close_action.clone();
     match action.as_str() {
@@ -5521,10 +5520,7 @@ fn close_requested(st: &Shared) -> slint::CloseRequestResponse {
             quit(st);
             slint::CloseRequestResponse::HideWindow
         }
-        "tray" => {
-            to_tray(st);
-            slint::CloseRequestResponse::HideWindow
-        }
+        "tray" => to_tray_close(st),
         _ => {
             with_app(st, |a| a.set_close_ask(true));
             slint::CloseRequestResponse::KeepWindowShown
@@ -5571,9 +5567,22 @@ fn save_window(st: &Shared) {
     }
 }
 
+/// Closing to the tray: hidden by the clock, or (no tray) kept, minimized.
+fn to_tray_close(st: &Shared) -> slint::CloseRequestResponse {
+    to_tray(st);
+    if st.borrow().tray.is_some() { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown }
+}
+
 fn to_tray(st: &Shared) {
     save_window(st);
     start_tray(st);
+    // No tray (Linux without appindicator): minimized instead, so RyM can still be found.
+    if st.borrow().tray.is_none() {
+        if let Some(ui) = st.borrow().ui.upgrade() {
+            ui.window().set_minimized(true);
+        }
+        return;
+    }
     IN_TRAY.with(|t| t.set(true));
     let window = st.borrow().ui.upgrade();
     if let Some(ui) = window {
@@ -5611,14 +5620,65 @@ fn quit(st: &Shared) {
     let _ = slint::quit_event_loop();
 }
 
+/// The tray icon while it's shown. On Linux it lives on its own GTK thread (GTK runs the tray's
+/// menu there), so only this mark is kept here.
+#[cfg(not(target_os = "linux"))]
+type TrayHandle = tray_icon::TrayIcon;
+#[cfg(target_os = "linux")]
+struct TrayHandle;
+
 /// The icon next to the clock: a click brings the window back; its menu shows it, plays or
 /// pauses, skips, or quits.
 fn start_tray(st: &Shared) {
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-    use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     if st.borrow().tray.is_some() {
         return;
     }
+    #[cfg(not(target_os = "linux"))]
+    match build_tray() {
+        Ok(tray) => st.borrow_mut().tray = Some(tray),
+        Err(e) => log(&format!("tray icon: {e}")),
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Without appindicator the tray crate stops the whole program: no tray then.
+        // SAFETY: only opened to see that it's there, and closed at once.
+        let found = ["libayatana-appindicator3.so.1", "libappindicator3.so.1", "libayatana-appindicator3.so", "libappindicator3.so"]
+            .iter()
+            .any(|name| unsafe { libloading::Library::new(name) }.is_ok());
+        if !found {
+            log("tray icon: no appindicator library (libayatana-appindicator3), so no tray");
+            return;
+        }
+        // GTK on a thread of its own, the tray made and kept there; told back whether it worked.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new().name("tray".into()).spawn(move || {
+            if let Err(e) = gtk3::init() {
+                let _ = tx.send(Err(format!("GTK: {e}")));
+                return;
+            }
+            match build_tray() {
+                Ok(tray) => {
+                    let _ = tx.send(Ok(()));
+                    let _keep = tray;
+                    gtk3::main();
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                }
+            }
+        });
+        match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(Ok(())) => st.borrow_mut().tray = Some(TrayHandle),
+            Ok(Err(e)) => log(&format!("tray icon: {e}")),
+            Err(_) => log("tray icon: no answer from GTK"),
+        }
+    }
+}
+
+/// The tray icon with its menu; clicks and the menu's items come back as events.
+fn build_tray() -> Result<tray_icon::TrayIcon, String> {
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     let menu = Menu::new();
     let _ = menu.append(&MenuItem::with_id("show", tr("Show RyM"), true, None));
     let _ = menu.append(&MenuItem::with_id("play", tr("Play / pause"), true, None));
@@ -5633,18 +5693,14 @@ fn start_tray(st: &Shared) {
     if let Some(icon) = icon {
         builder = builder.with_icon(icon);
     }
-    match builder.build() {
-        Ok(tray) => {
-            TrayIconEvent::set_event_handler(Some(|e: TrayIconEvent| {
-                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
-                    send(Ev::TrayShow);
-                }
-            }));
-            MenuEvent::set_event_handler(Some(|e: MenuEvent| send(Ev::TrayMenu(e.id.0.clone()))));
-            st.borrow_mut().tray = Some(tray);
+    let tray = builder.build().map_err(|e| e.to_string())?;
+    TrayIconEvent::set_event_handler(Some(|e: TrayIconEvent| {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            send(Ev::TrayShow);
         }
-        Err(e) => log(&format!("tray icon: {e}")),
-    }
+    }));
+    MenuEvent::set_event_handler(Some(|e: MenuEvent| send(Ev::TrayMenu(e.id.0.clone()))));
+    Ok(tray)
 }
 
 fn check_updates(st: &Shared, asked: bool) {
