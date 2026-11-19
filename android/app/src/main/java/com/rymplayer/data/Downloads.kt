@@ -19,6 +19,32 @@ import kotlinx.serialization.json.put
 object Downloads {
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("downloads", Context.MODE_PRIVATE)
 
+    /** The folder picked for downloads (an SD card's too), while RyM may still write there; null:
+     *  Music/RymPlayer (backlog 53). */
+    fun folder(ctx: Context): Uri? {
+        val u = ctx.getSharedPreferences("rym", Context.MODE_PRIVATE).getString("download_tree", null)?.let(Uri::parse) ?: return null
+        return u.takeIf { ctx.contentResolver.persistedUriPermissions.any { it.uri == u && it.isWritePermission } }
+    }
+
+    /** Where downloads go, as shown in the settings. */
+    fun folderName(ctx: Context): String = folder(ctx)?.let { u ->
+        val id = runCatching { android.provider.DocumentsContract.getTreeDocumentId(u) }.getOrNull().orEmpty()
+        val (volume, path) = id.substringBefore(':') to id.substringAfter(':', "")
+        (if (volume == "primary") "" else "SD ($volume): ") + path.ifEmpty { "/" }
+    } ?: "Music/RymPlayer"
+
+    /** Downloads go to [tree] (picked with the system's folder window), or back to Music with null. */
+    fun useFolder(ctx: Context, tree: Uri?) {
+        val prefs = ctx.getSharedPreferences("rym", Context.MODE_PRIVATE)
+        prefs.getString("download_tree", null)?.let(Uri::parse)?.takeIf { it != tree }?.let { old ->
+            runCatching { ctx.contentResolver.releasePersistableUriPermission(old, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+        }
+        if (tree != null) {
+            ctx.contentResolver.takePersistableUriPermission(tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            prefs.edit().putString("download_tree", tree.toString()).apply()
+        } else prefs.edit().remove("download_tree").apply()
+    }
+
     /** Saved songs, newest first. Files the user deleted are left out. */
     fun list(ctx: Context): List<Track> =
         prefs(ctx).all.mapNotNull { (id, v) ->
@@ -87,6 +113,21 @@ object Downloads {
         val resolver = ctx.contentResolver
         var name = ""
         var refused: Exception? = null
+        // A folder picked in the settings (an SD card's too): the file goes there.
+        folder(ctx)?.let { tree ->
+            val parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+            val (ext, mime) = kinds.first()
+            name = "$base.$ext"
+            val doc = android.provider.DocumentsContract.createDocument(resolver, parent, mime, name) ?: error("can't create the file in ${folderName(ctx)}")
+            try {
+                resolver.openOutputStream(doc)!!.use { out -> audio.inputStream().use { it.copyTo(out) } }
+            } catch (e: Exception) {
+                runCatching { android.provider.DocumentsContract.deleteDocument(resolver, doc) }
+                throw e
+            }
+            remember(ctx, t, doc)
+            return@withContext name
+        }
         val item = kinds.firstNotNullOfOrNull { (ext, mime) ->
             name = "$base.$ext"
             val values = ContentValues().apply {
@@ -108,6 +149,12 @@ object Downloads {
             resolver.delete(item, null, null)
             throw e
         }
+        remember(ctx, t, item)
+        name
+    }
+
+    /** The saved file of [t], for the Downloads list and playing it from there. */
+    private fun remember(ctx: Context, t: Track, item: Uri) {
         val meta = buildJsonObject {
             put("uri", item.toString())
             put("title", t.title)
@@ -118,7 +165,6 @@ object Downloads {
             put("at", System.currentTimeMillis())
         }
         prefs(ctx).edit().putString(t.videoId, meta.toString()).apply()
-        name
     }
 
     /** Characters file systems refuse become `_`. */

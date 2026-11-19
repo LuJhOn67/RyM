@@ -400,6 +400,21 @@ fun SettingsPage(vm: AppViewModel) {
             }
             Section(tr("Storage")) {
                 val ctx = androidx.compose.ui.platform.LocalContext.current
+                // Where downloads go: the system's folder window (an SD card can be picked too).
+                var place by androidx.compose.runtime.remember { mutableStateOf(com.rymplayer.data.Downloads.folderName(ctx)) }
+                val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { tree ->
+                    if (tree != null) {
+                        runCatching { com.rymplayer.data.Downloads.useFolder(ctx, tree) }.onFailure { vm.player.message = "${tr("Download location")}: ${it.message}" }
+                        place = com.rymplayer.data.Downloads.folderName(ctx)
+                    }
+                }
+                TapRow(Icons.Default.Download, tr("Download location"), tr("Tap to pick a folder (an SD card too)"), place) { pick.launch(null) }
+                if (com.rymplayer.data.Downloads.folder(ctx) != null) {
+                    TapRow(Icons.Default.Download, tr("Back to Music/RymPlayer"), tr("New downloads go to the phone's Music folder again"), "") {
+                        com.rymplayer.data.Downloads.useFolder(ctx, null)
+                        place = com.rymplayer.data.Downloads.folderName(ctx)
+                    }
+                }
                 val streams = com.rymplayer.playback.Streams
                 var cacheBytes by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(streams.cacheSize(ctx)) }
                 TapRow(Icons.Default.Delete, tr("Clear cache"), "${tr("Played songs kept on this phone")}: ${streams.sizeText(cacheBytes)}", tr("Clear")) {
