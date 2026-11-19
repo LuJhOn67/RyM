@@ -491,6 +491,7 @@ fn main() {
     if !set_app_icon(&ui, icon.as_deref()) {
         set_app_icon(&ui, None);
     }
+    windows_font(&ui);
     // The layouts' right panel: its width as last dragged.
     ui.global::<App>().set_panel_width(st.borrow().config.panel_width.clamp(240.0, 720.0));
     {
@@ -3844,6 +3845,17 @@ fn toggle_playback(st: &Shared) {
     }
 }
 
+/// Windows: its own font for the text (Segoe UI, made for screens, with Arabic), sharper than the
+/// bundled Roboto at small sizes. Elsewhere Roboto stays.
+fn windows_font<C: slint::ComponentHandle>(ui: &C)
+where
+    for<'a> Ui<'a>: slint::Global<'a, C>,
+{
+    if cfg!(windows) && std::path::Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into())).join("Fonts").join("segoeui.ttf").exists() {
+        ui.global::<Ui>().set_font("Segoe UI".into());
+    }
+}
+
 thread_local! {
     /// "Only this kind" clicks: For you is made again after the last one.
     static KIND_CLICK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -4370,6 +4382,7 @@ fn show_float(st: &Shared, on: bool) {
         return;
     }
     let Ok(w) = FloatWindow::new() else { return };
+    windows_font(&w);
     {
         let st = st.clone();
         w.on_hide_float(move || {
@@ -4449,6 +4462,7 @@ fn show_desk(st: &Shared, on: bool) {
         return;
     }
     let Ok(w) = DeskWindow::new() else { return };
+    windows_font(&w);
     let (place, dim, locked) = {
         let c = &st.borrow().config;
         (c.desk_place, c.desk_dim, c.desk_locked)
@@ -4961,6 +4975,7 @@ fn open_share_with(st: &Shared, lines: Option<String>) {
         return;
     }
     let Ok(w) = ShareWindow::new() else { return };
+    windows_font(&w);
     w.global::<App>().on_tr(|s| tr_any(&s).into());
     w.set_cover(app.get_cover());
     w.set_backdrop(app.get_backdrop());
@@ -5334,6 +5349,7 @@ fn show_mini(st: &Shared, on: bool) {
         return;
     }
     let Ok(w) = MiniWindow::new() else { return };
+    windows_font(&w);
     {
         let st = st.clone();
         w.on_hide_mini(move || {
@@ -6496,12 +6512,14 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
             Duration::from_millis(CLOCK.load(std::sync::atomic::Ordering::Relaxed))
         }
     }
-    let (w, h) = (1600u32, 1024u32);
+    // RYM_RENDER_SIZE=1636x896: another window size.
+    let (w, h) = std::env::var("RYM_RENDER_SIZE").ok().and_then(|v| v.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))).unwrap_or((1600u32, 1024u32));
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let _ = slint::platform::set_platform(Box::new(Headless(window.clone())));
     let ui = AppWindow::new().expect("window");
     let app = ui.global::<App>();
     ui.global::<Theme>().set_index(theme_index);
+    windows_font(&ui);
     // Extra words after the page: a color theme's name, "vinyl", "aurora".
     let extras: Vec<String> = std::env::args().skip_while(|a| a != "--render").skip(4).collect();
     let preset = extras.iter().find_map(|e| rymplayer::themes::preset(e));

@@ -168,6 +168,11 @@ export global Ui {
     // under 0.85) the buttons stay their normal size: they don't shrink with the rest.
     in-out property <float> button: 1;
     out property <float> btn: button * max(1, 0.85 / max(0.3, zoom));
+    // The text's scale: like the rest, but never under its normal size (shrunk with the window and
+    // the 0.85 zoom it came out at three quarters, 9 px, and looked pixelated).
+    out property <float> t: max(k, 1);
+    // The font: Windows' own (sharp on screens, with Arabic) on Windows, set by the app; Roboto elsewhere.
+    in-out property <string> font: "Roboto";
     in-out property <bool> rtl: false;
     out property <TextHorizontalAlignment> start: rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
 }
@@ -593,7 +598,7 @@ component VuMeter inherits Rectangle {
         width: root.width;
         horizontal-alignment: center;
         text: "VU";
-        font-size: 12px * Ui.k;
+        font-size: 12px * Ui.t;
         font-weight: 700;
         color: #2b2b2b;
     }
@@ -601,7 +606,7 @@ component VuMeter inherits Rectangle {
         x: 8px * Ui.k;
         y: root.height - 18px * Ui.k;
         text: root.label;
-        font-size: 11px * Ui.k;
+        font-size: 11px * Ui.t;
         color: #5a5a5a;
     }
     Rectangle {
@@ -631,7 +636,7 @@ component VideoBadge inherits Rectangle {
     background: Theme.accent.with-alpha(0.22);
     badge-text := Text {
         text: App.tr("Video");
-        font-size: 12px * Ui.k;
+        font-size: 12px * Ui.t;
         font-weight: 700;
         color: Theme.accent;
         horizontal-alignment: center;
@@ -647,11 +652,13 @@ component SongRow inherits Rectangle {
     in property <bool> preview;
     in property <bool> in-queue;
     in property <length> cover-size: 82px * Ui.k;
-    in property <length> title-size: 24px * Ui.k;
+    in property <length> title-size: 24px * Ui.t;
     // Dragged by the handle: how many rows it moved.
     property <length> row-h: self.height;
     property <length> dragged: 0;
-    height: cover-size + 24px * Ui.k;
+    // As tall as the cover, or the two lines of text when they're taller (text keeps its size
+    // when the window is small, the cover doesn't).
+    height: max(cover-size, (title-size + 16px * Ui.t) * 1.35 + 12px * Ui.k) + 24px * Ui.k;
     border-radius: (8px * Ui.k) * Theme.round;
     background: dragged != 0 ? Theme.accent.with-alpha(0.25) : (song.playing || area.has-hover ? Theme.hover : transparent);
     area := TouchArea {
@@ -717,8 +724,8 @@ component SongRow inherits Rectangle {
             HorizontalLayout {
                 alignment: end;
                 spacing: 8px * Ui.k;
-                if root.song.why != "": Text { text: root.song.why + " ·"; font-size: 14px * Ui.k; color: Theme.accent.with-alpha(0.85); overflow: elide; }
-                Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: right; }
+                if root.song.why != "": Text { text: root.song.why + " ·"; font-size: 14px * Ui.t; color: Theme.accent.with-alpha(0.85); overflow: elide; }
+                Text { text: root.song.artist; font-size: 16px * Ui.t; color: Theme.dim; overflow: elide; horizontal-alignment: right; }
                 if root.song.video: VideoBadge { }
             }
         }
@@ -735,8 +742,8 @@ component SongRow inherits Rectangle {
                 alignment: start;
                 spacing: 8px * Ui.k;
                 if root.song.video: VideoBadge { }
-                Text { text: root.song.artist; font-size: 16px * Ui.k; color: Theme.dim; overflow: elide; }
-                if root.song.why != "": Text { text: "· " + root.song.why; font-size: 14px * Ui.k; color: Theme.accent.with-alpha(0.85); overflow: elide; }
+                Text { text: root.song.artist; font-size: 16px * Ui.t; color: Theme.dim; overflow: elide; }
+                if root.song.why != "": Text { text: "· " + root.song.why; font-size: 14px * Ui.t; color: Theme.accent.with-alpha(0.85); overflow: elide; }
             }
         }
         if !Ui.rtl && root.preview: VerticalLayout {
@@ -878,7 +885,7 @@ component CardItem inherits VerticalLayout {
         }
         Text {
             text: root.card.sub;
-            font-size: 16px * Ui.k;
+            font-size: 16px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: Theme.wide ? Ui.start : center;
             overflow: elide;
@@ -910,12 +917,12 @@ component Header inherits Rectangle {
         spacing: 18px * Ui.k;
         if root.action2 != "": Rectangle {
             width: label2.preferred-width + 8px;
-            label2 := Text { text: root.action2; font-size: 22px * Ui.k; font-weight: 300; color: act2.has-hover ? Theme.accent : Theme.faint; vertical-alignment: center; }
+            label2 := Text { text: root.action2; font-size: 22px * Ui.t; font-weight: 300; color: act2.has-hover ? Theme.accent : Theme.faint; vertical-alignment: center; }
             act2 := TouchArea { mouse-cursor: pointer; clicked => { root.acted2(); } }
         }
         if root.action != "": Rectangle {
             width: label.preferred-width + 8px;
-            label := Text { text: root.action; font-size: 24px * Ui.k; font-weight: 300; color: act.has-hover ? Theme.accent : Theme.faint; vertical-alignment: center; }
+            label := Text { text: root.action; font-size: 24px * Ui.t; font-weight: 300; color: act.has-hover ? Theme.accent : Theme.faint; vertical-alignment: center; }
             act := TouchArea { mouse-cursor: pointer; clicked => { root.acted(); } }
         }
     }
@@ -991,7 +998,7 @@ component Button inherits Rectangle {
     border-color: Theme.border;
     label := Text {
         text: root.text;
-        font-size: 18px * Ui.k;
+        font-size: 18px * Ui.t;
         color: root.strong ? #ffffff : Theme.text;
     }
     area := TouchArea {
@@ -1176,7 +1183,7 @@ component CardBar inherits Rectangle {
         padding: 6px * Ui.k;
         padding-left: 18px * Ui.k;
         spacing: 10px * Ui.k;
-        Text { text: App.lyrics-picked + " / 3"; font-size: 15px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+        Text { text: App.lyrics-picked + " / 3"; font-size: 15px * Ui.t; color: Theme.dim; vertical-alignment: center; }
         Button { text: App.tr("Share as a card"); strong: true; clicked => { App.lyric-card(); } }
         Button { text: App.tr("Clear"); clicked => { App.lyric-unpick(); } }
     }
@@ -1211,7 +1218,7 @@ component Lyrics inherits Rectangle {
                 background: i == App.source-at ? Theme.accent : (pa.has-hover ? Theme.hover : Theme.raised.with-alpha(0.7));
                 label := Text {
                     text: name;
-                    font-size: 14px * Ui.k;
+                    font-size: 14px * Ui.t;
                     color: i == App.source-at ? #ffffff : Theme.text;
                 }
                 pa := TouchArea {
@@ -1233,7 +1240,7 @@ component Lyrics inherits Rectangle {
             spacing: (root.bare ? 18px : 10px) * Ui.k;
             if App.lyrics-note != "": Text {
                 text: App.lyrics-note;
-                font-size: 18px * Ui.k;
+                font-size: 18px * Ui.t;
                 color: Theme.dim;
                 wrap: word-wrap;
                 horizontal-alignment: Ui.start;
@@ -1339,8 +1346,8 @@ component Stage inherits Rectangle {
             Cover { width: 100%; height: 100%; source: App.cover; radius: 14px * Ui.k; }
         }
         Rectangle { height: 6px * Ui.k; }
-        Text { text: App.title; font-size: 24px * Ui.k; font-weight: 700; color: #ffffff; overflow: elide; horizontal-alignment: Ui.start; }
-        Text { text: App.artist; font-size: 17px * Ui.k; color: sa.has-hover ? #ffffff : #ffffffb0; overflow: elide; horizontal-alignment: Ui.start; sa := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
+        Text { text: App.title; font-size: 24px * Ui.t; font-weight: 700; color: #ffffff; overflow: elide; horizontal-alignment: Ui.start; }
+        Text { text: App.artist; font-size: 17px * Ui.t; color: sa.has-hover ? #ffffff : #ffffffb0; overflow: elide; horizontal-alignment: Ui.start; sa := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
         // The progress: click or drag to seek.
         bar := Rectangle {
             height: 14px * Ui.k;
@@ -1363,9 +1370,9 @@ component Stage inherits Rectangle {
             }
         }
         HorizontalLayout {
-            Text { text: App.pos-text; font-size: 13px * Ui.k; color: #ffffffa0; }
+            Text { text: App.pos-text; font-size: 13px * Ui.t; color: #ffffffa0; }
             Rectangle { }
-            Text { text: App.len-text; font-size: 13px * Ui.k; color: #ffffffa0; }
+            Text { text: App.len-text; font-size: 13px * Ui.t; color: #ffffffa0; }
         }
         HorizontalLayout {
             alignment: center;
@@ -1413,7 +1420,7 @@ component FlacBadge inherits Rectangle {
     background: #d4af371f;
     flac-label := Text {
         text: "Hi-Res FLAC";
-        font-size: 12px * Ui.k;
+        font-size: 12px * Ui.t;
         font-weight: 700;
         color: #e6c35c;
     }
@@ -1499,8 +1506,8 @@ component Account inherits Rectangle {
             VerticalLayout {
                 padding: 18px * Ui.k;
                 spacing: 12px * Ui.k;
-                Text { text: App.signed-in ? App.account-name : App.tr("Not signed in"); font-size: 22px * Ui.k; font-weight: 700; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
-                if App.account-handle != "": Text { text: App.account-handle; font-size: 16px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
+                Text { text: App.signed-in ? App.account-name : App.tr("Not signed in"); font-size: 22px * Ui.t; font-weight: 700; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+                if App.account-handle != "": Text { text: App.account-handle; font-size: 16px * Ui.t; color: Theme.dim; horizontal-alignment: Ui.start; }
                 Button {
                     text: App.signed-in ? App.tr("Sign out") : App.tr("Sign in with Google");
                     strong: !App.signed-in;
@@ -1555,7 +1562,7 @@ component NowPlaying inherits Rectangle {
             x: Ui.rtl ? parent.width - 150px * Ui.k : 36px * Ui.k;
             y: 40px * Ui.k;
             text: "RyM";
-            font-size: 34px * Ui.k;
+            font-size: 34px * Ui.t;
             font-weight: 300;
             letter-spacing: 3px * Ui.k;
             color: Theme.text;
@@ -1584,6 +1591,7 @@ component NowPlaying inherits Rectangle {
             height: 51px * Ui.k;
             text: App.tr("NOW PLAYING");
             font-family: "Chathura";
+            // Spaced out to the cover's width: it goes with the cover's size, not the text's.
             font-size: 40px * Ui.k;
             letter-spacing: self.text == "NOW PLAYING" ? 37.6px * Ui.k : 0;
             horizontal-alignment: center;
@@ -1644,7 +1652,7 @@ component NowPlaying inherits Rectangle {
             spacing: 14px * Ui.k;
             Text {
                 text: App.has-song ? App.title : App.tr("Nothing playing");
-                font-size: 48px * Ui.k;
+                font-size: 48px * Ui.t;
                 font-weight: 700;
                 color: Theme.text;
                 overflow: elide;
@@ -1655,7 +1663,7 @@ component NowPlaying inherits Rectangle {
                 Text {
                     horizontal-stretch: 1;
                     text: App.loading ? App.tr("Loading…") : App.artist;
-                    font-size: 24px * Ui.k;
+                    font-size: 24px * Ui.t;
                     color: artist-area.has-hover ? Theme.accent : Theme.dim;
                     overflow: elide;
                     horizontal-alignment: Ui.start;
@@ -1690,7 +1698,7 @@ component NowPlaying inherits Rectangle {
             x: 278px * Ui.k;
             y: 740px * Ui.k;
             text: "☾ " + App.sleep-text;
-            font-size: 16px * Ui.k;
+            font-size: 16px * Ui.t;
             color: Theme.accent;
         }
         Text {
@@ -1699,7 +1707,7 @@ component NowPlaying inherits Rectangle {
             width: 64px * Ui.k;
             text: App.pos-text;
             font-family: Theme.clock-font;
-            font-size: 24px * Ui.k;
+            font-size: 24px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: right;
         }
@@ -1714,7 +1722,7 @@ component NowPlaying inherits Rectangle {
             y: 784px * Ui.k;
             text: App.len-text;
             font-family: Theme.clock-font;
-            font-size: 24px * Ui.k;
+            font-size: 24px * Ui.t;
             color: Theme.dim;
         }
         Icon {
@@ -1801,7 +1809,7 @@ component UpNext inherits Page {
         }
         if App.queue.length == 0: Text {
             text: App.tr("Nothing is coming up");
-            font-size: 20px * Ui.k;
+            font-size: 20px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: Ui.start;
         }
@@ -1847,7 +1855,7 @@ component SearchBox inherits Rectangle {
         }
         input := TextInput {
             text <=> App.query;
-            font-size: 22px * Ui.k;
+            font-size: 22px * Ui.t;
             color: Theme.text;
             vertical-alignment: center;
             horizontal-alignment: Ui.start;
@@ -1882,7 +1890,7 @@ component SearchPage inherits Page {
                 width: wl.preferred-width + 26px * Ui.k;
                 border-radius: (self.height / 2) * Theme.round;
                 background: App.search-in == wi ? Theme.accent : (wa.has-hover ? Theme.hover : Theme.raised);
-                wl := Text { text: where; font-size: 15px * Ui.k; color: App.search-in == wi ? #ffffff : Theme.text; }
+                wl := Text { text: where; font-size: 15px * Ui.t; color: App.search-in == wi ? #ffffff : Theme.text; }
                 wa := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
@@ -1912,7 +1920,7 @@ component SearchPage inherits Page {
                 }
                 Text {
                     text: g.text;
-                    font-size: 20px * Ui.k;
+                    font-size: 20px * Ui.t;
                     color: Theme.text;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
@@ -1929,7 +1937,7 @@ component SearchPage inherits Page {
         }
         if App.searching: Text {
             text: App.tr("Searching…");
-            font-size: 20px * Ui.k;
+            font-size: 20px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: Ui.start;
         }
@@ -1943,7 +1951,7 @@ component SearchPage inherits Page {
                 background: App.results-filter == ci ? Theme.accent : Theme.hover;
                 chip-text := Text {
                     text: chip;
-                    font-size: 17px * Ui.k;
+                    font-size: 17px * Ui.t;
                     color: App.results-filter == ci ? #ffffff : Theme.text;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -1985,7 +1993,7 @@ component LibraryPage inherits Page {
             padding-left: 12px * Ui.k;
             Text {
                 text: App.tr("Sign in to see your liked songs and playlists");
-                font-size: 20px * Ui.k;
+                font-size: 20px * Ui.t;
                 color: Theme.dim;
                 wrap: word-wrap;
                 horizontal-alignment: Ui.start;
@@ -2023,7 +2031,7 @@ component QuickPicks inherits Rectangle {
         HorizontalLayout {
             spacing: 12px * Ui.k;
             Cover { width: root.tile-h; height: root.tile-h; radius: 0; source: c.cover; }
-            Text { text: c.title; font-size: 14px * Ui.k; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: c.title; font-size: 14px * Ui.t; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-alignment: Ui.start; }
         }
         ta := TouchArea { mouse-cursor: pointer; clicked => { App.open-card(c.key); } }
     }
@@ -2052,7 +2060,7 @@ component HomePage inherits Page {
         }
         if App.home.length == 0: Text {
             text: App.home-loading ? App.tr("Loading your feed…") : App.tr("Nothing here yet");
-            font-size: 20px * Ui.k;
+            font-size: 20px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: Ui.start;
         }
@@ -2087,7 +2095,7 @@ component ListPage inherits Page {
         }
         if App.list-loading && App.list.length == 0: Text {
             text: App.tr("Loading…");
-            font-size: 20px * Ui.k;
+            font-size: 20px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: Ui.start;
         }
@@ -2102,8 +2110,8 @@ component Bars inherits VerticalLayout {
     for b in root.bars: VerticalLayout {
         spacing: 4px * Ui.k;
         HorizontalLayout {
-            Text { text: b.label; font-size: 18px * Ui.k; color: Theme.text; horizontal-stretch: 1; overflow: elide; horizontal-alignment: Ui.start; }
-            Text { text: b.text; font-size: 16px * Ui.k; color: Theme.dim; }
+            Text { text: b.label; font-size: 18px * Ui.t; color: Theme.text; horizontal-stretch: 1; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: b.text; font-size: 16px * Ui.t; color: Theme.dim; }
         }
         Rectangle {
             height: 12px * Ui.k;
@@ -2128,7 +2136,7 @@ component StatsPage inherits Page {
         padding-bottom: 40px * Ui.k;
         spacing: 18px * Ui.k;
         Header { title: App.tr("Your stats"); }
-        Text { text: App.stats-text; font-size: 20px * Ui.k; color: Theme.dim; wrap: word-wrap; horizontal-alignment: Ui.start; }
+        Text { text: App.stats-text; font-size: 20px * Ui.t; color: Theme.dim; wrap: word-wrap; horizontal-alignment: Ui.start; }
         // RyM Wrapped: the year so far.
         if App.wrapped-title != "": Rectangle {
             height: wcol.preferred-height;
@@ -2138,23 +2146,23 @@ component StatsPage inherits Page {
                 padding: 24px * Ui.k;
                 spacing: 10px * Ui.k;
                 HorizontalLayout {
-                    Text { text: App.wrapped-title; font-size: 30px * Ui.k; font-weight: 700; color: #ffffff; horizontal-alignment: Ui.start; horizontal-stretch: 1; vertical-alignment: center; }
+                    Text { text: App.wrapped-title; font-size: 30px * Ui.t; font-weight: 700; color: #ffffff; horizontal-alignment: Ui.start; horizontal-stretch: 1; vertical-alignment: center; }
                     Button { text: App.tr("Share"); strong: true; clicked => { App.share-wrapped(); } }
                 }
-                Text { text: App.wrapped-text; font-size: 18px * Ui.k; color: #ffffffd0; wrap: word-wrap; horizontal-alignment: Ui.start; }
+                Text { text: App.wrapped-text; font-size: 18px * Ui.t; color: #ffffffd0; wrap: word-wrap; horizontal-alignment: Ui.start; }
             }
         }
-        if App.year-artists.length > 0: Text { text: App.tr("Artists of the year"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        if App.year-artists.length > 0: Text { text: App.tr("Artists of the year"); font-size: 26px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         if App.year-artists.length > 0: Bars { bars: App.year-artists; }
-        Text { text: App.tr("What you listen to (RaM points)"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        Text { text: App.tr("What you listen to (RaM points)"); font-size: 26px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         Bars { bars: App.kinds; }
-        Text { text: App.tr("Top artists this month"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        Text { text: App.tr("Top artists this month"); font-size: 26px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         Bars { bars: App.top-artists; }
-        Text { text: App.tr("Top songs"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        Text { text: App.tr("Top songs"); font-size: 26px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         Bars { bars: App.top-songs; }
-        if App.fav-songs.length > 0: Text { text: App.tr("Your favorite songs (RaM points)"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        if App.fav-songs.length > 0: Text { text: App.tr("Your favorite songs (RaM points)"); font-size: 26px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         if App.fav-songs.length > 0: Bars { bars: App.fav-songs; }
-        if App.fav-artists.length > 0: Text { text: App.tr("Your favorite artists (RaM points)"); font-size: 26px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        if App.fav-artists.length > 0: Text { text: App.tr("Your favorite artists (RaM points)"); font-size: 26px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         if App.fav-artists.length > 0: Bars { bars: App.fav-artists; }
     }
 }
@@ -2194,7 +2202,7 @@ component SettingsPage inherits Page {
                     }
                     if s.about != "": Text {
                         text: s.about;
-                        font-size: 16px * Ui.k;
+                        font-size: 16px * Ui.t;
                         color: Theme.dim;
                         wrap: word-wrap;
                         horizontal-alignment: Ui.start;
@@ -2211,7 +2219,7 @@ component SettingsPage inherits Page {
                 if s.kind == 1: HorizontalLayout {
                     spacing: 6px * Ui.k;
                     Icon { size: 36px * Ui.k; source: @image-url("icons/alt-arrow-left-linear.svg"); clicked => { App.choose(s.id, Ui.rtl ? 1 : -1); } }
-                    Text { text: s.value; font-size: 19px * Ui.k; color: Theme.text; vertical-alignment: center; horizontal-alignment: center; min-width: 150px * Ui.k; }
+                    Text { text: s.value; font-size: 19px * Ui.t; color: Theme.text; vertical-alignment: center; horizontal-alignment: center; min-width: 150px * Ui.k; }
                     Icon { size: 36px * Ui.k; source: @image-url("icons/alt-arrow-right-linear.svg"); clicked => { App.choose(s.id, Ui.rtl ? -1 : 1); } }
                 }
                 if s.kind == 2: Rectangle {
@@ -2225,7 +2233,7 @@ component SettingsPage inherits Page {
                         x: 12px * Ui.k;
                         width: parent.width - 24px * Ui.k;
                         text: s.value;
-                        font-size: 17px * Ui.k;
+                        font-size: 17px * Ui.t;
                         color: Theme.text;
                         vertical-alignment: center;
                         single-line: true;
@@ -2238,7 +2246,7 @@ component SettingsPage inherits Page {
         }
         Text {
             text: "RyM " + App.version;
-            font-size: 16px * Ui.k;
+            font-size: 16px * Ui.t;
             color: Theme.dim;
             horizontal-alignment: Ui.start;
         }
@@ -2270,7 +2278,7 @@ component WideTop inherits Rectangle {
         x: Ui.rtl ? parent.width - self.width - 24px * Ui.k : 24px * Ui.k;
         y: (parent.height - self.height) / 2;
         text: "RyM";
-        font-size: (Theme.noir ? 24px : 30px) * Ui.k;
+        font-size: (Theme.noir ? 24px : 30px) * Ui.t;
         font-weight: 700;
         color: Theme.text;
     }
@@ -2297,7 +2305,7 @@ component WideTop inherits Rectangle {
                 spacing: 10px * Ui.k;
                 alignment: start;
                 VerticalLayout { alignment: center; Image { width: 24px * Ui.k; height: 24px * Ui.k; source: item.icon; colorize: tabbox.on ? Theme.text : Theme.dim; } }
-                Text { text: App.tr(item.label); font-size: 14px * Ui.k; letter-spacing: 0.42px; vertical-alignment: center; color: tabbox.on ? Theme.text : Theme.dim; }
+                Text { text: App.tr(item.label); font-size: 14px * Ui.t; letter-spacing: 0.42px; vertical-alignment: center; color: tabbox.on ? Theme.text : Theme.dim; }
             }
         }
     }
@@ -2356,7 +2364,7 @@ component WideSide inherits Rectangle {
                 width: parent.width - 70px * Ui.k;
                 y: (parent.height - self.height) / 2;
                 text: App.tr(item.label);
-                font-size: (Theme.noir ? 14px : 17px) * Ui.k;
+                font-size: (Theme.noir ? 14px : 17px) * Ui.t;
                 letter-spacing: Theme.noir ? 0.42px : 0px;
                 font-weight: parent.on && !Theme.noir ? 700 : 400;
                 color: Theme.noir && !parent.on ? Theme.dim : Theme.text;
@@ -2371,8 +2379,8 @@ component UpNextSide inherits Page {
     col := VerticalLayout {
         spacing: 2px * Ui.k;
         Header { title: App.tr("Up next"); }
-        if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 17px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
-        for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 64px * Ui.k; title-size: 17px * Ui.k; }
+        if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 17px * Ui.t; color: Theme.dim; horizontal-alignment: Ui.start; }
+        for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 64px * Ui.k; title-size: 17px * Ui.t; }
         Rectangle { height: 14px * Ui.k; }
         Header { title: App.tr("Similar songs"); action: App.tr("See More"); acted => { App.menu("similar-all", ""); } }
         for c[i] in App.similar: Rectangle {
@@ -2420,8 +2428,8 @@ component UpNextSide inherits Page {
                 VerticalLayout {
                     alignment: center;
                     spacing: 6px * Ui.k;
-                    Text { text: c.title; font-size: 17px * Ui.k; font-weight: 700; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
-                    Text { text: c.sub; font-size: 14px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+                    Text { text: c.title; font-size: 17px * Ui.t; font-weight: 700; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+                    Text { text: c.sub; font-size: 14px * Ui.t; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
                 }
             }
         }
@@ -2482,7 +2490,7 @@ component WatchPage inherits Rectangle {
             }
             Text {
                 text: App.has-song ? App.title : App.tr("Nothing playing");
-                font-size: 26px * Ui.k;
+                font-size: 26px * Ui.t;
                 font-weight: 700;
                 color: Theme.text;
                 wrap: word-wrap;
@@ -2502,14 +2510,14 @@ component WatchPage inherits Rectangle {
                     horizontal-stretch: 1;
                     Text {
                         text: App.loading ? App.tr("Loading…") : App.artist;
-                        font-size: 18px * Ui.k;
+                        font-size: 18px * Ui.t;
                         font-weight: 700;
                         color: wa.has-hover ? Theme.accent : Theme.text;
                         overflow: elide;
                         horizontal-alignment: Ui.start;
                         wa := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } }
                     }
-                    if App.sleep-text != "": Text { text: "☾ " + App.sleep-text; font-size: 14px * Ui.k; color: Theme.accent; horizontal-alignment: Ui.start; }
+                    if App.sleep-text != "": Text { text: "☾ " + App.sleep-text; font-size: 14px * Ui.t; color: Theme.accent; horizontal-alignment: Ui.start; }
                 }
                 if App.lossless: VerticalLayout { alignment: center; FlacBadge { } }
                 VerticalLayout { alignment: center; SpeedButton { size: 40px * Ui.k; } }
@@ -2530,7 +2538,7 @@ component WatchPage inherits Rectangle {
                         x: 14px * Ui.k;
                         spacing: 8px * Ui.k;
                         Image { width: 20px * Ui.k; source: b.icon; colorize: b.id == 0 && App.liked ? Theme.accent : Theme.text; }
-                        Text { text: b.label; font-size: 15px * Ui.k; color: Theme.text; vertical-alignment: center; }
+                        Text { text: b.label; font-size: 15px * Ui.t; color: Theme.text; vertical-alignment: center; }
                     }
                     pa := TouchArea {
                         mouse-cursor: pointer;
@@ -2548,9 +2556,9 @@ component WatchPage inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: 12px * Ui.k;
-                Text { text: App.pos-text; font-family: Theme.clock-font; font-size: 16px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+                Text { text: App.pos-text; font-family: Theme.clock-font; font-size: 16px * Ui.t; color: Theme.dim; vertical-alignment: center; }
                 Wave { height: 34px * Ui.k; horizontal-stretch: 1; }
-                Text { text: App.len-text; font-family: Theme.clock-font; font-size: 16px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+                Text { text: App.len-text; font-family: Theme.clock-font; font-size: 16px * Ui.t; color: Theme.dim; vertical-alignment: center; }
             }
             HorizontalLayout {
                 alignment: center;
@@ -2609,7 +2617,7 @@ component BottomBar inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 padding-left: 6px * Ui.k;
-                Text { text: App.pos-text + " / " + App.len-text; font-family: Theme.clock-font; font-size: 15px * Ui.k; color: Theme.dim; }
+                Text { text: App.pos-text + " / " + App.len-text; font-family: Theme.clock-font; font-size: 15px * Ui.t; color: Theme.dim; }
             }
         }
         // The song: its cover, names and heart, in the middle; a click opens it.
@@ -2623,8 +2631,8 @@ component BottomBar inherits Rectangle {
                     alignment: center;
                     spacing: 4px * Ui.k;
                     max-width: 420px * Ui.k;
-                    Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 17px * Ui.k; font-weight: 700; color: Theme.text; overflow: elide; }
-                    Text { text: App.artist; font-size: 14px * Ui.k; color: ba.has-hover ? Theme.accent : Theme.dim; overflow: elide; ba := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
+                    Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 17px * Ui.t; font-weight: 700; color: Theme.text; overflow: elide; }
+                    Text { text: App.artist; font-size: 14px * Ui.t; color: ba.has-hover ? Theme.accent : Theme.dim; overflow: elide; ba := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
                 }
                 VerticalLayout { alignment: center; SpeedButton { size: 34px * Ui.k; } }
                 VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: Theme.accent; clicked => { App.like-now(); } } }
@@ -2672,13 +2680,13 @@ component NoirSong inherits Rectangle {
         spacing: 12px * Ui.k;
         Text {
             text: App.has-song ? App.title : App.tr("Nothing playing");
-            font-size: 34px * Ui.k;
+            font-size: 34px * Ui.t;
             font-weight: 700;
             color: Theme.text;
             wrap: word-wrap;
             horizontal-alignment: Ui.start;
         }
-        Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: na.has-hover ? Theme.accent : Theme.dim; overflow: elide; horizontal-alignment: Ui.start; na := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
+        Text { text: App.artist; font-size: 14px * Ui.t; letter-spacing: 0.42px; color: na.has-hover ? Theme.accent : Theme.dim; overflow: elide; horizontal-alignment: Ui.start; na := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
         HorizontalLayout {
             alignment: start;
             spacing: 8px * Ui.k;
@@ -2694,14 +2702,14 @@ component NoirSong inherits Rectangle {
             Icon { size: 40px * Ui.k; source: @image-url("icons/share-linear.svg"); tint: Theme.dim; clicked => { App.menu("share", "now"); } }
             Icon { size: 40px * Ui.k; source: @image-url("icons/full-screen-linear.svg"); tint: Theme.dim; clicked => { App.stage = true; } }
         }
-        Text { text: App.tr("Up next"); font-size: 20px * Ui.k; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
+        Text { text: App.tr("Up next"); font-size: 20px * Ui.t; font-weight: 700; color: Theme.text; horizontal-alignment: Ui.start; }
         Flickable {
             vertical-stretch: 1;
             content-height: rows.preferred-height;
             rows := VerticalLayout {
                 alignment: start;
-                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
-                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 48px * Ui.k; title-size: 15px * Ui.k; }
+                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.t; color: Theme.dim; horizontal-alignment: Ui.start; }
+                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 48px * Ui.k; title-size: 15px * Ui.t; }
             }
         }
     }
@@ -2750,7 +2758,7 @@ component NoirBar inherits Rectangle {
             VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; tint: Theme.dim; source: @image-url("icons/previous.svg"); clicked => { App.previous(); } } }
             VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; tint: Theme.dim; source: @image-url("icons/next.svg"); clicked => { App.next(); } } }
             VerticalLayout { alignment: center; Icon { size: 38px * Ui.k; source: App.repeat-one ? @image-url("icons/repeat-one-linear.svg") : @image-url("icons/repeat.svg"); tint: App.repeat-one || App.repeat-all ? Theme.accent : Theme.dim; clicked => { App.repeat(); } } }
-            Text { text: App.pos-text; font-size: 12px * Ui.k; letter-spacing: 0.36px; color: Theme.dim; vertical-alignment: center; }
+            Text { text: App.pos-text; font-size: 12px * Ui.t; letter-spacing: 0.36px; color: Theme.dim; vertical-alignment: center; }
             Rectangle {
                 width: 317px * Ui.k;
                 Rectangle {
@@ -2770,7 +2778,7 @@ component NoirBar inherits Rectangle {
                     clicked => { App.seek(max(0, min(1, (Ui.rtl ? self.width - self.mouse-x : self.mouse-x) / self.width)) * App.duration); }
                 }
             }
-            Text { text: App.len-text; font-size: 12px * Ui.k; letter-spacing: 0.36px; color: Theme.dim; vertical-alignment: center; }
+            Text { text: App.len-text; font-size: 12px * Ui.t; letter-spacing: 0.36px; color: Theme.dim; vertical-alignment: center; }
             VerticalLayout { alignment: center; FlatVolume { width: 96px * Ui.k; } }
         }
         // The song: its cover and three lines; a click opens it.
@@ -2785,8 +2793,8 @@ component NoirBar inherits Rectangle {
                     alignment: center;
                     spacing: 4px * Ui.k;
                     max-width: 300px * Ui.k;
-                    Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 14px * Ui.k; letter-spacing: 0.42px; color: Theme.text; overflow: elide; }
-                    Text { text: App.artist; font-size: 14px * Ui.k; letter-spacing: 0.42px; color: nb.has-hover ? Theme.accent : Theme.dim; overflow: elide; nb := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
+                    Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 14px * Ui.t; letter-spacing: 0.42px; color: Theme.text; overflow: elide; }
+                    Text { text: App.artist; font-size: 14px * Ui.t; letter-spacing: 0.42px; color: nb.has-hover ? Theme.accent : Theme.dim; overflow: elide; nb := TouchArea { mouse-cursor: pointer; clicked => { App.open-artist(); } } }
                 }
             }
             TouchArea { mouse-cursor: pointer; clicked => { App.go(0); } }
@@ -2850,7 +2858,7 @@ component ShellTab inherits Rectangle {
     width: label.preferred-width + 28px * Ui.k;
     label := Text {
         text: root.text;
-        font-size: 16px * Ui.k;
+        font-size: 16px * Ui.t;
         font-weight: root.on ? 700 : 500;
         color: root.on ? Theme.text : (ta.has-hover ? Theme.text : Theme.dim);
     }
@@ -2883,7 +2891,7 @@ component ShellTop inherits Rectangle {
                     Rectangle { width: 28px * Ui.k; height: 28px * Ui.k; border-radius: 14px * Ui.k; clip: true; background: #000000; Image { width: 100%; height: 100%; source: App.app-icon; image-fit: cover; } }
                 }
             }
-            Text { text: "RyM"; font-size: 22px * Ui.k; font-weight: 800; color: Theme.text; vertical-alignment: center; }
+            Text { text: "RyM"; font-size: 22px * Ui.t; font-weight: 800; color: Theme.text; vertical-alignment: center; }
             Rectangle { width: 24px * Ui.k; }
             ShellTab { text: App.tr("Home"); on: App.page == 3; clicked => { App.go(3); } }
             ShellTab { text: App.tr("Now playing"); on: App.page == 0; clicked => { App.go(0); } }
@@ -2914,7 +2922,7 @@ component ShellSideItem inherits Rectangle {
         padding-right: 14px * Ui.k;
         spacing: 16px * Ui.k;
         VerticalLayout { alignment: center; Image { width: 24px * Ui.k; height: 24px * Ui.k; source: root.icon; colorize: root.on ? Theme.text : Theme.dim; } }
-        Text { text: root.text; font-size: 15px * Ui.k; font-weight: 700; color: root.on ? Theme.text : Theme.dim; vertical-alignment: center; overflow: elide; horizontal-alignment: Ui.start; }
+        Text { text: root.text; font-size: 15px * Ui.t; font-weight: 700; color: root.on ? Theme.text : Theme.dim; vertical-alignment: center; overflow: elide; horizontal-alignment: Ui.start; }
     }
     ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
@@ -2935,7 +2943,7 @@ component ShellSide inherits Rectangle {
                     padding-bottom: 8px * Ui.k;
                     spacing: 8px * Ui.k;
                     Rectangle { width: 26px * Ui.k; height: 26px * Ui.k; border-radius: 13px * Ui.k; clip: true; background: #000000; Image { width: 100%; height: 100%; source: App.app-icon; image-fit: cover; } }
-                    Text { text: "RyM"; font-size: 20px * Ui.k; font-weight: 800; color: Theme.text; vertical-alignment: center; }
+                    Text { text: "RyM"; font-size: 20px * Ui.t; font-weight: 800; color: Theme.text; vertical-alignment: center; }
                 }
                 ShellSideItem { icon: @image-url("icons/home-2-bold.svg"); text: App.tr("Home"); on: App.page == 3; clicked => { App.go(3); } }
                 ShellSideItem { icon: @image-url("icons/nav-search.svg"); text: App.tr("Search"); on: App.page == 1; clicked => { App.go(1); } }
@@ -2966,8 +2974,8 @@ component ShellSide inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     spacing: 2px * Ui.k;
-                                    Text { text: p.title; font-size: 14px * Ui.k; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
-                                    Text { text: p.sub; font-size: 12px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+                                    Text { text: p.title; font-size: 14px * Ui.t; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+                                    Text { text: p.sub; font-size: 12px * Ui.t; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
                                 }
                             }
                             pa := TouchArea { mouse-cursor: pointer; clicked => { App.open-card(p.key); } }
@@ -3004,8 +3012,8 @@ component ShellBar inherits Rectangle {
             alignment: center;
             spacing: 3px * Ui.k;
             max-width: root.side - 120px * Ui.k;
-            Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 15px * Ui.k; font-weight: 600; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
-            Text { text: App.artist; font-size: 13px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 15px * Ui.t; font-weight: 600; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: App.artist; font-size: 13px * Ui.t; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
         }
         VerticalLayout { alignment: center; Icon { size: 32px * Ui.k; source: App.liked ? @image-url("icons/heart-bold.svg") : @image-url("icons/heart-linear.svg"); tint: App.liked ? Theme.accent : Theme.dim; clicked => { App.like-now(); } } }
     }
@@ -3036,7 +3044,7 @@ component ShellBar inherits Rectangle {
         }
         HorizontalLayout {
             spacing: 8px * Ui.k;
-            Text { text: App.pos-text; font-size: 12px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+            Text { text: App.pos-text; font-size: 12px * Ui.t; color: Theme.dim; vertical-alignment: center; }
             Rectangle {
                 horizontal-stretch: 1;
                 height: 14px * Ui.k;
@@ -3056,7 +3064,7 @@ component ShellBar inherits Rectangle {
                     clicked => { App.seek(max(0, min(1, (Ui.rtl ? self.width - self.mouse-x : self.mouse-x) / self.width)) * App.duration); }
                 }
             }
-            Text { text: App.len-text; font-size: 12px * Ui.k; color: Theme.dim; vertical-alignment: center; }
+            Text { text: App.len-text; font-size: 12px * Ui.t; color: Theme.dim; vertical-alignment: center; }
         }
     }
     // Lyrics, Up next, volume.
@@ -3107,14 +3115,14 @@ component ShellPanel inherits Rectangle {
     VerticalLayout {
         padding: 14px * Ui.k;
         spacing: 10px * Ui.k;
-        Text { text: App.show-lyrics ? App.tr("Lyrics") : App.tr("Up next"); font-size: 18px * Ui.k; font-weight: 800; color: Theme.text; horizontal-alignment: Ui.start; }
+        Text { text: App.show-lyrics ? App.tr("Lyrics") : App.tr("Up next"); font-size: 18px * Ui.t; font-weight: 800; color: Theme.text; horizontal-alignment: Ui.start; }
         if root.big-song && !App.show-lyrics: VerticalLayout {
             alignment: start;
             vertical-stretch: 0;
             spacing: 8px * Ui.k;
             Cover { width: root.width - 28px * Ui.k; height: self.width; radius: 8px * Ui.k; source: App.cover; NowMenu { } }
-            Text { text: App.title; font-size: 20px * Ui.k; font-weight: 800; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
-            Text { text: App.artist; font-size: 14px * Ui.k; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: App.title; font-size: 20px * Ui.t; font-weight: 800; color: Theme.text; overflow: elide; horizontal-alignment: Ui.start; }
+            Text { text: App.artist; font-size: 14px * Ui.t; color: Theme.dim; overflow: elide; horizontal-alignment: Ui.start; }
             Rectangle { height: 6px * Ui.k; }
         }
         if App.show-lyrics: Lyrics { vertical-stretch: 1; }
@@ -3123,8 +3131,8 @@ component ShellPanel inherits Rectangle {
             content-height: rows.preferred-height;
             rows := VerticalLayout {
                 alignment: start;
-                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
-                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 44px * Ui.k; title-size: 14px * Ui.k; }
+                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.t; color: Theme.dim; horizontal-alignment: Ui.start; }
+                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 44px * Ui.k; title-size: 14px * Ui.t; }
             }
         }
     }
@@ -3155,8 +3163,8 @@ component ShellNow inherits Rectangle {
         width: root.width - root.art - 3 * root.pad;
         height: root.height - 2 * root.pad;
         spacing: 10px * Ui.k;
-        Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 30px * Ui.k; font-weight: 800; color: Theme.text; wrap: word-wrap; horizontal-alignment: Ui.start; }
-        Text { text: App.artist; font-size: 16px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
+        Text { text: App.has-song ? App.title : App.tr("Nothing playing"); font-size: 30px * Ui.t; font-weight: 800; color: Theme.text; wrap: word-wrap; horizontal-alignment: Ui.start; }
+        Text { text: App.artist; font-size: 16px * Ui.t; color: Theme.dim; horizontal-alignment: Ui.start; }
         if root.tabs: HorizontalLayout {
             alignment: start;
             spacing: 4px * Ui.k;
@@ -3169,8 +3177,8 @@ component ShellNow inherits Rectangle {
             content-height: rows.preferred-height;
             rows := VerticalLayout {
                 alignment: start;
-                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.k; color: Theme.dim; horizontal-alignment: Ui.start; }
-                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 52px * Ui.k; title-size: 15px * Ui.k; }
+                if App.queue.length == 0: Text { text: App.tr("Nothing is coming up"); font-size: 14px * Ui.t; color: Theme.dim; horizontal-alignment: Ui.start; }
+                for s in App.queue: SongRow { song: s; in-queue: true; cover-size: 52px * Ui.k; title-size: 15px * Ui.t; }
             }
         }
     }
@@ -3270,7 +3278,7 @@ export component AppWindow inherits Window {
     min-height: 600px;
     // Windows 11's glass shows through a see-through background.
     background: App.see-through ? Theme.bg.with-alpha(0.2) : Theme.bg;
-    default-font-family: "Roboto";
+    default-font-family: Ui.font;
     property <float> scale: max(0.5, min(1.4, min(self.width / 1600px, self.height / 1024px))) * Ui.zoom;
     changed scale => { Ui.k = self.scale; }
     init => { Ui.k = self.scale; }
@@ -3550,7 +3558,7 @@ export component MiniWindow inherits Window {
     no-frame: true;
     always-on-top: true;
     background: Theme.bg;
-    default-font-family: "Roboto";
+    default-font-family: Ui.font;
     callback hide-mini();
     callback drag(length, length);
     Rectangle {
@@ -3610,7 +3618,7 @@ export component FloatWindow inherits Window {
     no-frame: true;
     always-on-top: true;
     background: transparent;
-    default-font-family: "Roboto";
+    default-font-family: Ui.font;
     in property <string> now;
     in property <string> next;
     in property <color> accent: #ea814a;
@@ -3687,7 +3695,7 @@ export component DeskWindow inherits Window {
     height: cd-only ? cd-size + 2 * ring : 330px;
     no-frame: true;
     background: transparent;
-    default-font-family: "Roboto";
+    default-font-family: Ui.font;
     callback previous();
     callback next-song();
     in property <string> song;
@@ -3894,7 +3902,7 @@ export component ShareWindow inherits Window {
     width: 560px;
     height: 720px;
     background: #121218;
-    default-font-family: "Roboto";
+    default-font-family: Ui.font;
     in property <image> cover;
     in property <image> backdrop;
     in property <string> song;
