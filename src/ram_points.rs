@@ -1981,7 +1981,7 @@ mod reset_sync_tests {
         assert!(d.tracks.contains_key("songXXXXXXX"));
         // Old devices' lines (no #reset, no #artist) still merge.
         let mut c = Notes::default();
-        assert_eq!(c.merge_scores("y\t3\t60\t1\t0"), 1);
+        assert_eq!(c.merge_scores("songYYYYYYY\t3\t60\t1\t0"), 1);
     }
 }
 
