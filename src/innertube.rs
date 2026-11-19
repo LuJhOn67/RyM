@@ -572,6 +572,26 @@ pub fn forget_cache() {
     let _ = std::fs::remove_file(remembered_file());
 }
 
+/// A song's link was refused partway through (YouTube took its first piece, then said no): the
+/// client that gave it is counted as refused (three in a row and it's asked last for half an hour)
+/// and isn't remembered as the one to ask first. Returns that client, to skip it for this song.
+pub fn refused_midway(video_id: &str) -> Option<String> {
+    let client = links().lock().ok()?.remove(video_id).map(|(a, _)| a.client)?;
+    if let Ok(mut r) = records().lock() {
+        let e = r.entry(client.clone()).or_default();
+        e.failed += 1;
+        e.failed_in_row += 1;
+        e.last_failed = Some(std::time::Instant::now());
+    }
+    if let Ok(mut r) = remembered().lock()
+        && r.as_deref() == Some(client.as_str())
+    {
+        *r = None;
+        let _ = std::fs::remove_file(remembered_file());
+    }
+    Some(client)
+}
+
 /// A link the player couldn't open: it's asked again (from another client) next time.
 pub fn forget(video_id: &str) {
     if let Ok(mut l) = links().lock() {

@@ -139,14 +139,16 @@ fn retry(e: reqwest::Error) -> Fail {
 /// cached.
 ///
 /// A link YouTube stops taking in the middle of the song (it cuts some after their first part,
-/// or it expired) is swapped for a fresh one of the same file, once, and the song goes on from
-/// the same byte. Without that the decoder ran dry and the player went on to the next song.
+/// or it expired) is swapped for a fresh one of the same file from another client (then from
+/// yt-dlp), up to [`RENEWALS`] times, and the song goes on from the same byte. Without that the
+/// decoder ran dry and the player went on to the next song 10 to 30 s in.
 async fn fetch(mut url: String, mut headers: Vec<(String, String)>, shared: &Arc<Shared>, id: &str) -> Result<()> {
     let nobody_listens = || Arc::strong_count(shared) == 1;
     let mut pos = 0u64;
     let mut down_since: Option<std::time::Instant> = None;
     let mut tries = 0u32;
-    let mut renewed = false;
+    let mut renewed = 0u32;
+    let mut skip: Vec<String> = Vec::new();
     loop {
         match fetch_range(&url, &headers, shared, &mut pos).await {
             Ok(Step::Done) => return Ok(()),
@@ -156,11 +158,11 @@ async fn fetch(mut url: String, mut headers: Vec<(String, String)>, shared: &Arc
             }
             Err(Fail::Stop(e)) => return Err(e),
             Err(Fail::Refused(e)) => {
-                if pos == 0 || renewed {
+                if pos == 0 || renewed >= RENEWALS || nobody_listens() {
                     return Err(e);
                 }
-                renewed = true;
-                match renewed_link(id, shared.total.load(Ordering::Relaxed)).await {
+                renewed += 1;
+                match renewed_link(id, shared.total.load(Ordering::Relaxed), &mut skip).await {
                     Some((u, h)) => {
                         url = u;
                         headers = h;
@@ -223,6 +225,12 @@ async fn fetch_range(url: &str, headers: &[(String, String)], shared: &Arc<Share
             .and_then(|v| v.rsplit('/').next())
             .and_then(|v| v.parse::<u64>().ok())
         {
+            let had = shared.total.load(Ordering::Relaxed);
+            if had > 0 && t != had {
+                // A fresh link to another file (another format or quality): its bytes wouldn't
+                // line up with what has arrived.
+                return Err(Fail::Refused(anyhow!("audio: the new link is another file ({t} bytes, not {had})")));
+            }
             shared.total.store(t, Ordering::Relaxed);
             // The whole size at once: a growing buffer would take up to twice the song.
             let mut data = shared.data.lock().unwrap();
@@ -256,15 +264,44 @@ async fn fetch_range(url: &str, headers: &[(String, String)], shared: &Arc<Share
     }
 }
 
+/// How many fresh links one song may get after its link was refused partway.
+const RENEWALS: u32 = 4;
+
 /// A fresh link for a YouTube song's same file (the same size, so its bytes line up), when the
-/// one in use was refused mid-song.
-async fn renewed_link(id: &str, total: u64) -> Option<(String, Vec<(String, String)>)> {
+/// one in use was refused mid-song. The client that gave the refused link is skipped (and counted
+/// as refused, so the next songs ask another first); when no other client has the same file,
+/// yt-dlp's link is tried (its size is checked on the first answer, see [`fetch_range`]).
+async fn renewed_link(id: &str, total: u64, skip: &mut Vec<String>) -> Option<(String, Vec<(String, String)>)> {
+    // The tests' fresh links (a local server's), in order.
+    #[cfg(test)]
+    if let Some(u) = tests::RENEWALS_GIVEN.lock().unwrap().pop() {
+        return Some((u, Vec::new()));
+    }
     if total == 0 || !crate::is_youtube(id) {
         return None;
     }
-    crate::innertube::forget(id);
-    let a = crate::innertube::audio(id).await.ok()?;
-    (a.size == Some(total)).then(|| (a.url, vec![("User-Agent".to_string(), a.user_agent.to_string())]))
+    if let Some(c) = crate::innertube::refused_midway(id)
+        && !skip.contains(&c)
+    {
+        skip.push(c);
+    }
+    const YTDLP: &str = "yt-dlp";
+    if !skip.iter().any(|c| c == YTDLP) {
+        // Other clients, one after another, until one has the same file.
+        for _ in 0..4 {
+            let Ok(a) = crate::innertube::audio_skipping(id, skip).await else { break };
+            if a.size == Some(total) {
+                return Some((a.url, vec![("User-Agent".to_string(), a.user_agent.to_string())]));
+            }
+            crate::innertube::forget(id);
+            skip.push(a.client);
+        }
+        skip.push(YTDLP.into());
+        if let Ok((url, headers, ..)) = crate::stream::ytdlp_link(id).await {
+            return Some((url, headers));
+        }
+    }
+    None
 }
 
 fn http() -> &'static reqwest::Client {
@@ -340,6 +377,77 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    /// Fresh links [`renewed_link`] hands out in the tests (the last first).
+    pub(super) static RENEWALS_GIVEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Like [`serve`], but every range after the first is refused (HTTP 403), as YouTube does to
+    /// some links partway through a song.
+    fn serve_refusing(data: Arc<Vec<u8>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut conn) = conn else { continue };
+                let data = data.clone();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(conn.try_clone().unwrap());
+                    let mut range = None;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                            let (a, b) = r.trim().split_once('-').unwrap();
+                            range = Some((a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap()));
+                        }
+                    }
+                    let (a, b) = range.unwrap_or((0, data.len() - 1));
+                    if a > 0 {
+                        let _ = conn.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
+                    }
+                    let b = b.min(data.len() - 1);
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        data.len(),
+                        b - a + 1
+                    );
+                    let _ = conn.write_all(head.as_bytes());
+                    let _ = conn.write_all(&data[a..=b]);
+                });
+            }
+        });
+        format!("http://{addr}/audio")
+    }
+
+    /// The link is refused partway: the first fresh link is to another file (another size) and is
+    /// passed over, the next one is right, and the whole song arrives, byte for byte.
+    #[tokio::test]
+    async fn a_link_refused_partway_is_replaced() {
+        let data: Arc<Vec<u8>> = Arc::new((0..(10 << 20) + 321).map(|i| (i * 13 % 247) as u8).collect());
+        let other: Arc<Vec<u8>> = Arc::new(vec![1u8; (7 << 20) + 5]);
+        let refusing = serve_refusing(data.clone());
+        let wrong_file = serve(other);
+        let right = serve(data.clone());
+        // Handed out last first: the wrong file, then the right one.
+        *RENEWALS_GIVEN.lock().unwrap() = vec![right, wrong_file];
+        let dir = std::env::temp_dir().join(format!("rym-arriving-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = Arriving::start(refusing, Vec::new(), "webm".into(), None, dir.join("song.webm")).await.unwrap();
+        let all = tokio::task::spawn_blocking(move || {
+            let mut r = a.reader();
+            let mut all = Vec::new();
+            r.read_to_end(&mut all).unwrap();
+            all
+        })
+        .await
+        .unwrap();
+        assert!(all == *data, "{} of {} bytes after the link was refused", all.len(), data.len());
+        assert!(RENEWALS_GIVEN.lock().unwrap().is_empty(), "both fresh links were asked for");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A local server answering `Range` requests slowly, a piece at a time. No internet involved.
     fn serve(data: Arc<Vec<u8>>) -> String {

@@ -628,7 +628,7 @@ fn signed_in_for(video_id: &str) -> bool {
     crate::is_youtube(video_id) && crate::secret::read_cookie_io().is_ok_and(|c| !c.trim().is_empty())
 }
 
-async fn ytdlp_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
+pub(crate) async fn ytdlp_link(video_id: &str) -> Result<(String, Vec<(String, String)>, String, Option<f32>)> {
     let run = |quick: bool| async move {
         let mut cmd = ytdlp_command(video_id, quick)?;
         cmd.arg("-j").arg(page(video_id));
