@@ -271,6 +271,9 @@ export global App {
     in property <[Setting]> settings;
     in property <string> version;
     in property <string> toast;
+    // The app's icon as picked in the settings (Freak, Pear, RyM logo or a picture), for the logo
+    // in the layouts' bars.
+    in property <image> app-icon;
     // A button on the notice ("Undo"), empty for none; it calls undo-remove.
     in property <string> toast-action;
     callback undo-remove();
@@ -2874,7 +2877,7 @@ component ShellTop inherits Rectangle {
                 width: 30px * Ui.k;
                 VerticalLayout {
                     alignment: center;
-                    Rectangle { width: 26px * Ui.k; height: 26px * Ui.k; border-radius: 13px * Ui.k; background: Theme.accent; Image { width: 14px * Ui.k; height: 14px * Ui.k; source: @image-url("icons/play-bold.svg"); colorize: #ffffff; } }
+                    Rectangle { width: 28px * Ui.k; height: 28px * Ui.k; border-radius: 14px * Ui.k; clip: true; background: #000000; Image { width: 100%; height: 100%; source: App.app-icon; image-fit: cover; } }
                 }
             }
             Text { text: "RyM"; font-size: 22px * Ui.k; font-weight: 800; color: Theme.text; vertical-alignment: center; }
@@ -2928,7 +2931,7 @@ component ShellSide inherits Rectangle {
                     padding-top: 8px * Ui.k;
                     padding-bottom: 8px * Ui.k;
                     spacing: 8px * Ui.k;
-                    Rectangle { width: 22px * Ui.k; height: 22px * Ui.k; border-radius: 11px * Ui.k; background: Theme.accent; Image { width: 12px * Ui.k; height: 12px * Ui.k; source: @image-url("icons/play-bold.svg"); colorize: #ffffff; } }
+                    Rectangle { width: 26px * Ui.k; height: 26px * Ui.k; border-radius: 13px * Ui.k; clip: true; background: #000000; Image { width: 100%; height: 100%; source: App.app-icon; image-fit: cover; } }
                     Text { text: "RyM"; font-size: 20px * Ui.k; font-weight: 800; color: Theme.text; vertical-alignment: center; }
                 }
                 ShellSideItem { icon: @image-url("icons/home-2-bold.svg"); text: App.tr("Home"); on: App.page == 3; clicked => { App.go(3); } }

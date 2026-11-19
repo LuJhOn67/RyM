@@ -14,7 +14,7 @@ fn main() {
             embed_resource::compile_for(&path, [bin], embed_resource::NONE).manifest_optional().unwrap();
         };
         rc("RyM", "rym-terminal.ico", "RyM - YouTube Music player for the terminal");
-        rc("RyM-Slint", "rym-slint.ico", "RyM Slint - YouTube Music player");
+        rc("RyM-Slint", "rym-slint.ico", "RyM");
     }
     #[cfg(feature = "slint-ui")]
     slint_build::compile("ui/app.slint").expect("ui/app.slint");

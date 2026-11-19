@@ -486,9 +486,10 @@ fn main() {
     }
     let _ = ui.show();
     // The icon picked in the settings, if any.
+    // The icon picked in the settings (Freak when none): the window's, and the bars' logo.
     let icon = st.borrow().config.gui_icon.clone();
-    if icon.is_some() {
-        set_app_icon(&ui, icon.as_deref());
+    if !set_app_icon(&ui, icon.as_deref()) {
+        set_app_icon(&ui, None);
     }
     // Where it was and how big, made to fit this screen (a 1080p laptop at 150% couldn't hold
     // the window's own size, so it looked like full screen).
@@ -4392,6 +4393,8 @@ fn set_app_icon(ui: &AppWindow, choice: Option<&str>) -> bool {
     let Some(img) = img else { return false };
     let img = img.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3).to_rgba8();
     let (w, h) = img.dimensions();
+    // The same picture as the logo in the layouts' bars.
+    ui.global::<App>().set_app_icon(slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(img.as_raw(), w, h)));
     let Ok(icon) = slint::winit_030::winit::window::Icon::from_rgba(img.into_raw(), w, h) else { return false };
     ui.window().with_winit_window(|win| win.set_window_icon(Some(icon)));
     true
@@ -6464,6 +6467,10 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
     ui.global::<Theme>().set_vu_l(0.62);
     ui.global::<Theme>().set_vu_r(0.55);
     app.on_tr(|s| tr_any(&s).into());
+    if let Ok(img) = image::load_from_memory(APP_ICONS[0].2) {
+        let img = img.resize_to_fill(128, 128, image::imageops::FilterType::Lanczos3).to_rgba8();
+        app.set_app_icon(slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(img.as_raw(), img.width(), img.height())));
+    }
     // Sample cover art: a diagonal gradient from the color to a shifted one, a soft sun, two hills.
     let art = |r: u8, g: u8, b: u8| -> Pixels {
         let n = 256u32;
