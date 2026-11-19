@@ -467,6 +467,36 @@ pub fn export_scores() -> String {
     notes.export()
 }
 
+/// Checks for points read from another device or a file (only numbers and names are read; nothing
+/// in it is ever run): a real number (not NaN or infinite) in range, a song id of a known shape, a
+/// time not far in the future, a name without control characters. Anything else is passed over.
+mod incoming {
+    /// A finite number, clamped to ±100; NaN and infinities are refused.
+    pub fn points(s: &str) -> Option<f32> {
+        s.trim().parse::<f32>().ok().filter(|p| p.is_finite()).map(|p| p.clamp(-100.0, 100.0))
+    }
+
+    /// A time (seconds since 1970) not more than a day ahead of this computer's clock.
+    pub fn time(s: &str) -> Option<u64> {
+        s.trim().parse::<u64>().ok().filter(|t| *t <= crate::updates::now() + 86_400)
+    }
+
+    /// A YouTube id (11 of A-Z a-z 0-9 - _), a SoundCloud one ("sc.<digits>") or a file on a
+    /// device ("file:" / "local:" and a path without control characters).
+    pub fn song_id(s: &str) -> bool {
+        let yt = s.len() == 11 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        let file = (s.starts_with("file:") || s.starts_with("local:")) && s.len() < 1024 && !s.chars().any(char::is_control);
+        yt || crate::soundcloud::is_soundcloud(s) || file
+    }
+
+    /// An artist's key or name: trimmed, without control characters, at most 200 characters.
+    pub fn name(s: &str) -> Option<String> {
+        let clean: String = s.chars().filter(|c| !c.is_control()).take(200).collect();
+        let clean = clean.trim().to_string();
+        (!clean.is_empty()).then_some(clean)
+    }
+}
+
 /// The other device's song points (as [`export_scores`] writes them): for each song, the
 /// device that played it last wins. Returns how many songs changed.
 pub fn merge_scores(text: &str) -> usize {
@@ -959,7 +989,7 @@ impl Notes {
         let mut changed = 0;
         // Their last reset, when newer than this device's: this one resets too (songs played here
         // since then stay).
-        let theirs_reset = text.lines().find_map(|l| l.strip_prefix("#reset\t")).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+        let theirs_reset = text.lines().find_map(|l| l.strip_prefix("#reset\t")).and_then(incoming::time).unwrap_or(0);
         if theirs_reset > self.reset_at && !restore {
             self.tracks.retain(|_, s| s.last >= theirs_reset);
             self.affinity.clear();
@@ -975,29 +1005,34 @@ impl Notes {
             // An artist's points: taken when this device has none for them.
             if f.first() == Some(&"#artist") {
                 if artists_ok
-                    && let (Some(a), Some(Ok(p))) = (f.get(1), f.get(2).map(|p| p.parse::<f32>()))
-                    && !a.is_empty()
-                    && !self.affinity.contains_key(*a)
+                    && let (Some(a), Some(p)) = (f.get(1).and_then(|a| incoming::name(a)), f.get(2).and_then(|p| incoming::points(p)))
+                    && !self.affinity.contains_key(&a)
                 {
-                    self.affinity.insert(a.to_string(), p.clamp(-100.0, 100.0));
-                    if let Some(name) = f.get(3).filter(|n| !n.is_empty()) {
-                        self.names.insert(a.to_string(), name.to_string());
+                    if let Some(name) = f.get(3).and_then(|n| incoming::name(n)) {
+                        self.names.insert(a.clone(), name);
                     }
+                    self.affinity.insert(a, p);
                     changed += 1;
                 }
                 continue;
             }
-            if f.len() < 3 || f[0].is_empty() || f[0].starts_with('#') {
+            if f.len() < 3 || !incoming::song_id(f[0]) {
                 continue;
             }
-            let (Ok(points), Ok(last)) = (f[1].parse::<f32>(), f[2].parse::<u64>()) else { continue };
+            let (Some(points), Some(last)) = (incoming::points(f[1]), incoming::time(f[2])) else { continue };
             // Played before the last reset: it stays reset (a file the user picked brings it back).
             if last < self.reset_at && !restore {
                 continue;
             }
             // Times of day aren't sent: this device's own stay.
             let buckets = self.tracks.get(f[0]).map(|s| s.buckets).unwrap_or_default();
-            let theirs = Score { points: points.clamp(-100.0, 100.0), last, plays: f.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), week: f.get(4).and_then(|w| w.parse().ok()).unwrap_or(0), buckets };
+            let theirs = Score {
+                points,
+                last,
+                plays: f.get(3).and_then(|p| p.trim().parse::<u32>().ok()).map_or(0, |p| p.min(100_000)),
+                week: f.get(4).and_then(|w| incoming::time(w)).unwrap_or(0),
+                buckets,
+            };
             match self.tracks.get(f[0]) {
                 Some(mine) if mine.last >= theirs.last => {}
                 _ => {
@@ -1793,14 +1828,14 @@ mod tests {
     #[test]
     fn points_merge_by_the_newer_play() {
         let mut n = Notes::default();
-        n.tracks.insert("a".into(), super::Score { points: 10.0, last: 100, plays: 1, week: 0, buckets: [0; 4] });
-        n.tracks.insert("b".into(), super::Score { points: 10.0, last: 500, plays: 1, week: 0, buckets: [0; 4] });
+        n.tracks.insert("songAAAAAAA".into(), super::Score { points: 10.0, last: 100, plays: 1, week: 0, buckets: [0; 4] });
+        n.tracks.insert("songBBBBBBB".into(), super::Score { points: 10.0, last: 500, plays: 1, week: 0, buckets: [0; 4] });
         // a: theirs is newer (wins); b: mine is newer (stays); c: only theirs (comes); junk is skipped.
-        let changed = n.merge_scores("a\t-20\t200\t2\t0\nb\t50\t300\nc\t5\t50\nnot a line");
+        let changed = n.merge_scores("songAAAAAAA\t-20\t200\t2\t0\nsongBBBBBBB\t50\t300\nsongCCCCCCC\t5\t50\nnot a line");
         assert_eq!(changed, 2);
-        assert_eq!(n.tracks["a"].points, -20.0);
-        assert_eq!(n.tracks["b"].points, 10.0);
-        assert_eq!(n.tracks["c"].last, 50);
+        assert_eq!(n.tracks["songAAAAAAA"].points, -20.0);
+        assert_eq!(n.tracks["songBBBBBBB"].points, 10.0);
+        assert_eq!(n.tracks["songCCCCCCC"].last, 50);
     }
 
 }
@@ -1908,23 +1943,23 @@ mod reset_sync_tests {
 
     #[test]
     fn a_reset_reaches_the_other_device() {
-        // The phone has old points; the PC was reset at 1000 and played "new" since.
+        // The phone has old points; the PC was reset at 1000 and played "newNewNew01" since.
         let mut phone = Notes::default();
-        phone.tracks.insert("old".into(), score(30.0, 500));
-        phone.tracks.insert("later".into(), score(5.0, 1200));
+        phone.tracks.insert("oldOldOld01".into(), score(30.0, 500));
+        phone.tracks.insert("laterLater1".into(), score(5.0, 1200));
         phone.affinity.insert("someone".into(), 9.0);
         let mut pc = Notes::default();
         pc.reset_at = 1000;
-        pc.tracks.insert("new".into(), score(4.0, 1100));
+        pc.tracks.insert("newNewNew01".into(), score(4.0, 1100));
         // The phone's points reach the PC: nothing played before the reset comes back.
         assert!(pc.merge_scores(&phone.export()) >= 1);
-        assert!(!pc.tracks.contains_key("old"));
-        assert!(pc.tracks.contains_key("later") && pc.tracks.contains_key("new"));
+        assert!(!pc.tracks.contains_key("oldOldOld01"));
+        assert!(pc.tracks.contains_key("laterLater1") && pc.tracks.contains_key("newNewNew01"));
         // The PC's reach the phone: it resets too, keeping what it played since.
         phone.merge_scores(&pc.export());
         assert_eq!(phone.reset_at, 1000);
-        assert!(!phone.tracks.contains_key("old"));
-        assert!(phone.tracks.contains_key("later") && phone.tracks.contains_key("new"));
+        assert!(!phone.tracks.contains_key("oldOldOld01"));
+        assert!(phone.tracks.contains_key("laterLater1") && phone.tracks.contains_key("newNewNew01"));
         assert!(phone.affinity.is_empty());
     }
 
@@ -1933,7 +1968,7 @@ mod reset_sync_tests {
         let mut a = Notes::default();
         a.affinity.insert("adele".into(), 12.0);
         a.names.insert("adele".into(), "Adele".into());
-        a.tracks.insert("x".into(), score(8.0, 50));
+        a.tracks.insert("songXXXXXXX".into(), score(8.0, 50));
         let mut b = Notes::default();
         assert_eq!(b.merge_scores(&a.export()), 2);
         assert_eq!(b.affinity.get("adele"), Some(&12.0));
@@ -1943,9 +1978,32 @@ mod reset_sync_tests {
         d.reset_at = 1000;
         assert_eq!(d.merge(&a.export(), true), 2);
         assert_eq!(d.reset_at, 1000);
-        assert!(d.tracks.contains_key("x"));
+        assert!(d.tracks.contains_key("songXXXXXXX"));
         // Old devices' lines (no #reset, no #artist) still merge.
         let mut c = Notes::default();
         assert_eq!(c.merge_scores("y\t3\t60\t1\t0"), 1);
+    }
+}
+
+#[cfg(test)]
+mod import_checks {
+    /// Only real numbers, known song ids, sane times and clean names come in.
+    #[test]
+    fn bad_lines_are_passed_over() {
+        let mut n = super::Notes::default();
+        let now = crate::updates::now();
+        let ahead = now + 10 * 86_400;
+        let text = format!(
+            "#artist\tqueen\tNaN\tQueen\n#artist\tdaft punk\t12\tDaft\u{7}Punk\nfJ9rUzIMcZQ\tNaN\t{now}\t3\t0\nkJQP7kiw5Fk\tinf\t{now}\nlYBUbBu4W08\t40\t{ahead}\t1\t0\n../../etc\t50\t{now}\ndQw4w9WgXcQ\t25\t{now}\t99999999\t0\nnot a line\n"
+        );
+        n.merge(&text, true);
+        assert!(n.tracks.values().all(|s| s.points.is_finite()), "no NaN");
+        assert!(!n.tracks.contains_key("fJ9rUzIMcZQ"), "NaN points refused");
+        assert!(!n.tracks.contains_key("kJQP7kiw5Fk"), "infinity refused");
+        assert!(!n.tracks.contains_key("lYBUbBu4W08"), "ten days ahead refused");
+        assert!(!n.tracks.contains_key("../../etc"), "not a song id");
+        assert_eq!(n.tracks.get("dQw4w9WgXcQ").map(|s| (s.points, s.plays)), Some((25.0, 100_000)));
+        assert!(!n.affinity.contains_key("queen"), "NaN artist points refused");
+        assert_eq!(n.names.get("daft punk").map(String::as_str), Some("DaftPunk"), "control characters taken out");
     }
 }

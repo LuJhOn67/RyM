@@ -244,9 +244,18 @@ object RamPoints {
         /** The other device's song points (times in seconds): the newer play of each song wins. */
         /** [restore]: a file the user picked: its points come back even from before a reset here (the reset date stays). */
         fun mergeScores(text: String, restore: Boolean = false): Int {
+            // Only numbers and names are read (nothing in it is ever run), and checked: a real
+            // number in range (not NaN or infinite), a song id of a known shape, a time not far in
+            // the future, names without control characters. Anything else is passed over.
+            fun points(s: String) = s.trim().toFloatOrNull()?.takeIf { it.isFinite() }?.coerceIn(-100f, 100f)
+            fun time(s: String) = s.trim().toLongOrNull()?.takeIf { it >= 0 && it <= System.currentTimeMillis() / 1000 + 86_400 }
+            fun songId(s: String) = (s.length == 11 && s.all { it.isLetterOrDigit() && it.code < 128 || it == '-' || it == '_' }) ||
+                (s.startsWith("sc.") && s.length > 3 && s.drop(3).all { it.isDigit() }) ||
+                ((s.startsWith("local:") || s.startsWith("file:")) && s.length < 1024 && s.none { it.isISOControl() })
+            fun name(s: String) = s.filterNot { it.isISOControl() }.take(200).trim().takeIf { it.isNotEmpty() }
             var changed = 0
             // Their last reset, when newer: this phone resets too (songs played here since stay).
-            val theirsReset = (text.lineSequence().firstNotNullOfOrNull { it.removePrefix("#reset\t").takeIf { r -> r != it } }?.trim()?.toLongOrNull() ?: 0L) * 1000
+            val theirsReset = (text.lineSequence().firstNotNullOfOrNull { it.removePrefix("#reset\t").takeIf { r -> r != it } }?.let(::time) ?: 0L) * 1000
             if (theirsReset > resetAt && !restore) {
                 tracks.values.removeAll { it.last < theirsReset }
                 affinity.clear(); bias.clear(); names.clear()
@@ -259,24 +268,24 @@ object RamPoints {
                 val f = line.split('\t')
                 // An artist's points: taken when this phone has none for them.
                 if (f.firstOrNull() == "#artist") {
-                    val a = f.getOrNull(1).orEmpty()
-                    val p = f.getOrNull(2)?.toFloatOrNull()
-                    if (artistsOk && a.isNotEmpty() && p != null && a !in affinity) {
-                        affinity[a] = p.coerceIn(-100f, 100f)
-                        f.getOrNull(3)?.takeIf { it.isNotEmpty() }?.let { names[a] = it }
+                    val a = f.getOrNull(1)?.let(::name)
+                    val p = f.getOrNull(2)?.let(::points)
+                    if (artistsOk && a != null && p != null && a !in affinity) {
+                        affinity[a] = p
+                        f.getOrNull(3)?.let(::name)?.let { names[a] = it }
                         changed++
                     }
                     continue
                 }
-                if (f.size < 3 || f[0].isEmpty() || f[0].startsWith("#")) continue
-                val points = f[1].toFloatOrNull() ?: continue
-                val last = (f[2].toLongOrNull() ?: continue) * 1000
+                if (f.size < 3 || !songId(f[0])) continue
+                val points = points(f[1]) ?: continue
+                val last = (time(f[2]) ?: continue) * 1000
                 // Played before the last reset: it stays reset (a file the user picked brings it back).
                 if (last < resetAt && !restore) continue
                 val mine = tracks[f[0]]
                 if (mine != null && mine.last >= last) continue
                 // Times of day aren't sent: this phone's own stay.
-                tracks[f[0]] = Score(points.coerceIn(-100f, 100f), last, f.getOrNull(3)?.toIntOrNull() ?: 0, (f.getOrNull(4)?.toLongOrNull() ?: 0L) * 1000, mine?.buckets ?: IntArray(4))
+                tracks[f[0]] = Score(points, last, (f.getOrNull(3)?.trim()?.toIntOrNull() ?: 0).coerceIn(0, 100_000), (f.getOrNull(4)?.let(::time) ?: 0L) * 1000, mine?.buckets ?: IntArray(4))
                 changed++
             }
             return changed

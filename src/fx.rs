@@ -59,6 +59,7 @@ static VERSION: AtomicU64 = AtomicU64::new(1);
 
 /// The volume above 100% (1 = none, up to 3), applied just before the soft limiter so a loud
 /// song is held in instead of clipping; the player's own volume stays at most 100%.
+#[cfg(not(test))]
 static BOOST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
 
 // The tests run side by side: each keeps its own boost.

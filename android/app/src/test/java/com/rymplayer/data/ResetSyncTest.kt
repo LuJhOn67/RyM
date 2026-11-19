@@ -12,18 +12,18 @@ class ResetSyncTest {
     @Test
     fun aResetReachesTheOtherDevice() {
         val phone = RamPoints.Notes()
-        phone.tracks["old"] = score(30f, 500)
-        phone.tracks["later"] = score(5f, 1200)
+        phone.tracks["oldOldOld01"] = score(30f, 500)
+        phone.tracks["laterLater1"] = score(5f, 1200)
         phone.affinity["someone"] = 9f
         val pc = RamPoints.Notes()
         pc.resetAt = 1000_000
-        pc.tracks["new"] = score(4f, 1100)
+        pc.tracks["newNewNew01"] = score(4f, 1100)
         pc.mergeScores(phone.export())
-        assertFalse("old" in pc.tracks)
-        assertTrue("later" in pc.tracks && "new" in pc.tracks)
+        assertFalse("oldOldOld01" in pc.tracks)
+        assertTrue("laterLater1" in pc.tracks && "newNewNew01" in pc.tracks)
         phone.mergeScores(pc.export())
         assertEquals(1000_000L, phone.resetAt)
-        assertFalse("old" in phone.tracks)
+        assertFalse("oldOldOld01" in phone.tracks)
         assertTrue(phone.affinity.isEmpty())
     }
 }
