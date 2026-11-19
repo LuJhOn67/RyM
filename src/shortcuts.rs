@@ -9,31 +9,42 @@ pub struct Action {
     /// Its name in the settings (English; translated by `i18n`).
     pub name: &'static str,
     pub default: &'static str,
-    /// A second key that works too (F1 to F4, as in other music players), unless another action
-    /// was given it.
-    pub also: &'static str,
+    /// More keys that work too (F1 to F4, as in other music players), unless another action was
+    /// given them.
+    pub also: &'static [&'static str],
 }
 
+/// Like the big music apps' (Spotify's, YouTube Music's): each has its key, and some a few more
+/// that work too (F1 to F4, K / J, Shift+N / Shift+P, Ctrl+Up / Ctrl+Down...).
 pub const ACTIONS: &[Action] = &[
-    Action { id: "play", name: "Play / pause", default: "space", also: "f2" },
-    Action { id: "next", name: "Next song", default: "ctrl+right", also: "f3" },
-    Action { id: "previous", name: "Previous song", default: "ctrl+left", also: "f1" },
-    Action { id: "back", name: "Skip back", default: "left", also: "" },
-    Action { id: "forward", name: "Skip forward", default: "right", also: "" },
-    Action { id: "vol-up", name: "Volume up", default: "up", also: "" },
-    Action { id: "vol-down", name: "Volume down", default: "down", also: "" },
-    Action { id: "mute", name: "Mute", default: "m", also: "f4" },
-    Action { id: "like", name: "Like", default: "l", also: "" },
-    Action { id: "repeat", name: "Repeat", default: "r", also: "" },
-    Action { id: "lyrics", name: "Show the lyrics", default: "y", also: "" },
-    Action { id: "stage", name: "Full-screen lyrics", default: "f", also: "" },
-    Action { id: "lyrics-sooner", name: "Lyrics sooner", default: ",", also: "" },
-    Action { id: "lyrics-later", name: "Lyrics later", default: ".", also: "" },
-    Action { id: "undo", name: "Undo removing from the queue", default: "ctrl+z", also: "" },
-    Action { id: "zoom-in", name: "Bigger", default: "ctrl+=", also: "" },
-    Action { id: "zoom-out", name: "Smaller", default: "ctrl+-", also: "" },
-    Action { id: "zoom-reset", name: "Normal size", default: "ctrl+0", also: "" },
-    Action { id: "theme", name: "Next theme", default: "ctrl+t", also: "" },
+    Action { id: "play", name: "Play / pause", default: "space", also: &["f2", "k"] },
+    Action { id: "next", name: "Next song", default: "ctrl+right", also: &["f3", "shift+n"] },
+    Action { id: "previous", name: "Previous song", default: "ctrl+left", also: &["f1", "shift+p"] },
+    Action { id: "back", name: "Skip back", default: "left", also: &["j", "shift+left"] },
+    Action { id: "forward", name: "Skip forward", default: "right", also: &["shift+right"] },
+    Action { id: "vol-up", name: "Volume up", default: "up", also: &["ctrl+up", "=", "+"] },
+    Action { id: "vol-down", name: "Volume down", default: "down", also: &["ctrl+down", "-"] },
+    Action { id: "vol-max", name: "Full volume", default: "ctrl+shift+up", also: &[] },
+    Action { id: "mute", name: "Mute", default: "m", also: &["f4", "ctrl+shift+down"] },
+    Action { id: "like", name: "Like", default: "l", also: &["alt+shift+b"] },
+    Action { id: "repeat", name: "Repeat", default: "r", also: &["ctrl+r"] },
+    Action { id: "lyrics", name: "Show the lyrics", default: "y", also: &[] },
+    Action { id: "stage", name: "Full-screen lyrics", default: "f", also: &["f11"] },
+    Action { id: "mini", name: "Mini player", default: "ctrl+m", also: &[] },
+    Action { id: "search", name: "Search", default: "ctrl+l", also: &["ctrl+k", "/"] },
+    Action { id: "home", name: "Home", default: "alt+shift+h", also: &[] },
+    Action { id: "now", name: "Now playing", default: "alt+shift+n", also: &[] },
+    Action { id: "library", name: "Library", default: "alt+shift+l", also: &[] },
+    Action { id: "stats", name: "Your stats", default: "alt+shift+s", also: &[] },
+    Action { id: "settings", name: "Settings", default: "ctrl+,", also: &["ctrl+p"] },
+    Action { id: "lyrics-sooner", name: "Lyrics sooner", default: ",", also: &[] },
+    Action { id: "lyrics-later", name: "Lyrics later", default: ".", also: &[] },
+    Action { id: "undo", name: "Undo removing from the queue", default: "ctrl+z", also: &[] },
+    Action { id: "zoom-in", name: "Bigger", default: "ctrl+=", also: &[] },
+    Action { id: "zoom-out", name: "Smaller", default: "ctrl+-", also: &[] },
+    Action { id: "zoom-reset", name: "Normal size", default: "ctrl+0", also: &[] },
+    Action { id: "theme", name: "Next theme", default: "ctrl+t", also: &[] },
+    Action { id: "quit", name: "Quit RyM", default: "ctrl+q", also: &[] },
 ];
 
 /// A key press as text. `key` is a character, or a name for the keys without one ("space",
@@ -68,7 +79,7 @@ pub fn action_for(custom: &HashMap<String, String>, combo: &str) -> Option<&'sta
     ACTIONS
         .iter()
         .find(|a| key_of(custom, a.id) == combo)
-        .or_else(|| ACTIONS.iter().find(|a| !a.also.is_empty() && a.also == combo))
+        .or_else(|| ACTIONS.iter().find(|a| a.also.contains(&combo)))
         .map(|a| a.id)
 }
 

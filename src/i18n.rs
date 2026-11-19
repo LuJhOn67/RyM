@@ -296,6 +296,7 @@ fn arabic(en: &str) -> Option<&'static str> {
         "New direction:" => "اتجاه جديد:",
         "Lyrics timing" => "توقيت الكلمات",
         "Undo" => "تراجع",
+        "Full volume" => "أعلى صوت",
         "Mute" => "كتم الصوت",
         "Freak" => "فريك",
         "Pear" => "الإجاصة",
