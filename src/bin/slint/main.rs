@@ -1215,6 +1215,7 @@ fn on_key(st: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
         "forward" => app.invoke_skip_by(1),
         "vol-up" => app.invoke_set_volume((app.get_volume() + 0.05).min(app.get_volume_max())),
         "vol-down" => app.invoke_set_volume((app.get_volume() - 0.05).max(0.0)),
+        "mute" => app.invoke_set_volume(if app.get_volume() > 0.01 { 0.0 } else { 0.8 }),
         "like" => app.invoke_like_now(),
         "repeat" => app.invoke_repeat(),
         "lyrics" => app.set_show_lyrics(!app.get_show_lyrics()),

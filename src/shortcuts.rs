@@ -9,27 +9,31 @@ pub struct Action {
     /// Its name in the settings (English; translated by `i18n`).
     pub name: &'static str,
     pub default: &'static str,
+    /// A second key that works too (F1 to F4, as in other music players), unless another action
+    /// was given it.
+    pub also: &'static str,
 }
 
 pub const ACTIONS: &[Action] = &[
-    Action { id: "play", name: "Play / pause", default: "space" },
-    Action { id: "next", name: "Next song", default: "ctrl+right" },
-    Action { id: "previous", name: "Previous song", default: "ctrl+left" },
-    Action { id: "back", name: "Skip back", default: "left" },
-    Action { id: "forward", name: "Skip forward", default: "right" },
-    Action { id: "vol-up", name: "Volume up", default: "up" },
-    Action { id: "vol-down", name: "Volume down", default: "down" },
-    Action { id: "like", name: "Like", default: "l" },
-    Action { id: "repeat", name: "Repeat", default: "r" },
-    Action { id: "lyrics", name: "Show the lyrics", default: "y" },
-    Action { id: "stage", name: "Full-screen lyrics", default: "f" },
-    Action { id: "lyrics-sooner", name: "Lyrics sooner", default: "," },
-    Action { id: "lyrics-later", name: "Lyrics later", default: "." },
-    Action { id: "undo", name: "Undo removing from the queue", default: "ctrl+z" },
-    Action { id: "zoom-in", name: "Bigger", default: "ctrl+=" },
-    Action { id: "zoom-out", name: "Smaller", default: "ctrl+-" },
-    Action { id: "zoom-reset", name: "Normal size", default: "ctrl+0" },
-    Action { id: "theme", name: "Next theme", default: "ctrl+t" },
+    Action { id: "play", name: "Play / pause", default: "space", also: "f2" },
+    Action { id: "next", name: "Next song", default: "ctrl+right", also: "f3" },
+    Action { id: "previous", name: "Previous song", default: "ctrl+left", also: "f1" },
+    Action { id: "back", name: "Skip back", default: "left", also: "" },
+    Action { id: "forward", name: "Skip forward", default: "right", also: "" },
+    Action { id: "vol-up", name: "Volume up", default: "up", also: "" },
+    Action { id: "vol-down", name: "Volume down", default: "down", also: "" },
+    Action { id: "mute", name: "Mute", default: "m", also: "f4" },
+    Action { id: "like", name: "Like", default: "l", also: "" },
+    Action { id: "repeat", name: "Repeat", default: "r", also: "" },
+    Action { id: "lyrics", name: "Show the lyrics", default: "y", also: "" },
+    Action { id: "stage", name: "Full-screen lyrics", default: "f", also: "" },
+    Action { id: "lyrics-sooner", name: "Lyrics sooner", default: ",", also: "" },
+    Action { id: "lyrics-later", name: "Lyrics later", default: ".", also: "" },
+    Action { id: "undo", name: "Undo removing from the queue", default: "ctrl+z", also: "" },
+    Action { id: "zoom-in", name: "Bigger", default: "ctrl+=", also: "" },
+    Action { id: "zoom-out", name: "Smaller", default: "ctrl+-", also: "" },
+    Action { id: "zoom-reset", name: "Normal size", default: "ctrl+0", also: "" },
+    Action { id: "theme", name: "Next theme", default: "ctrl+t", also: "" },
 ];
 
 /// A key press as text. `key` is a character, or a name for the keys without one ("space",
@@ -59,9 +63,13 @@ pub fn key_of(custom: &HashMap<String, String>, id: &str) -> String {
     custom.get(id).cloned().or_else(|| ACTIONS.iter().find(|a| a.id == id).map(|a| a.default.to_string())).unwrap_or_default()
 }
 
-/// The action the key press `combo` does.
+/// The action the key press `combo` does: the set keys first, then the second keys (F1 to F4).
 pub fn action_for(custom: &HashMap<String, String>, combo: &str) -> Option<&'static str> {
-    ACTIONS.iter().find(|a| key_of(custom, a.id) == combo).map(|a| a.id)
+    ACTIONS
+        .iter()
+        .find(|a| key_of(custom, a.id) == combo)
+        .or_else(|| ACTIONS.iter().find(|a| !a.also.is_empty() && a.also == combo))
+        .map(|a| a.id)
 }
 
 /// `id` gets `combo`; an action that had it takes `id`'s old key (they swap).
@@ -75,9 +83,11 @@ pub fn rebind(custom: &mut HashMap<String, String>, id: &str, combo: &str) {
     custom.retain(|k, v| ACTIONS.iter().find(|a| a.id == k).is_some_and(|a| a.default != v));
 }
 
-/// A plain key (no Ctrl or Alt): it would type into a text box, so not while one is in use.
+/// A plain key (no Ctrl or Alt) that would type into a text box, so not while one is in use
+/// (F1 to F12 type nothing).
 pub fn types(combo: &str) -> bool {
-    !combo.starts_with("ctrl+") && !combo.starts_with("alt+")
+    let fkey = combo.strip_prefix('f').is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    !combo.starts_with("ctrl+") && !combo.starts_with("alt+") && !fkey
 }
 
 /// How a key is shown: "Ctrl+Z", "Space", "←".
@@ -141,6 +151,11 @@ mod tests {
         rebind(&mut m, "like", "l");
         rebind(&mut m, "play", "space");
         assert!(m.is_empty(), "{m:?}");
-        assert!(types("f") && !types("ctrl+t"));
+        assert!(types("f") && !types("ctrl+t") && !types("f2"));
+        // F1 to F4 work beside the set keys; a key set on purpose wins over them.
+        let mut m = HashMap::new();
+        assert_eq!((action_for(&m, "f1"), action_for(&m, "f2"), action_for(&m, "f3"), action_for(&m, "f4")), (Some("previous"), Some("play"), Some("next"), Some("mute")));
+        rebind(&mut m, "like", "f3");
+        assert_eq!(action_for(&m, "f3"), Some("like"));
     }
 }
