@@ -1790,6 +1790,9 @@ fn fill_settings(st: &Shared) {
         }),
         button("app-icon-file", "Your own picture", t("A picture from this PC as the app's icon"), "Choose"),
         switch("desk-widget", "Desktop widget", "Now playing and what's next on the wallpaper, under the windows", c.desk_widget),
+        choice("desk-style", "Widget look", t(if c.desk_cd_only { "CD only" } else { "CD and list" })),
+        choice("desk-size", "Widget size", format!("{} px", c.desk_size.clamp(120, 480))),
+        choice("desk-side", "Widget side", t(if c.desk_side == "left" { "Left" } else { "Right" })),
         head("Suggestions (RaM points)"),
         choice("only-kind", "Only this kind", only),
         choice("discovery", "Familiar or new", t(rymplayer::ram_points::DISCOVERY_NAMES[c.discovery.min(4) as usize])),
@@ -2139,6 +2142,23 @@ fn choose(st: &Shared, id: &str, step: i32) {
                 s.config.save();
             }
             toast(st, &format!("{}: {}", tr("App icon"), tr_any(APP_ICONS[next].1)));
+        }
+        "desk-style" | "desk-size" | "desk-side" => {
+            {
+                let mut s = st.borrow_mut();
+                let c = &mut s.config;
+                match id {
+                    "desk-style" => c.desk_cd_only = !c.desk_cd_only,
+                    "desk-side" => c.desk_side = if c.desk_side == "left" { "right".into() } else { "left".into() },
+                    _ => {
+                        const SIZES: [u32; 5] = [160, 220, 280, 340, 420];
+                        let at = SIZES.iter().position(|v| *v == c.desk_size).unwrap_or(1);
+                        c.desk_size = SIZES[cycle(at, SIZES.len())];
+                    }
+                }
+                c.save();
+            }
+            desk_changed(st);
         }
         "button-size" => {
             const SIZES: [f32; 3] = [1.0, 1.2, 1.4];
@@ -4400,6 +4420,15 @@ fn show_desk(st: &Shared, on: bool) {
     };
     w.set_dim(dim as i32);
     w.set_locked(locked);
+    desk_look(&w, &st.borrow().config);
+    {
+        let st = st.clone();
+        w.on_previous(move || with_app(&st, |a| a.invoke_previous()));
+    }
+    {
+        let st = st.clone();
+        w.on_next_song(move || with_app(&st, |a| a.invoke_next()));
+    }
     {
         let weak = w.as_weak();
         let st = st.clone();
@@ -4481,19 +4510,49 @@ fn show_desk(st: &Shared, on: bool) {
     }
     match place {
         Some((x, y)) => w.window().set_position(slint::PhysicalPosition::new(x, y)),
-        None => {
-            // First time: the top right of the screen.
-            use slint::winit_030::WinitWindowAccessor;
-            let spot = w.window().with_winit_window(|win| win.current_monitor().map(|m| (m.position().x + m.size().width as i32, m.position().y)));
-            if let Some(Some((right, top))) = spot {
-                let width = w.window().size().width as i32;
-                w.window().set_position(slint::PhysicalPosition::new(right - width - 40, top + 60));
-            }
-        }
+        None => dock_desk(&w, &st.borrow().config.desk_side),
     }
     let mut s = st.borrow_mut();
     s.desk_shown.clear();
     s.desk = Some(w);
+}
+
+/// The widget's look from the settings: CD only or with the list, the CD's size, its side.
+fn desk_look(w: &DeskWindow, c: &rymplayer::config::Config) {
+    w.set_cd_only(c.desk_cd_only);
+    w.set_cd_size(c.desk_size.clamp(120, 480) as f32);
+    w.set_on_left(c.desk_side == "left");
+}
+
+/// Puts the widget at the middle of the screen's right (or left) edge, whatever the screen's size.
+fn dock_desk(w: &DeskWindow, side: &str) {
+    use slint::winit_030::WinitWindowAccessor;
+    let screen = w.window().with_winit_window(|win| win.current_monitor().or_else(|| win.primary_monitor()).map(|m| (m.position().x, m.position().y, m.size().width as i32, m.size().height as i32)));
+    let Some(Some((sx, sy, sw, sh))) = screen else { return };
+    let size = w.window().size();
+    let (ww, wh) = (size.width as i32, size.height as i32);
+    let x = if side == "left" { sx + 12 } else { sx + sw - ww - 12 };
+    w.window().set_position(slint::PhysicalPosition::new(x, sy + (sh - wh) / 2));
+}
+
+/// A widget setting changed: the new look, and back to its edge of the screen (after the window
+/// takes its new size).
+fn desk_changed(st: &Shared) {
+    let w = st.borrow().desk.as_ref().map(|w| w.as_weak());
+    let Some(w) = w.and_then(|w| w.upgrade()) else { return };
+    {
+        let mut s = st.borrow_mut();
+        s.config.desk_place = None;
+        s.config.save();
+    }
+    desk_look(&w, &st.borrow().config);
+    let side = st.borrow().config.desk_side.clone();
+    let weak = w.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(120), move || {
+        if let Some(w) = weak.upgrade() {
+            dock_desk(&w, &side);
+        }
+    });
 }
 
 /// The widget shows the playing song and the next four (set only when they change).
@@ -6523,7 +6582,10 @@ fn render_sample(out: &str, page: i32, theme_index: i32) {
             song("ليل بغداد", "فرقة النخيل", swatch(60, 110, 70)),
         ]))));
         d.show().expect("show");
-        let (dw, dh) = (530u32, 330u32);
+        // "desk cd": the CD-only look (220 px).
+        let cd = extras.iter().any(|e| e == "cd");
+        d.set_cd_only(cd);
+        let (dw, dh) = if cd { (312u32, 312u32) } else { (530u32, 330u32) };
         window.set_size(slint::PhysicalSize::new(dw, dh));
         let mut buf = vec![PremultipliedRgbaColor::default(); (dw * dh) as usize];
         for _ in 0..3 {

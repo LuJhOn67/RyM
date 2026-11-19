@@ -3216,11 +3216,20 @@ component DeskButton inherits Rectangle {
 export component DeskWindow inherits Window {
     title: "RyM widget";
     icon: @image-url("../assets/icons/rym-slint.png");
-    width: 530px;
-    height: 330px;
+    // CD only: just the turning disc and the controls around it, sized from the settings, on the
+    // left or right of the screen. Otherwise the disc and the list.
+    in property <bool> cd-only: true;
+    in property <length> cd-size: 220px;
+    // The CD sits on the screen's left side (its controls then face right).
+    in property <bool> on-left;
+    property <length> ring: 46px;
+    width: cd-only ? cd-size + 2 * ring : 530px;
+    height: cd-only ? cd-size + 2 * ring : 330px;
     no-frame: true;
     background: transparent;
     default-font-family: "Roboto";
+    callback previous();
+    callback next-song();
     in property <string> song;
     in property <string> artist;
     in property <image> cover;
@@ -3260,10 +3269,10 @@ export component DeskWindow inherits Window {
         }
     }
     cd := Rectangle {
-        x: 8px;
-        y: (parent.height - self.height) / 2 + 14px;
-        width: 190px;
-        height: 190px;
+        x: root.cd-only ? root.ring : 8px;
+        y: root.cd-only ? root.ring : (parent.height - self.height) / 2 + 14px;
+        width: root.cd-only ? root.cd-size : 190px;
+        height: self.width;
         opacity: root.glow;
         border-radius: self.width / 2;
         drop-shadow-blur: 26px;
@@ -3299,7 +3308,74 @@ export component DeskWindow inherits Window {
             border-color: #ffffff40;
         }
     }
-    VerticalLayout {
+    over := TouchArea {
+        // Hover only (under the buttons: they're drawn after it, so they get the clicks).
+        enabled: root.cd-only;
+        moved => {
+            if (self.pressed && !root.locked) {
+                root.drag(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+            }
+        }
+        double-clicked => { root.play-pause(); }
+    }
+    // CD only: previous, play / pause and next around the disc on the side facing the screen,
+    // and refresh, lock and close showing when the mouse is over it.
+    property <float> face: root.on-left ? 1 : -1;
+    property <length> mid: root.ring + root.cd-size / 2;
+    property <length> reach: root.cd-size / 2 + 24px;
+    if root.cd-only: Rectangle {
+        for b[i] in [
+            { a: 40, big: false, kind: 0 },
+            { a: 0, big: true, kind: 1 },
+            { a: -40, big: false, kind: 2 },
+        ]: Rectangle {
+            property <length> d: b.big ? 44px : 34px;
+            x: root.mid + root.face * root.reach * cos(b.a * 1deg) - self.d / 2;
+            y: root.mid - root.reach * sin(b.a * 1deg) - self.d / 2;
+            width: self.d;
+            height: self.d;
+            border-radius: self.d / 2;
+            background: hit.has-hover ? #000000c0 : #00000090;
+            border-width: 1px;
+            border-color: #ffffff40;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000080;
+            Image {
+                width: parent.d * 0.5;
+                height: self.width;
+                colorize: #ffffff;
+                source: b.kind == 0 ? @image-url("icons/previous.svg") : (b.kind == 2 ? @image-url("icons/next.svg") : (root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play-bold.svg")));
+            }
+            hit := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if (b.kind == 0) { root.previous(); }
+                    if (b.kind == 1) { root.play-pause(); }
+                    if (b.kind == 2) { root.next-song(); }
+                }
+            }
+        }
+    }
+    if root.cd-only: HorizontalLayout {
+        opacity: over.has-hover ? 0.95 : 0.5;
+        x: (parent.width - self.preferred-width) / 2;
+        y: 4px;
+        spacing: 6px;
+        DeskButton { icon: @image-url("icons/refresh-linear.svg"); clicked => { root.refresh(); } }
+        DeskButton { icon: @image-url("icons/lock-linear.svg"); on: root.locked; clicked => { root.lock(); } }
+        DeskButton { icon: @image-url("icons/close-circle-linear.svg"); clicked => { root.close-widget(); } }
+    }
+    // The song's name under the disc while the mouse is over it.
+    if root.cd-only && over.has-hover: Rectangle {
+        y: parent.height - 30px;
+        x: (parent.width - self.width) / 2;
+        width: min(parent.width - 8px, name.preferred-width + 20px);
+        height: 24px;
+        border-radius: 12px;
+        background: #000000a0;
+        name := Text { text: root.song; font-size: 12px; font-weight: 700; color: #ffffff; overflow: elide; }
+    }
+    if !root.cd-only: VerticalLayout {
         x: 210px;
         width: parent.width - 210px;
         padding: 12px;

@@ -273,6 +273,11 @@ pub struct Config {
     pub desk_place: Option<(i32, i32)>,
     pub desk_dim: u8,
     pub desk_locked: bool,
+    /// The widget's look: the CD alone (true) or the CD and the list; the CD's size in pixels;
+    /// and the side of the screen it sits on ("right" or "left").
+    pub desk_cd_only: bool,
+    pub desk_size: u32,
+    pub desk_side: String,
     /// RyM Slint's buttons: 1, 1.2 or 1.4 times their size (they never shrink below 1 when the
     /// window's size is made smaller).
     pub button_size: f32,
@@ -489,6 +494,9 @@ impl Default for Config {
             desk_place: None,
             desk_dim: 0,
             desk_locked: false,
+            desk_cd_only: true,
+            desk_size: 220,
+            desk_side: "right".into(),
             button_size: 1.0,
             shortcuts: Default::default(),
             remote_control: true,
