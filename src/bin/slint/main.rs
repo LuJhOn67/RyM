@@ -4470,7 +4470,9 @@ fn desktop_icon(choice: Option<&str>, create: bool) {
         let img = img.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3);
         let dir = rymplayer::data_dir().join("icons");
         let _ = std::fs::create_dir_all(&dir);
-        let name = choice.as_deref().map_or("freak".to_string(), |c| format!("{:x}", c.bytes().fold(0u64, |h, b| h.wrapping_mul(131).wrapping_add(b as u64))));
+        // Named after the picture itself: a new icon (or a cleaner drawing of the same one) is a
+        // new file, so Explorer doesn't keep showing the old one from its cache.
+        let name = format!("{:x}", img.as_bytes().iter().step_by(7).fold(0u64, |h, b| h.wrapping_mul(131).wrapping_add(*b as u64)));
         let ico = dir.join(format!("app-{name}.ico"));
         if img.save_with_format(&ico, image::ImageFormat::Ico).is_err() {
             return;
